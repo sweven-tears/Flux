@@ -1,0 +1,274 @@
+package cn.luoluna.sweven.ai.ui.lan
+
+import android.Manifest
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
+import android.os.Build
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Card
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Switch
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.material3.TopAppBar
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.viewmodel.compose.viewModel
+import cn.luoluna.sweven.ai.data.db.AuthDeviceEntity
+import cn.luoluna.sweven.ai.ui.common.MonoFont
+import cn.luoluna.sweven.ai.ui.common.SectionCard
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
+
+private val timeFmt = SimpleDateFormat("MM-dd HH:mm", Locale.getDefault())
+
+private fun fmtTime(ts: Long?): String =
+    if (ts == null) "-" else timeFmt.format(Date(ts))
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun LanScreen(vm: LanViewModel = viewModel()) {
+    val context = LocalContext.current
+    val lanEnabled by vm.lanEnabled.collectAsStateWithLifecycle()
+    val lanPort by vm.lanPort.collectAsStateWithLifecycle()
+    val running by vm.running.collectAsStateWithLifecycle()
+    val serverError by vm.serverError.collectAsStateWithLifecycle()
+    val pending by vm.pendingDevices.collectAsStateWithLifecycle()
+    val authorized by vm.authorizedDevices.collectAsStateWithLifecycle()
+    val blocked by vm.blockedDevices.collectAsStateWithLifecycle()
+
+    val ips = remember { vm.lanIps() }
+    var portDialog by remember { mutableStateOf(false) }
+
+    // Android 13+ 通知权限：开启服务时申请
+    var pendingEnable by remember { mutableStateOf(false) }
+    val notifPermission = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { vm.setEnabled(pendingEnable); pendingEnable = false }
+
+    fun toggle(on: Boolean) {
+        if (on && Build.VERSION.SDK_INT >= 33 && !hasNotifPermission(context)) {
+            pendingEnable = true
+            notifPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
+        } else {
+            vm.setEnabled(on)
+        }
+    }
+
+    Scaffold(topBar = { TopAppBar(title = { Text("局域网路由") }) }) { padding ->
+        Column(
+            Modifier
+                .fillMaxWidth()
+                .padding(padding)
+                .padding(horizontal = 12.dp)
+                .verticalScroll(rememberScrollState()),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            // 服务开关
+            SectionCard(title = "聚合路由服务") {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text(
+                            if (running) "运行中（端口 $lanPort）" else "已停止",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = if (running) Color(0xFF16A34A) else MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        Text(
+                            "开启后局域网内设备可通过 OpenAI 兼容接口使用聚合模型",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    Switch(checked = lanEnabled, onCheckedChange = { toggle(it) })
+                }
+                if (running) {
+                    ips.forEach { ip ->
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(
+                                "http://$ip:$lanPort/v1",
+                                style = MaterialTheme.typography.bodySmall,
+                                fontFamily = MonoFont,
+                                modifier = Modifier.weight(1f),
+                            )
+                            TextButton(onClick = { copyText(context, "http://$ip:$lanPort/v1") }) {
+                                Text("复制")
+                            }
+                        }
+                    }
+                    if (ips.isEmpty()) {
+                        Text(
+                            "未获取到局域网 IP，请确认已连接 Wi-Fi",
+                            color = MaterialTheme.colorScheme.error,
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                    }
+                }
+                serverError?.let {
+                    Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+                }
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("服务端口", style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
+                    TextButton(onClick = { portDialog = true }) { Text("$lanPort  修改") }
+                }
+            }
+
+            // 待授权申请
+            if (pending.isNotEmpty()) {
+                SectionCard(title = "待授权申请（${pending.size}）") {
+                    pending.forEachIndexed { index, d ->
+                        if (index > 0) androidx.compose.material3.HorizontalDivider(Modifier.padding(vertical = 4.dp))
+                        DeviceRow(
+                            device = d,
+                            primaryAction = "批准" to { vm.approve(d.deviceId) },
+                            secondaryAction = "拒绝" to { vm.deny(d.deviceId) },
+                        )
+                    }
+                }
+            }
+
+            // 已授权设备
+            if (authorized.isNotEmpty()) {
+                SectionCard(title = "已授权设备（${authorized.size}）") {
+                    authorized.forEachIndexed { index, d ->
+                        if (index > 0) androidx.compose.material3.HorizontalDivider(Modifier.padding(vertical = 4.dp))
+                        DeviceRow(
+                            device = d,
+                            primaryAction = "撤销" to { vm.revoke(d.deviceId) },
+                            secondaryAction = "拉黑" to { vm.blockAuthorized(d.deviceId) },
+                        )
+                    }
+                }
+            }
+
+            // 已拉黑
+            if (blocked.isNotEmpty()) {
+                SectionCard(title = "已拒绝设备（${blocked.size}）") {
+                    blocked.forEachIndexed { index, d ->
+                        if (index > 0) androidx.compose.material3.HorizontalDivider(Modifier.padding(vertical = 4.dp))
+                        DeviceRow(
+                            device = d,
+                            primaryAction = "解除" to { vm.unblock(d.deviceId) },
+                            secondaryAction = null,
+                        )
+                    }
+                }
+            }
+
+            // 使用说明
+            SectionCard(title = "使用说明") {
+                Text(
+                    buildString {
+                        append("1. 手机与客户端设备连同一个 Wi-Fi\n")
+                        append("2. 客户端 Base URL 填上方地址（如 http://192.168.1.5:$lanPort/v1）\n")
+                        append("3. API Key 随意填写（如 sk-phone），真正的鉴权是设备授权\n")
+                        append("4. 模型名称格式：厂商别名/模型名，完整列表见 GET /v1/models\n")
+                        append("5. 新设备首次访问会产生「待授权申请」，在上方批准后即可使用\n")
+                        append("6. 客户端可携带请求头 X-Device-Id 自定义设备标识")
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                    fontFamily = FontFamily.SansSerif,
+                    lineHeight = MaterialTheme.typography.bodySmall.lineHeight,
+                )
+            }
+        }
+    }
+
+    if (portDialog) {
+        var portText by remember { mutableStateOf(lanPort.toString()) }
+        var err by remember { mutableStateOf<String?>(null) }
+        AlertDialog(
+            onDismissRequest = { portDialog = false },
+            confirmButton = {
+                TextButton(onClick = {
+                    val p = portText.toIntOrNull()
+                    if (p == null || p < 1024 || p > 65535) err = "端口需在 1024 - 65535 之间"
+                    else {
+                        vm.setPort(p)
+                        portDialog = false
+                    }
+                }) { Text("保存") }
+            },
+            dismissButton = { TextButton(onClick = { portDialog = false }) { Text("取消") } },
+            title = { Text("修改服务端口") },
+            text = {
+                Column {
+                    OutlinedTextField(
+                        value = portText,
+                        onValueChange = { portText = it },
+                        singleLine = true,
+                    )
+                    err?.let {
+                        Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+                    }
+                }
+            },
+        )
+    }
+}
+
+@Composable
+private fun DeviceRow(
+    device: AuthDeviceEntity,
+    primaryAction: Pair<String, () -> Unit>,
+    secondaryAction: Pair<String, (() -> Unit)>?,
+) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Column(Modifier.weight(1f)) {
+            Text(
+                device.label ?: device.deviceId,
+                style = MaterialTheme.typography.bodyMedium,
+                fontFamily = MonoFont,
+                maxLines = 1,
+            )
+            Text(
+                "IP ${device.lastIp} · 首次 ${fmtTime(device.firstSeenAt)} · 最近 ${fmtTime(device.lastSeenAt)} · ${device.requestCount} 次",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        if (secondaryAction != null) {
+            TextButton(onClick = secondaryAction.second) {
+                Text(secondaryAction.first, style = MaterialTheme.typography.labelMedium)
+            }
+        }
+        TextButton(onClick = primaryAction.second) {
+            Text(primaryAction.first, style = MaterialTheme.typography.labelMedium)
+        }
+    }
+}
+
+private fun hasNotifPermission(context: Context): Boolean =
+    if (Build.VERSION.SDK_INT >= 33) {
+        context.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) ==
+            android.content.pm.PackageManager.PERMISSION_GRANTED
+    } else true
+
+private fun copyText(context: Context, text: String) {
+    val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+    cm.setPrimaryClip(ClipData.newPlainText("url", text))
+}

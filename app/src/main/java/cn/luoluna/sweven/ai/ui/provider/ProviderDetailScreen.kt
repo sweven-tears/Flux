@@ -48,12 +48,17 @@ import cn.luoluna.sweven.ai.App
 import cn.luoluna.sweven.ai.data.db.ApiKeyEntity
 import cn.luoluna.sweven.ai.data.db.ModelEntity
 import cn.luoluna.sweven.ai.data.db.ProviderEntity
+import cn.luoluna.sweven.ai.net.RemoteModel
 import cn.luoluna.sweven.ai.net.TestResult
+import cn.luoluna.sweven.ai.ui.common.ConfirmDialog
 import cn.luoluna.sweven.ai.ui.common.ModelBadgesRow
+import cn.luoluna.sweven.ai.ui.common.ModalityTag
 import cn.luoluna.sweven.ai.ui.common.MonoFont
 import cn.luoluna.sweven.ai.ui.common.SectionCard
+import cn.luoluna.sweven.ai.ui.common.TextFieldDialog
 import cn.luoluna.sweven.ai.ui.common.maskKey
 import cn.luoluna.sweven.ai.ui.common.paramsSummary
+import cn.luoluna.sweven.ai.ui.common.typeLabel
 import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -81,7 +86,7 @@ fun ProviderDetailScreen(id: Long, onBack: () -> Unit) {
     // 获取模型列表
     var fetching by remember { mutableStateOf(false) }
     var fetchError by remember { mutableStateOf<String?>(null) }
-    var fetchedModels by remember { mutableStateOf<List<String>?>(null) }
+    var fetchedModels by remember { mutableStateOf<List<RemoteModel>?>(null) }
     var testResult by remember { mutableStateOf<TestResult?>(null) }
     var testing by remember { mutableStateOf(false) }
 
@@ -98,6 +103,9 @@ fun ProviderDetailScreen(id: Long, onBack: () -> Unit) {
                 title = { Text(p.alias) },
                 navigationIcon = { BackButton(onBack) },
                 actions = {
+                    IconButton(onClick = { showAliasEdit = true }) {
+                        Icon(Icons.Filled.Edit, contentDescription = "修改厂商名称")
+                    }
                     IconButton(onClick = { showDeleteProvider = true }) {
                         Icon(Icons.Filled.Delete, contentDescription = "删除厂商")
                     }
@@ -265,9 +273,18 @@ fun ProviderDetailScreen(id: Long, onBack: () -> Unit) {
     }
     if (showAliasEdit) {
         TextFieldDialog(
-            title = "修改别名",
+            title = "修改厂商名称",
             initial = p.alias,
             onDismiss = { showAliasEdit = false },
+            onValidate = { v ->
+                val name = v.trim()
+                when {
+                    name.isEmpty() -> "名称不能为空"
+                    app.database.providerDao().countAliasExcluding(name, p.id) > 0 ->
+                        "别名「$name」已存在，请换一个（局域网路由用别名区分厂商）"
+                    else -> null
+                }
+            },
             onConfirm = { v ->
                 scope.launch {
                     app.database.providerDao().update(p.copy(alias = v.trim()))
@@ -336,8 +353,9 @@ fun ProviderDetailScreen(id: Long, onBack: () -> Unit) {
         )
     }
     if (showNewModel) {
-        ModelEditDialog(
+        ModelEditorSheet(
             providerId = p.id,
+            isGeminiPreset = p.presetId == "gemini",
             existing = null,
             onDismiss = { showNewModel = false },
             onSave = { m ->
@@ -349,8 +367,9 @@ fun ProviderDetailScreen(id: Long, onBack: () -> Unit) {
         )
     }
     editModel?.let { m ->
-        ModelEditDialog(
+        ModelEditorSheet(
             providerId = p.id,
+            isGeminiPreset = p.presetId == "gemini",
             existing = m,
             onDismiss = { editModel = null },
             onSave = { nm ->
@@ -369,8 +388,21 @@ fun ProviderDetailScreen(id: Long, onBack: () -> Unit) {
             onConfirm = { selected ->
                 scope.launch {
                     app.database.modelDao().insertAll(
-                        selected.map { name ->
-                            ModelEntity(providerId = p.id, name = name)
+                        selected.map { rm ->
+                            ModelEntity(
+                                providerId = p.id,
+                                name = rm.id,
+                                alias = rm.displayName,
+                                type = rm.type,
+                                inputText = rm.inputText,
+                                inputImage = rm.inputImage,
+                                inputVideo = rm.inputVideo,
+                                outputText = rm.outputText,
+                                outputImage = rm.outputImage,
+                                outputVideo = rm.outputVideo,
+                                capabilityTools = rm.tools,
+                                capabilityReasoning = rm.reasoning,
+                            )
                         }
                     )
                     fetchedModels = null
@@ -402,7 +434,8 @@ private fun ModelRow(
     ) {
         Column(Modifier.weight(1f)) {
             Text(
-                model.name + if (!model.enabled) "（已停用）" else "",
+                model.alias?.takeIf { it.isNotBlank() }?.let { alias -> "$alias（${model.name}）" }
+                    ?: model.name + if (!model.enabled) "（已停用）" else "",
                 style = MaterialTheme.typography.bodyMedium,
             )
             ModelBadgesRow(model, Modifier.padding(top = 2.dp))
@@ -422,46 +455,6 @@ private fun ModelRow(
             Icon(Icons.Filled.Delete, contentDescription = "删除模型", tint = MaterialTheme.colorScheme.onSurfaceVariant)
         }
     }
-}
-
-@Composable
-fun TextFieldDialog(
-    title: String,
-    initial: String,
-    onDismiss: () -> Unit,
-    onConfirm: (String) -> Unit,
-) {
-    var value by remember { mutableStateOf(initial) }
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        confirmButton = { TextButton(onClick = { onConfirm(value) }) { Text("确定") } },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } },
-        title = { Text(title) },
-        text = {
-            OutlinedTextField(
-                value = value,
-                onValueChange = { value = it },
-                singleLine = true,
-                modifier = Modifier.fillMaxWidth(),
-            )
-        },
-    )
-}
-
-@Composable
-fun ConfirmDialog(
-    title: String,
-    text: String,
-    onDismiss: () -> Unit,
-    onConfirm: () -> Unit,
-) {
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        confirmButton = { TextButton(onClick = onConfirm) { Text("确定") } },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } },
-        title = { Text(title) },
-        text = { Text(text) },
-    )
 }
 
 @Composable
@@ -504,61 +497,95 @@ private fun AddKeyDialog(
     )
 }
 
+private fun normalizeModelId(s: String): String =
+    s.lowercase().replace(Regex("[-_. ]"), "")
+
 @Composable
 private fun FetchModelsDialog(
-    fetched: List<String>,
+    fetched: List<RemoteModel>,
     existingNames: Set<String>,
     onDismiss: () -> Unit,
-    onConfirm: (List<String>) -> Unit,
+    onConfirm: (List<RemoteModel>) -> Unit,
 ) {
     var filter by remember { mutableStateOf("") }
     var checked by remember {
         mutableStateOf(
-            fetched.associateWith { it !in existingNames }
+            fetched.associate { it.id to (it.id !in existingNames) }
         )
     }
-    val shown = fetched.filter { it.contains(filter, ignoreCase = true) }
-    val selectable = shown.filter { it !in existingNames }
+    val shown = if (filter.isBlank()) fetched
+    else fetched.filter { normalizeModelId(it.id).contains(normalizeModelId(filter)) }
+    val selectable = shown.filter { it.id !in existingNames }
+    val allNewSelected = selectable.isNotEmpty() && selectable.all { checked[it.id] == true }
     AlertDialog(
         onDismissRequest = onDismiss,
         confirmButton = {
             TextButton(onClick = {
-                onConfirm(checked.filter { it.value }.keys.toList())
+                onConfirm(shown.filter { checked[it.id] == true })
             }) { Text("添加所选") }
         },
         dismissButton = {
             Row {
                 TextButton(onClick = {
-                    checked = checked.mapValues { selectable.contains(it.key) }
-                }) { Text("全选新模型") }
+                    checked = checked + selectable.associate { it.id to !allNewSelected }
+                }) { Text(if (allNewSelected) "全不选新模型" else "全选新模型") }
                 TextButton(onClick = onDismiss) { Text("取消") }
             }
         },
         title = { Text("选择模型（${fetched.size}）") },
         text = {
             Column {
+                Text(
+                    "已按名称自动匹配模型类型与模态，添加后可再编辑",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
                 OutlinedTextField(
                     value = filter,
                     onValueChange = { filter = it },
                     placeholder = { Text("搜索模型") },
                     singleLine = true,
-                    modifier = Modifier.fillMaxWidth(),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 6.dp),
                 )
                 Spacer(Modifier.height(8.dp))
                 LazyColumn(Modifier.height(360.dp)) {
-                    items(shown, key = { it }) { name ->
-                        val isExisting = name in existingNames
+                    items(shown, key = { it.id }) { rm ->
+                        val isExisting = rm.id in existingNames
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Checkbox(
-                                checked = isExisting || (checked[name] ?: false),
-                                onCheckedChange = { if (!isExisting) checked = checked + (name to it) },
+                                checked = isExisting || (checked[rm.id] ?: false),
+                                onCheckedChange = { if (!isExisting) checked = checked + (rm.id to it) },
                                 enabled = !isExisting,
                             )
-                            Text(
-                                name + if (isExisting) "（已添加）" else "",
-                                style = MaterialTheme.typography.bodySmall,
-                                fontFamily = FontFamily.Monospace,
-                            )
+                            Column(Modifier.weight(1f).padding(vertical = 4.dp)) {
+                                Text(
+                                    rm.id + if (isExisting) "（已添加）" else "",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    fontFamily = FontFamily.Monospace,
+                                )
+                                Row(
+                                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                                    modifier = Modifier.padding(top = 2.dp),
+                                ) {
+                                    ModalityTag(typeLabel(rm.type), color = MaterialTheme.colorScheme.primaryContainer)
+                                    if (rm.tools) ModalityTag("工具", color = MaterialTheme.colorScheme.tertiaryContainer)
+                                    if (rm.reasoning) ModalityTag("推理", color = MaterialTheme.colorScheme.tertiaryContainer)
+                                    val ins = buildList {
+                                        if (rm.inputText) add("文")
+                                        if (rm.inputImage) add("图")
+                                        if (rm.inputVideo) add("视")
+                                    }
+                                    val outs = buildList {
+                                        if (rm.outputText) add("文")
+                                        if (rm.outputImage) add("图")
+                                        if (rm.outputVideo) add("视")
+                                    }
+                                    ModalityTag("入${ins.joinToString("")}")
+                                    ModalityTag("出${outs.joinToString("")}")
+                                }
+                            }
                         }
                     }
                 }

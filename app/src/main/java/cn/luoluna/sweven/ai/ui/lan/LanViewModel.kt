@@ -90,4 +90,9 @@ class LanViewModel(app: Application) : AndroidViewModel(app) {
             authDao.upsert(it.copy(status = AuthDeviceEntity.STATUS_BLOCKED))
         }
     }
+
+    /** 给任意出现过的设备设置备注名 */
+    fun setDeviceLabel(deviceId: String, label: String) = viewModelScope.launch {
+        authDao.setLabel(deviceId, label.trim().takeIf { it.isNotEmpty() })
+    }
 }

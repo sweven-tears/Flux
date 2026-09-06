@@ -64,6 +64,7 @@ fun LanScreen(vm: LanViewModel = viewModel()) {
 
     val ips = remember { vm.lanIps() }
     var portDialog by remember { mutableStateOf(false) }
+    var renameTarget by remember { mutableStateOf<AuthDeviceEntity?>(null) }
 
     // Android 13+ 通知权限：开启服务时申请
     var pendingEnable by remember { mutableStateOf(false) }
@@ -144,6 +145,7 @@ fun LanScreen(vm: LanViewModel = viewModel()) {
                         if (index > 0) androidx.compose.material3.HorizontalDivider(Modifier.padding(vertical = 4.dp))
                         DeviceRow(
                             device = d,
+                            onRename = { renameTarget = d },
                             primaryAction = "批准" to { vm.approve(d.deviceId) },
                             secondaryAction = "拒绝" to { vm.deny(d.deviceId) },
                         )
@@ -158,6 +160,7 @@ fun LanScreen(vm: LanViewModel = viewModel()) {
                         if (index > 0) androidx.compose.material3.HorizontalDivider(Modifier.padding(vertical = 4.dp))
                         DeviceRow(
                             device = d,
+                            onRename = { renameTarget = d },
                             primaryAction = "撤销" to { vm.revoke(d.deviceId) },
                             secondaryAction = "拉黑" to { vm.blockAuthorized(d.deviceId) },
                         )
@@ -172,6 +175,7 @@ fun LanScreen(vm: LanViewModel = viewModel()) {
                         if (index > 0) androidx.compose.material3.HorizontalDivider(Modifier.padding(vertical = 4.dp))
                         DeviceRow(
                             device = d,
+                            onRename = { renameTarget = d },
                             primaryAction = "解除" to { vm.unblock(d.deviceId) },
                             secondaryAction = null,
                         )
@@ -229,11 +233,24 @@ fun LanScreen(vm: LanViewModel = viewModel()) {
             },
         )
     }
+
+    renameTarget?.let { device ->
+        cn.luoluna.sweven.ai.ui.common.TextFieldDialog(
+            title = "设备备注",
+            initial = device.label.orEmpty(),
+            onDismiss = { renameTarget = null },
+            onConfirm = { name ->
+                vm.setDeviceLabel(device.deviceId, name)
+                renameTarget = null
+            },
+        )
+    }
 }
 
 @Composable
 private fun DeviceRow(
     device: AuthDeviceEntity,
+    onRename: () -> Unit,
     primaryAction: Pair<String, () -> Unit>,
     secondaryAction: Pair<String, (() -> Unit)>?,
 ) {
@@ -258,6 +275,9 @@ private fun DeviceRow(
         }
         TextButton(onClick = primaryAction.second) {
             Text(primaryAction.first, style = MaterialTheme.typography.labelMedium)
+        }
+        TextButton(onClick = onRename) {
+            Text("备注", style = MaterialTheme.typography.labelMedium)
         }
     }
 }

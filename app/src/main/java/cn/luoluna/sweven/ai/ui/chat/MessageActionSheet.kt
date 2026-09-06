@@ -1,0 +1,167 @@
+package cn.luoluna.sweven.ai.ui.chat
+
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.selection.SelectionContainer
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.AccountTree
+import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Web
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.runtime.Composable
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
+import cn.luoluna.sweven.ai.data.db.MessageEntity
+import cn.luoluna.sweven.ai.data.db.Role
+
+/** 「更多」弹层的动作集合 */
+data class MessageActions(
+    val onFreeCopy: () -> Unit,
+    val onWebRender: () -> Unit,
+    val onBranch: () -> Unit,
+    val onDelete: () -> Unit,
+)
+
+/** 消息「更多」弹层：自由选择复制 / 网页视图渲染 / 创建分支 / 删除 */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun MessageActionSheet(
+    message: MessageEntity,
+    onDismiss: () -> Unit,
+    actions: MessageActions,
+) {
+    ModalBottomSheet(onDismissRequest = onDismiss) {
+        Column(Modifier.padding(bottom = 24.dp)) {
+            Text(
+                if (message.role == Role.USER) "用户消息" else "助手消息",
+                style = MaterialTheme.typography.titleMedium,
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+            )
+            MessageActionRow(Icons.Filled.ContentCopy, "复制（自由选择）") {
+                onDismiss(); actions.onFreeCopy()
+            }
+            MessageActionRow(Icons.Filled.Web, "网页视图渲染") {
+                onDismiss(); actions.onWebRender()
+            }
+            MessageActionRow(Icons.Filled.AccountTree, "创建分支") {
+                onDismiss(); actions.onBranch()
+            }
+            MessageActionRow(Icons.Filled.Delete, "删除（不可恢复）") {
+                onDismiss(); actions.onDelete()
+            }
+        }
+    }
+}
+
+@Composable
+private fun MessageActionRow(icon: ImageVector, label: String, onClick: () -> Unit) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+            .padding(horizontal = 16.dp, vertical = 12.dp),
+    ) {
+        Icon(
+            icon,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(end = 12.dp),
+        )
+        Text(label, style = MaterialTheme.typography.bodyMedium)
+    }
+}
+
+/**
+ * 全屏自由复制页：文本可长按拖选后单独复制，也可一键复制全文。
+ */
+@Composable
+fun FullScreenCopyDialog(message: MessageEntity, onDismiss: () -> Unit) {
+    val context = LocalContext.current
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false),
+    ) {
+        Surface(modifier = Modifier.fillMaxSize()) {
+            Column(Modifier.fillMaxSize()) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(end = 8.dp),
+                ) {
+                    IconButton(onClick = onDismiss) {
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
+                    }
+                    Text(
+                        if (message.role == Role.USER) "用户消息" else "助手消息",
+                        style = MaterialTheme.typography.titleMedium,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f),
+                    )
+                    TextButton(onClick = {
+                        copyMessageText(context, message.content)
+                    }) { Text("复制全文") }
+                }
+                HorizontalDivider()
+                SelectionContainer(
+                    Modifier
+                        .weight(1f)
+                        .fillMaxWidth()
+                        .verticalScroll(rememberScrollState())
+                        .padding(16.dp),
+                ) {
+                    Text(
+                        message.content,
+                        style = MaterialTheme.typography.bodyMedium,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
+            }
+        }
+    }
+}
+
+internal fun copyMessageText(context: Context, text: String) {
+    val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+    cm.setPrimaryClip(ClipData.newPlainText("phoneRouter", text))
+}
+
+/** 删除消息的确认弹窗（物理删除，不可恢复） */
+@Composable
+fun DeleteMessageDialog(onDismiss: () -> Unit, onConfirm: () -> Unit) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        confirmButton = { TextButton(onClick = onConfirm) { Text("删除") } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } },
+        title = { Text("删除消息") },
+        text = { Text("这条消息将从会话中删除，后续对话不再携带它，且无法恢复。确定删除？") },
+    )
+}

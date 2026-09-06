@@ -62,14 +62,36 @@ fun ModalityTag(text: String, modifier: Modifier = Modifier, color: Color = Mate
     }
 }
 
-/** 模型的输入/输出类型徽标行 */
+fun typeLabel(type: String): String = when (type) {
+    cn.luoluna.sweven.ai.data.db.ModelType.IMAGE -> "图像"
+    cn.luoluna.sweven.ai.data.db.ModelType.EMBEDDING -> "嵌入"
+    else -> "聊天"
+}
+
+fun capabilityTags(m: ModelEntity): List<String> = buildList {
+    if (m.capabilityTools) add("工具")
+    if (m.capabilityReasoning) add("推理")
+}
+
+/** 模型的类型/模态/能力徽标（两行紧凑展示） */
 @Composable
 fun ModelBadgesRow(m: ModelEntity, modifier: Modifier = Modifier) {
-    Row(modifier = modifier, horizontalArrangement = Arrangement.spacedBy(4.dp), verticalAlignment = Alignment.CenterVertically) {
-        Text("入", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        inputTags(m).forEach { ModalityTag(it) }
-        Text("出", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(start = 6.dp))
-        outputTags(m).forEach { ModalityTag(it, color = MaterialTheme.colorScheme.tertiaryContainer) }
+    Column(modifier = modifier, verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        Row(horizontalArrangement = Arrangement.spacedBy(4.dp), verticalAlignment = Alignment.CenterVertically) {
+            ModalityTag(typeLabel(m.type), color = MaterialTheme.colorScheme.primaryContainer)
+            capabilityTags(m).forEach {
+                ModalityTag(it, color = MaterialTheme.colorScheme.tertiaryContainer)
+            }
+            if (m.builtinGoogleSearch || m.builtinUrlContext || m.builtinImageGen) {
+                ModalityTag("内置工具", color = MaterialTheme.colorScheme.tertiaryContainer)
+            }
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(4.dp), verticalAlignment = Alignment.CenterVertically) {
+            Text("入", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            inputTags(m).forEach { ModalityTag(it) }
+            Text("出", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(start = 4.dp))
+            outputTags(m).forEach { ModalityTag(it, color = MaterialTheme.colorScheme.secondaryContainer) }
+        }
     }
 }
 

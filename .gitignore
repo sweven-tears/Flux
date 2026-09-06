@@ -15,6 +15,11 @@ logs/
 .env.*
 !.env.example
 
+# Android 签名密钥，切勿提交到仓库
+*.jks
+*.keystore
+keystore.properties
+
 # 依赖与构建产物
 node_modules/
 dist/
@@ -32,3 +37,9 @@ venv/
 # 临时文件
 *.tmp
 *.bak
+
+# Gradle 缓存
+.gradle/
+
+# 构建出的 APK 产物
+*.apk

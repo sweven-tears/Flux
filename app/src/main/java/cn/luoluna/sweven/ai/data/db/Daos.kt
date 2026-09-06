@@ -119,6 +119,51 @@ interface ConversationDao {
 
     @Query("UPDATE conversations SET providerId = :providerId, modelName = :modelName WHERE id = :id")
     suspend fun setModel(id: Long, providerId: Long?, modelName: String?)
+
+    @Query("UPDATE conversations SET folderId = :folderId WHERE id = :id")
+    suspend fun setFolder(id: Long, folderId: Long?)
+
+    @Query("UPDATE conversations SET folderId = NULL WHERE folderId = :folderId")
+    suspend fun clearFolder(folderId: Long)
+
+    @Query("UPDATE conversations SET thinkingDepth = :depth WHERE id = :id")
+    suspend fun setThinkingDepth(id: Long, depth: String?)
+}
+
+@Dao
+interface FolderDao {
+    @Query("SELECT * FROM folders ORDER BY createdAt ASC")
+    fun observeAll(): Flow<List<FolderEntity>>
+
+    @Query("SELECT * FROM folders WHERE id = :id")
+    suspend fun byId(id: Long): FolderEntity?
+
+    @Insert
+    suspend fun insert(f: FolderEntity): Long
+
+    @Update
+    suspend fun update(f: FolderEntity)
+
+    @Delete
+    suspend fun delete(f: FolderEntity)
+}
+
+@Dao
+interface PresetDao {
+    @Query("SELECT * FROM presets ORDER BY createdAt ASC")
+    fun observeAll(): Flow<List<PresetEntity>>
+
+    @Query("SELECT * FROM presets WHERE folderId = :folderId ORDER BY createdAt ASC")
+    suspend fun forFolder(folderId: Long): List<PresetEntity>
+
+    @Insert
+    suspend fun insert(p: PresetEntity): Long
+
+    @Update
+    suspend fun update(p: PresetEntity)
+
+    @Delete
+    suspend fun delete(p: PresetEntity)
 }
 
 @Dao
@@ -128,6 +173,17 @@ interface MessageDao {
 
     @Query("SELECT * FROM messages WHERE conversationId = :conversationId ORDER BY id ASC")
     suspend fun forConversation(conversationId: Long): List<MessageEntity>
+
+    /** 会话内 id ≤ messageId 的消息（含目标消息），供创建分支复制历史 */
+    @Query("SELECT * FROM messages WHERE conversationId = :conversationId AND id <= :messageId ORDER BY id ASC")
+    suspend fun forConversationUpTo(conversationId: Long, messageId: Long): List<MessageEntity>
+
+    /** 删除会话内 id ≥（inclusive）/ ＞（否则）fromId 的消息，供重新生成清理旧回复 */
+    @Query("DELETE FROM messages WHERE conversationId = :conversationId AND id >= :fromId")
+    suspend fun deleteFromInclusive(conversationId: Long, fromId: Long): Int
+
+    @Query("DELETE FROM messages WHERE conversationId = :conversationId AND id > :fromId")
+    suspend fun deleteAfter(conversationId: Long, fromId: Long): Int
 
     @Insert
     suspend fun insert(m: MessageEntity): Long

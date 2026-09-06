@@ -1,10 +1,13 @@
 package cn.luoluna.sweven.ai.ui.provider
 
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -39,6 +42,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
@@ -58,6 +64,8 @@ fun AddProviderScreen(
 ) {
     val app = androidx.compose.ui.platform.LocalContext.current.applicationContext as App
     val scope = rememberCoroutineScope()
+    val keyboard = LocalSoftwareKeyboardController.current
+    val focusManager = LocalFocusManager.current
 
     var mode by rememberSaveable { mutableStateOf(0) } // 0 预设 / 1 自定义
     var selectedPresetId by rememberSaveable { mutableStateOf<String?>(null) }
@@ -96,8 +104,15 @@ fun AddProviderScreen(
     ) { padding ->
         Column(
             Modifier
-                .fillMaxWidth()
+                .fillMaxSize()
                 .padding(padding)
+                .imePadding()
+                .pointerInput(Unit) {
+                    detectTapGestures(onTap = {
+                        keyboard?.hide()
+                        focusManager.clearFocus()
+                    })
+                }
                 .padding(horizontal = 16.dp)
                 .verticalScroll(rememberScrollState()),
             verticalArrangement = Arrangement.spacedBy(12.dp),

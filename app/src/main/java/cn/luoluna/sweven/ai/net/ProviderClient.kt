@@ -22,6 +22,7 @@ data class TestResult(
 
 sealed interface ChatEvent {
     data class Delta(val text: String) : ChatEvent
+    data class ReasoningDelta(val text: String) : ChatEvent
     data class Failed(val message: String) : ChatEvent
     data object Done : ChatEvent
 }
@@ -44,27 +45,36 @@ class ProviderClient {
         .readTimeout(0, TimeUnit.MILLISECONDS)
         .build()
 
-    suspend fun listModels(baseUrl: String, apiKey: String?): Result<List<String>> =
+    suspend fun listModels(
+        baseUrl: String,
+        apiKey: String?,
+        extraHeaders: Map<String, String> = emptyMap(),
+    ): Result<List<RemoteModel>> =
         withContext(Dispatchers.IO) {
             runCatching {
                 val request = Request.Builder()
                     .url("${baseUrl.trimEnd('/')}/models")
                     .header("Authorization", "Bearer ${apiKey.orEmpty()}")
                     .header("Accept", "application/json")
+                    .apply { extraHeaders.forEach { (k, v) -> header(k, v) } }
                     .get()
                     .build()
                 http.newCall(request).execute().use { resp ->
                     val body = resp.body?.string().orEmpty()
                     if (!resp.isSuccessful) throw ApiException(parseErrorMessage(resp.code, body))
-                    extractModelNames(body)
+                    extractModelInfos(body)
                 }
             }
         }
 
-    suspend fun testConnection(baseUrl: String, apiKey: String?): TestResult {
+    suspend fun testConnection(
+        baseUrl: String,
+        apiKey: String?,
+        extraHeaders: Map<String, String> = emptyMap(),
+    ): TestResult {
         val start = System.currentTimeMillis()
         return try {
-            val models = listModels(baseUrl, apiKey).getOrThrow()
+            val models = listModels(baseUrl, apiKey, extraHeaders).getOrThrow()
             TestResult(
                 ok = true,
                 latencyMs = System.currentTimeMillis() - start,
@@ -86,7 +96,12 @@ class ProviderClient {
     }
 
     /** 打开流式/非流式 chat completion 连接，调用方负责 close */
-    suspend fun openChat(baseUrl: String, apiKey: String?, body: JsonObject): Response =
+    suspend fun openChat(
+        baseUrl: String,
+        apiKey: String?,
+        body: JsonObject,
+        extraHeaders: Map<String, String> = emptyMap(),
+    ): Response =
         withContext(Dispatchers.IO) {
             val jsonBody = body.toString()
                 .toRequestBody("application/json; charset=utf-8".toMediaType())
@@ -94,6 +109,7 @@ class ProviderClient {
                 .url("${baseUrl.trimEnd('/')}/chat/completions")
                 .header("Authorization", "Bearer ${apiKey.orEmpty()}")
                 .header("Accept", "text/event-stream, application/json")
+                .apply { extraHeaders.forEach { (k, v) -> header(k, v) } }
                 .post(jsonBody)
                 .build()
             streamHttp.newCall(request).execute()
@@ -118,9 +134,14 @@ class ProviderClient {
     }.flowOn(Dispatchers.IO)
 
     /** 聊天流式输出（App 内聊天使用） */
-    fun chatDeltas(baseUrl: String, apiKey: String?, body: JsonObject): Flow<ChatEvent> = flow {
+    fun chatDeltas(
+        baseUrl: String,
+        apiKey: String?,
+        body: JsonObject,
+        extraHeaders: Map<String, String> = emptyMap(),
+    ): Flow<ChatEvent> = flow {
         val resp = try {
-            openChat(baseUrl, apiKey, body)
+            openChat(baseUrl, apiKey, body, extraHeaders)
         } catch (e: Exception) {
             emit(ChatEvent.Failed("连接失败: ${e.message ?: e.javaClass.simpleName}"))
             return@flow
@@ -141,6 +162,8 @@ class ProviderClient {
                 val payload = line.substring(5).trim()
                 if (payload == "[DONE]") break
                 if (payload.isEmpty()) continue
+                val reasoning = parseReasoningContent(payload)
+                if (!reasoning.isNullOrEmpty()) emit(ChatEvent.ReasoningDelta(reasoning))
                 val delta = parseDeltaContent(payload)
                 if (!delta.isNullOrEmpty()) emit(ChatEvent.Delta(delta))
             }

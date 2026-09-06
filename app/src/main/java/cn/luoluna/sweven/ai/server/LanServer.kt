@@ -6,7 +6,10 @@ import cn.luoluna.sweven.ai.data.db.ProviderDao
 import cn.luoluna.sweven.ai.data.repo.ModelRouter
 import cn.luoluna.sweven.ai.net.ChatJson
 import cn.luoluna.sweven.ai.net.ProviderClient
+import cn.luoluna.sweven.ai.net.applyBuiltinTools
 import cn.luoluna.sweven.ai.net.buildChatBody
+import cn.luoluna.sweven.ai.net.mergeCustomBody
+import cn.luoluna.sweven.ai.net.parseCustomHeaders
 import cn.luoluna.sweven.ai.net.stringAt
 import cn.luoluna.sweven.ai.net.streamFlagOf
 import io.ktor.http.ContentType
@@ -128,8 +131,11 @@ class LanServer(
                 put(
                     "phone_router",
                     buildJsonObject {
+                        put("display", m.alias?.takeIf { it.isNotBlank() } ?: m.name)
+                        put("type", m.type)
                         put("input", modalities(m.inputText, m.inputImage, m.inputVideo))
                         put("output", modalities(m.outputText, m.outputImage, m.outputVideo))
+                        put("capabilities", modalities(m.capabilityTools, m.capabilityReasoning, false))
                     }
                 )
             }
@@ -183,16 +189,26 @@ class LanServer(
         }
         val stream = streamFlagOf(body)
         val modelName = aggregateId.substring(aggregateId.indexOf('/') + 1)
-        val payload = buildChatBody(
+        var payload = buildChatBody(
             modelName = modelName,
             messages = messages,
             stream = stream,
             defaults = route.advancedParams,
             base = body,
         )
+        payload = mergeCustomBody(payload, route.model?.customBody)
+        if (route.provider.presetId == "gemini" && route.model != null) {
+            payload = applyBuiltinTools(
+                payload,
+                route.model.builtinGoogleSearch,
+                route.model.builtinUrlContext,
+                route.model.builtinImageGen,
+            )
+        }
+        val extraHeaders = parseCustomHeaders(route.model?.customHeaders)
 
         val upstream = try {
-            client.openChat(route.provider.baseUrl, apiKey.key, payload)
+            client.openChat(route.provider.baseUrl, apiKey.key, payload, extraHeaders)
         } catch (e: Exception) {
             respondOpenAiError(HttpStatusCode.BadGateway, "上游连接失败: ${e.message ?: e.javaClass.simpleName}")
             return

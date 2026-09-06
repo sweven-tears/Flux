@@ -40,6 +40,12 @@ data class ApiKeyEntity(
     val createdAt: Long = System.currentTimeMillis(),
 )
 
+object ModelType {
+    const val CHAT = "chat"
+    const val IMAGE = "image"
+    const val EMBEDDING = "embedding"
+}
+
 @Entity(
     tableName = "models",
     foreignKeys = [
@@ -57,6 +63,10 @@ data class ModelEntity(
     val providerId: Long,
     val name: String,
     val enabled: Boolean = true,
+    /** 显示别名（为空时显示模型 id） */
+    val alias: String? = null,
+    /** chat / image / embedding */
+    val type: String = ModelType.CHAT,
     // 输入/输出类型：文本、图像、视频
     val inputText: Boolean = true,
     val inputImage: Boolean = false,
@@ -64,6 +74,16 @@ data class ModelEntity(
     val outputText: Boolean = true,
     val outputImage: Boolean = false,
     val outputVideo: Boolean = false,
+    // 能力
+    val capabilityTools: Boolean = false,
+    val capabilityReasoning: Boolean = false,
+    // 内置工具（API 侧提供，当前仅 Gemini 官方 API 生效）
+    val builtinGoogleSearch: Boolean = false,
+    val builtinUrlContext: Boolean = false,
+    val builtinImageGen: Boolean = false,
+    // 高级：自定义请求头（每行一个 "Name: Value"）与自定义 body（JSON 对象，键值合入请求体）
+    val customHeaders: String? = null,
+    val customBody: String? = null,
     // 高级参数，null = 使用 API 默认值
     val temperature: Double? = null,
     val topP: Double? = null,
@@ -79,8 +99,42 @@ data class ConversationEntity(
     val title: String = "新对话",
     val providerId: Long? = null,
     val modelName: String? = null,
+    val folderId: Long? = null,
+    val systemPrompt: String? = null,
+    /** 思考深度：off / low / medium / high，null = 未设置（不注入思考相关参数） */
+    val thinkingDepth: String? = null,
     val createdAt: Long = System.currentTimeMillis(),
     val updatedAt: Long = System.currentTimeMillis(),
+)
+
+@Entity(tableName = "folders")
+data class FolderEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val name: String,
+    val createdAt: Long = System.currentTimeMillis(),
+)
+
+/** 文件夹内的预设对话模板：名称 + 系统提示词 + 指定模型 */
+@Entity(
+    tableName = "presets",
+    foreignKeys = [
+        ForeignKey(
+            entity = FolderEntity::class,
+            parentColumns = ["id"],
+            childColumns = ["folderId"],
+            onDelete = ForeignKey.CASCADE,
+        )
+    ],
+    indices = [Index("folderId")],
+)
+data class PresetEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val folderId: Long,
+    val name: String,
+    val systemPrompt: String? = null,
+    val providerId: Long? = null,
+    val modelName: String? = null,
+    val createdAt: Long = System.currentTimeMillis(),
 )
 
 @Entity(
@@ -102,6 +156,8 @@ data class MessageEntity(
     val content: String,
     /** JSON 数组字符串，元素为 data URL（图片附件） */
     val imagesJson: String? = null,
+    /** 模型思考过程（reasoning_content / <think>），仅助手消息 */
+    val reasoning: String? = null,
     val createdAt: Long = System.currentTimeMillis(),
 ) {
     val images: List<String>

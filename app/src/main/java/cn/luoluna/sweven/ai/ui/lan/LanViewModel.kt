@@ -23,8 +23,14 @@ class LanViewModel(app: Application) : AndroidViewModel(app) {
 
     val lanEnabled: StateFlow<Boolean> = settings.lanEnabled
     val lanPort: StateFlow<Int> = settings.lanPort
+    val lanSmartAiEnabled: StateFlow<Boolean> = settings.lanSmartAiEnabled
     val running: StateFlow<Boolean> = ServerState.running
     val serverError: StateFlow<String?> = ServerState.lastError
+
+    /** 开关 smartAi 聚合模型对局域网客户端的开放（即时生效） */
+    fun setSmartAiEnabled(on: Boolean) {
+        settings.setLanSmartAiEnabled(on)
+    }
 
     val pendingDevices: StateFlow<List<AuthDeviceEntity>> =
         authDao.observeByStatus(AuthDeviceEntity.STATUS_PENDING)

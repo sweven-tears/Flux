@@ -1,9 +1,13 @@
 package cn.luoluna.sweven.ai.server
 
+import cn.luoluna.sweven.ai.data.AppSettings
 import cn.luoluna.sweven.ai.data.db.AuthDeviceDao
 import cn.luoluna.sweven.ai.data.db.ModelDao
+import cn.luoluna.sweven.ai.data.db.ModelEntity
 import cn.luoluna.sweven.ai.data.db.ProviderDao
+import cn.luoluna.sweven.ai.data.db.SmartRouteDao
 import cn.luoluna.sweven.ai.data.repo.ModelRouter
+import cn.luoluna.sweven.ai.data.repo.SmartAi
 import cn.luoluna.sweven.ai.net.ChatJson
 import cn.luoluna.sweven.ai.net.ProviderClient
 import cn.luoluna.sweven.ai.net.applyBuiltinTools
@@ -27,7 +31,10 @@ import io.ktor.server.routing.get
 import io.ktor.server.routing.post
 import io.ktor.server.routing.routing
 import io.ktor.utils.io.writeStringUtf8
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
@@ -36,7 +43,7 @@ import kotlinx.serialization.json.put
 
 /**
  * 局域网聚合路由服务器（OpenAI 兼容协议）：
- * - GET  /v1/models            聚合模型列表，id 格式：厂商别名/模型名
+ * - GET  /v1/models            聚合模型列表，id 格式：厂商别名/模型名（可选 smartAi）
  * - POST /v1/chat/completions  按 model 聚合 id 路由到对应厂商并代理转发
  * - 首次使用的设备需在 App 内批准（401 + 待授权申请）
  */
@@ -47,6 +54,8 @@ class LanServer(
     private val client: ProviderClient,
     private val providerDao: ProviderDao,
     private val modelDao: ModelDao,
+    private val smartRouteDao: SmartRouteDao,
+    private val settings: AppSettings,
     @Suppress("unused") private val authDao: AuthDeviceDao,
 ) {
 
@@ -139,6 +148,27 @@ class LanServer(
                     }
                 )
             }
+        }.toMutableList()
+        // 开关开启且存在启用候选时，追加 smartAi 聚合模型
+        val smartRoutes = if (settings.lanSmartAiEnabled.value) smartRouteDao.all().filter { it.enabled } else emptyList()
+        if (smartRoutes.isNotEmpty()) {
+            data.add(
+                buildJsonObject {
+                    put("id", SmartAi.MODEL_NAME)
+                    put("object", "model")
+                    put("owned_by", SmartAi.MODEL_NAME)
+                    put(
+                        "phone_router",
+                        buildJsonObject {
+                            put("display", "smartAi（智能路由聚合）")
+                            put("type", "chat")
+                            put("input", modalities(true, false, false))
+                            put("output", modalities(true, false, false))
+                            put("capabilities", modalities(false, false, false))
+                        }
+                    )
+                }
+            )
         }
         return buildJsonObject {
             put("object", "list")
@@ -170,6 +200,10 @@ class LanServer(
         val aggregateId = body.stringAt("model")
         if (aggregateId.isNullOrBlank()) {
             respondOpenAiError(HttpStatusCode.BadRequest, "model 字段必填，格式：厂商别名/模型名")
+            return
+        }
+        if (aggregateId == SmartAi.MODEL_NAME) {
+            handleSmartCompletion(body)
             return
         }
         val route = router.resolveByAggregateId(aggregateId)
@@ -240,6 +274,95 @@ class LanServer(
         } finally {
             upstream.close()
         }
+    }
+
+    /**
+     * smartAi 聚合模型：按启用候选顺序回退。
+     * 流式候选限时建立连接，成功后原样透传 SSE；非流式候选请求完整 JSON 后转发。
+     */
+    private suspend fun ApplicationCall.handleSmartCompletion(rawBody: JsonObject) {
+        if (!settings.lanSmartAiEnabled.value) {
+            respondOpenAiError(
+                HttpStatusCode.NotFound,
+                "smartAi 未开放：请在 PhoneRouter App 的「局域网」页面开启 smartAi 聚合模型",
+            )
+            return
+        }
+        val routes = smartRouteDao.all().filter { it.enabled }
+        if (routes.isEmpty()) {
+            respondOpenAiError(HttpStatusCode.NotFound, "smartAi 没有启用的候选模型，请先在「智能路由」中配置")
+            return
+        }
+        val messages = rawBody["messages"] as? JsonArray
+        if (messages == null) {
+            respondOpenAiError(HttpStatusCode.BadRequest, "messages 字段必填")
+            return
+        }
+        val stream = streamFlagOf(rawBody)
+        val timeoutMs = settings.smartFirstTokenTimeoutSeconds.value * 1000L
+
+        for (route in routes) {
+            val resolved = router.resolveById(route.providerId, route.modelName) ?: continue
+            val apiKey = resolved.apiKey ?: continue
+            if (apiKey.key.isBlank()) continue
+            // 模型配置行可能已被删除，此时退回空配置继续路由
+            val model = resolved.model
+                ?: ModelEntity(providerId = resolved.provider.id, name = route.modelName)
+            var payload = buildChatBody(
+                modelName = model.name,
+                messages = messages,
+                stream = stream,
+                defaults = resolved.advancedParams,
+                base = rawBody,
+            )
+            payload = mergeCustomBody(payload, model.customBody)
+            if (resolved.provider.presetId == "gemini") {
+                payload = applyBuiltinTools(
+                    payload,
+                    model.builtinGoogleSearch,
+                    model.builtinUrlContext,
+                    model.builtinImageGen,
+                )
+            }
+            val extraHeaders = parseCustomHeaders(model.customHeaders)
+
+            if (!stream) {
+                // 非流式候选：带读超时的完整请求，成功即转发
+                val resp = client.chatOnce(resolved.provider.baseUrl, apiKey.key, payload, extraHeaders)
+                    .getOrNull() ?: continue
+                respondText(resp.toString(), ContentType.Application.Json)
+                return
+            }
+
+            // 流式候选：限时建立连接，超时取消并尝试下一个
+            val call = client.newStreamingCall(resolved.provider.baseUrl, apiKey.key, payload, extraHeaders)
+            val upstream = withTimeoutOrNull(timeoutMs) {
+                withContext(Dispatchers.IO) { call.execute() }
+            }
+            if (upstream == null) {
+                call.cancel()
+                continue
+            }
+            if (!upstream.isSuccessful) {
+                client.readBody(upstream)
+                upstream.close()
+                continue
+            }
+            try {
+                respondBytesWriter(contentType = ContentType("text", "event-stream")) {
+                    client.ssePayloads(upstream).collect { payloadLine ->
+                        writeStringUtf8("data: $payloadLine\n\n")
+                        flush()
+                    }
+                    writeStringUtf8("data: [DONE]\n\n")
+                    flush()
+                }
+            } finally {
+                upstream.close()
+            }
+            return
+        }
+        respondOpenAiError(HttpStatusCode.BadGateway, "smartAi 全部候选模型请求失败")
     }
 
     private suspend fun ApplicationCall.respondOpenAiError(status: HttpStatusCode, message: String) {

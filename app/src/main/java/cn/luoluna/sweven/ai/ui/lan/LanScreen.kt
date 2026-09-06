@@ -56,6 +56,7 @@ fun LanScreen(vm: LanViewModel = viewModel()) {
     val context = LocalContext.current
     val lanEnabled by vm.lanEnabled.collectAsStateWithLifecycle()
     val lanPort by vm.lanPort.collectAsStateWithLifecycle()
+    val smartAiEnabled by vm.lanSmartAiEnabled.collectAsStateWithLifecycle()
     val running by vm.running.collectAsStateWithLifecycle()
     val serverError by vm.serverError.collectAsStateWithLifecycle()
     val pending by vm.pendingDevices.collectAsStateWithLifecycle()
@@ -135,6 +136,18 @@ fun LanScreen(vm: LanViewModel = viewModel()) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text("服务端口", style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
                     TextButton(onClick = { portDialog = true }) { Text("$lanPort  修改") }
+                }
+                // smartAi 聚合模型对局域网客户端的开放开关（即时生效）
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text("开放 smartAi 聚合模型", style = MaterialTheme.typography.bodyMedium)
+                        Text(
+                            "客户端请求 model=smartAi 时按智能路由候选顺序自动回退",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    Switch(checked = smartAiEnabled, onCheckedChange = { vm.setSmartAiEnabled(it) })
                 }
             }
 

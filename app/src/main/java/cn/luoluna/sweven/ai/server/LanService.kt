@@ -33,6 +33,8 @@ object ServerRunner {
             client = app.providerClient,
             providerDao = app.database.providerDao(),
             modelDao = app.database.modelDao(),
+            smartRouteDao = app.database.smartRouteDao(),
+            settings = app.settings,
             authDao = app.database.authDeviceDao(),
         )
         server = s

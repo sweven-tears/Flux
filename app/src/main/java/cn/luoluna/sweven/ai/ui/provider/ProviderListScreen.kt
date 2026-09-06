@@ -11,10 +11,12 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Build
+import androidx.compose.material.icons.filled.DragIndicator
 import androidx.compose.material3.Card
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FloatingActionButton
@@ -26,7 +28,10 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
@@ -34,6 +39,11 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import cn.luoluna.sweven.ai.App
 import cn.luoluna.sweven.ai.data.db.ProviderEntity
 import cn.luoluna.sweven.ai.ui.common.ModalityTag
+import cn.luoluna.sweven.ai.ui.common.ReorderState
+import cn.luoluna.sweven.ai.ui.common.rememberReorderState
+import cn.luoluna.sweven.ai.ui.common.reorderDragged
+import cn.luoluna.sweven.ai.ui.common.reorderHandle
+import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -46,6 +56,24 @@ fun ProviderListScreen(
         .collectAsStateWithLifecycle(emptyList())
     val models by remember { app.database.modelDao().observeAll() }
         .collectAsStateWithLifecycle(emptyList())
+    val scope = rememberCoroutineScope()
+
+    // 拖拽换位后的本地顺序，落库完成前临时覆盖 Flow 数据
+    var localOrder by remember { mutableStateOf<List<ProviderEntity>?>(null) }
+    val display = localOrder ?: providers
+    val listState = rememberLazyListState()
+    val reorderState = rememberReorderState(listState) { fromKey, toKey ->
+        val from = display.indexOfFirst { it.id == fromKey }
+        val to = display.indexOfFirst { it.id == toKey }
+        if (from < 0 || to < 0 || from == to) return@rememberReorderState
+        val reordered = display.toMutableList().apply { add(to, removeAt(from)) }
+            .mapIndexed { index, p -> p.copy(sortOrder = index) }
+        localOrder = reordered
+        scope.launch {
+            app.database.providerDao().updateAll(reordered)
+            localOrder = null
+        }
+    }
 
     val modelCount = models.groupingBy { it.providerId }.eachCount()
     val enabledCount = models.filter { it.enabled }.groupingBy { it.providerId }.eachCount()
@@ -58,7 +86,7 @@ fun ProviderListScreen(
             }
         },
     ) { padding ->
-        if (providers.isEmpty()) {
+        if (display.isEmpty()) {
             Column(
                 Modifier
                     .fillMaxSize()
@@ -89,13 +117,19 @@ fun ProviderListScreen(
                 Modifier
                     .fillMaxSize()
                     .padding(padding),
+                state = listState,
                 contentPadding = androidx.compose.foundation.layout.PaddingValues(12.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                items(providers, key = { it.id }) { p ->
-                    ProviderCard(p, modelCount[p.id] ?: 0, enabledCount[p.id] ?: 0) {
-                        onOpen(p.id)
-                    }
+                items(display, key = { it.id }) { p ->
+                    ProviderCard(
+                        p = p,
+                        count = modelCount[p.id] ?: 0,
+                        enabled = enabledCount[p.id] ?: 0,
+                        reorderState = reorderState,
+                        modifier = Modifier.animateItem(),
+                        onClick = { onOpen(p.id) },
+                    )
                 }
             }
         }
@@ -108,9 +142,14 @@ private fun ProviderCard(
     p: ProviderEntity,
     count: Int,
     enabled: Int,
+    reorderState: ReorderState,
+    modifier: Modifier = Modifier,
     onClick: () -> Unit,
 ) {
-    Card(onClick = onClick) {
+    Card(
+        onClick = onClick,
+        modifier = modifier.reorderDragged(reorderState, p.id),
+    ) {
         Row(
             Modifier
                 .fillMaxWidth()
@@ -141,6 +180,15 @@ private fun ProviderCard(
                 )
             }
             TestStatusDot(ok = p.lastTestOk, latencyMs = p.lastTestLatencyMs)
+            // 长按拖动排序手柄
+            Icon(
+                Icons.Filled.DragIndicator,
+                contentDescription = "长按拖动排序",
+                tint = MaterialTheme.colorScheme.outlineVariant,
+                modifier = Modifier
+                    .padding(start = 4.dp)
+                    .reorderHandle(reorderState, p.id),
+            )
         }
     }
 }

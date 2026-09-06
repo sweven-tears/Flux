@@ -2,6 +2,7 @@ package cn.luoluna.sweven.ai.ui.provider
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -9,11 +10,11 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.DragIndicator
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -54,10 +55,14 @@ import cn.luoluna.sweven.ai.ui.common.ConfirmDialog
 import cn.luoluna.sweven.ai.ui.common.ModelBadgesRow
 import cn.luoluna.sweven.ai.ui.common.ModalityTag
 import cn.luoluna.sweven.ai.ui.common.MonoFont
+import cn.luoluna.sweven.ai.ui.common.ReorderState
 import cn.luoluna.sweven.ai.ui.common.SectionCard
 import cn.luoluna.sweven.ai.ui.common.TextFieldDialog
 import cn.luoluna.sweven.ai.ui.common.maskKey
 import cn.luoluna.sweven.ai.ui.common.paramsSummary
+import cn.luoluna.sweven.ai.ui.common.rememberReorderState
+import cn.luoluna.sweven.ai.ui.common.reorderDragged
+import cn.luoluna.sweven.ai.ui.common.reorderHandle
 import cn.luoluna.sweven.ai.ui.common.typeLabel
 import kotlinx.coroutines.launch
 
@@ -91,6 +96,8 @@ fun ProviderDetailScreen(id: Long, onBack: () -> Unit) {
     var testResult by remember { mutableStateOf<TestResult?>(null) }
     var testing by remember { mutableStateOf(false) }
 
+    val listState = rememberLazyListState()
+
     val p = provider ?: run {
         Scaffold(topBar = { TopAppBar(title = { Text("厂商详情") }, navigationIcon = { BackButton(onBack) }) }) { _ ->
             Column(Modifier.padding(32.dp)) { Text("加载中…") }
@@ -114,159 +121,186 @@ fun ProviderDetailScreen(id: Long, onBack: () -> Unit) {
             )
         },
     ) { padding ->
-        Column(
+        // 拖拽换位后的本地顺序，落库完成前临时覆盖 Flow 数据
+        var localModelOrder by remember { mutableStateOf<List<ModelEntity>?>(null) }
+        val displayModels = localModelOrder ?: models
+        val reorderState = rememberReorderState(listState) { fromKey, toKey ->
+            val from = displayModels.indexOfFirst { it.id == fromKey }
+            val to = displayModels.indexOfFirst { it.id == toKey }
+            if (from < 0 || to < 0 || from == to) return@rememberReorderState
+            val reordered = displayModels.toMutableList().apply { add(to, removeAt(from)) }
+                .mapIndexed { index, m -> m.copy(sortOrder = index) }
+            localModelOrder = reordered
+            scope.launch {
+                app.database.modelDao().updateAll(reordered)
+                localModelOrder = null
+            }
+        }
+        LazyColumn(
             Modifier
                 .fillMaxWidth()
                 .padding(padding)
-                .padding(horizontal = 12.dp)
-                .verticalScroll(rememberScrollState()),
+                .padding(horizontal = 12.dp),
+            state = listState,
             verticalArrangement = Arrangement.spacedBy(12.dp),
+            contentPadding = PaddingValues(bottom = 24.dp),
         ) {
             // 基本信息
-            SectionCard(title = "基本信息") {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Column(Modifier.weight(1f)) {
-                        Text("Base URL", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        Text(p.baseUrl, style = MaterialTheme.typography.bodyMedium, fontFamily = MonoFont)
+            item(key = "info") {
+                SectionCard(title = "基本信息") {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Column(Modifier.weight(1f)) {
+                            Text("Base URL", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Text(p.baseUrl, style = MaterialTheme.typography.bodyMedium, fontFamily = MonoFont)
+                        }
+                        IconButton(onClick = { showBaseEdit = true }) { Icon(Icons.Filled.Edit, contentDescription = "修改 Base URL") }
                     }
-                    IconButton(onClick = { showBaseEdit = true }) { Icon(Icons.Filled.Edit, contentDescription = "修改 Base URL") }
-                }
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Column(Modifier.weight(1f)) {
-                        Text("备注", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        Text(
-                            p.remark?.takeIf { it.isNotBlank() } ?: "未填写",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = if (p.remark?.isNotBlank() == true) MaterialTheme.colorScheme.onSurface
-                            else MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Column(Modifier.weight(1f)) {
+                            Text("备注", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Text(
+                                p.remark?.takeIf { it.isNotBlank() } ?: "未填写",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = if (p.remark?.isNotBlank() == true) MaterialTheme.colorScheme.onSurface
+                                else MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                        IconButton(onClick = { showRemarkEdit = true }) { Icon(Icons.Filled.Edit, contentDescription = "修改备注") }
                     }
-                    IconButton(onClick = { showRemarkEdit = true }) { Icon(Icons.Filled.Edit, contentDescription = "修改备注") }
-                }
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    testResult?.let { r ->
-                        Text(
-                            (if (r.ok) "✓ " else "✗ ") + r.message,
-                            color = if (r.ok) Color(0xFF16A34A) else MaterialTheme.colorScheme.error,
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        testResult?.let { r ->
+                            Text(
+                                (if (r.ok) "✓ " else "✗ ") + r.message,
+                                color = if (r.ok) Color(0xFF16A34A) else MaterialTheme.colorScheme.error,
+                                style = MaterialTheme.typography.bodySmall,
+                                modifier = Modifier.weight(1f),
+                            )
+                        } ?: Text(
+                            p.lastTestMessage ?: "尚未测试连接",
                             style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
                             modifier = Modifier.weight(1f),
                         )
-                    } ?: Text(
-                        p.lastTestMessage ?: "尚未测试连接",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.weight(1f),
-                    )
-                    TextButton(
-                        onClick = {
-                            testing = true
-                            scope.launch {
-                                val key = app.modelRouter.activeKey(p)
-                                val r = app.providerClient.testConnection(p.baseUrl, key?.key)
-                                testResult = r
-                                testing = false
-                                app.database.providerDao().updateTestResult(
-                                    p.id, r.ok, r.latencyMs, r.message, System.currentTimeMillis()
-                                )
-                            }
-                        },
-                        enabled = !testing,
-                    ) { Text(if (testing) "测试中…" else "测试连接") }
+                        TextButton(
+                            onClick = {
+                                testing = true
+                                scope.launch {
+                                    val key = app.modelRouter.activeKey(p)
+                                    val r = app.providerClient.testConnection(p.baseUrl, key?.key)
+                                    testResult = r
+                                    testing = false
+                                    app.database.providerDao().updateTestResult(
+                                        p.id, r.ok, r.latencyMs, r.message, System.currentTimeMillis()
+                                    )
+                                }
+                            },
+                            enabled = !testing,
+                        ) { Text(if (testing) "测试中…" else "测试连接") }
+                    }
                 }
             }
 
             // API Keys
-            SectionCard(
-                title = "API Keys（${keys.size}）",
-                actions = {
-                    TextButton(onClick = { showAddKey = true }) { Text("添加 Key") }
-                },
-            ) {
-                if (keys.isEmpty()) {
-                    Text(
-                        "尚未配置 API Key",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-                keys.forEachIndexed { index, k ->
-                    if (index > 0) HorizontalDivider(Modifier.padding(vertical = 4.dp))
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        RadioButton(
-                            selected = k.id == p.activeKeyId || (p.activeKeyId == null && index == 0),
-                            onClick = {
-                                scope.launch { app.database.providerDao().setActiveKey(p.id, k.id) }
-                            },
+            item(key = "keys") {
+                SectionCard(
+                    title = "API Keys（${keys.size}）",
+                    actions = {
+                        TextButton(onClick = { showAddKey = true }) { Text("添加 Key") }
+                    },
+                ) {
+                    if (keys.isEmpty()) {
+                        Text(
+                            "尚未配置 API Key",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
-                        Column(Modifier.weight(1f)) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Text(k.alias, style = MaterialTheme.typography.bodyMedium)
-                                if (k.id == p.activeKeyId || (p.activeKeyId == null && index == 0)) {
-                                    Text(
-                                        "  当前使用",
-                                        style = MaterialTheme.typography.labelSmall,
-                                        color = MaterialTheme.colorScheme.primary,
-                                    )
-                                }
-                            }
-                            Text(
-                                maskKey(k.key),
-                                style = MaterialTheme.typography.bodySmall,
-                                fontFamily = MonoFont,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    }
+                    keys.forEachIndexed { index, k ->
+                        if (index > 0) HorizontalDivider(Modifier.padding(vertical = 4.dp))
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            RadioButton(
+                                selected = k.id == p.activeKeyId || (p.activeKeyId == null && index == 0),
+                                onClick = {
+                                    scope.launch { app.database.providerDao().setActiveKey(p.id, k.id) }
+                                },
                             )
-                        }
-                        IconButton(onClick = { deleteKeyTarget = k }) {
-                            Icon(Icons.Filled.Delete, contentDescription = "删除 Key", tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Column(Modifier.weight(1f)) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Text(k.alias, style = MaterialTheme.typography.bodyMedium)
+                                    if (k.id == p.activeKeyId || (p.activeKeyId == null && index == 0)) {
+                                        Text(
+                                            "  当前使用",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.primary,
+                                        )
+                                    }
+                                }
+                                Text(
+                                    maskKey(k.key),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    fontFamily = MonoFont,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                            IconButton(onClick = { deleteKeyTarget = k }) {
+                                Icon(Icons.Filled.Delete, contentDescription = "删除 Key", tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
                         }
                     }
                 }
             }
 
-            // 模型
-            SectionCard(
-                title = "模型（${models.size}）",
-                actions = {
-                    TextButton(
-                        onClick = {
-                            fetching = true
-                            fetchError = null
-                            scope.launch {
-                                val key = app.modelRouter.activeKey(p)
-                                app.providerClient.listModels(p.baseUrl, key?.key)
-                                    .onSuccess { fetchedModels = it }
-                                    .onFailure { fetchError = it.message ?: "获取失败" }
-                                fetching = false
-                            }
-                        },
-                        enabled = !fetching,
-                    ) { Text(if (fetching) "获取中…" else "获取列表") }
-                    TextButton(onClick = { showNewModel = true }) { Text("手动添加") }
-                },
-            ) {
-                fetchError?.let {
-                    Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
-                    Spacer(Modifier.height(4.dp))
+            // 模型（模型行为独立条目，支持长按拖动排序）
+            item(key = "models_header") {
+                Column {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            "模型（${models.size}）",
+                            style = MaterialTheme.typography.titleMedium,
+                            modifier = Modifier.weight(1f),
+                        )
+                        TextButton(
+                            onClick = {
+                                fetching = true
+                                fetchError = null
+                                scope.launch {
+                                    val key = app.modelRouter.activeKey(p)
+                                    app.providerClient.listModels(p.baseUrl, key?.key)
+                                        .onSuccess { fetchedModels = it }
+                                        .onFailure { fetchError = it.message ?: "获取失败" }
+                                    fetching = false
+                                }
+                            },
+                            enabled = !fetching,
+                        ) { Text(if (fetching) "获取中…" else "获取列表") }
+                        TextButton(onClick = { showNewModel = true }) { Text("手动添加") }
+                    }
+                    fetchError?.let {
+                        Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+                    }
                 }
-                if (models.isEmpty()) {
+            }
+            if (displayModels.isEmpty()) {
+                item(key = "models_empty") {
                     Text(
                         "尚未添加模型：可通过「获取列表」拉取 /models，或手动添加",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
-                models.forEach { m ->
-                    ModelRow(
-                        model = m,
-                        onToggle = { nv ->
-                            scope.launch { app.database.modelDao().update(m.copy(enabled = nv)) }
-                        },
-                        onEdit = { editModel = m },
-                        onDelete = { deleteModelTarget = m },
-                    )
-                }
             }
-            Spacer(Modifier.height(24.dp))
+            items(displayModels, key = { it.id }) { m ->
+                ModelRowCard(
+                    model = m,
+                    reorderState = reorderState,
+                    modifier = Modifier.animateItem(),
+                    onToggle = { nv ->
+                        scope.launch { app.database.modelDao().update(m.copy(enabled = nv)) }
+                    },
+                    onEdit = { editModel = m },
+                    onDelete = { deleteModelTarget = m },
+                )
+            }
         }
     }
 
@@ -387,7 +421,8 @@ fun ProviderDetailScreen(id: Long, onBack: () -> Unit) {
             onDismiss = { showNewModel = false },
             onSave = { m ->
                 scope.launch {
-                    app.database.modelDao().insert(m)
+                    val next = (app.database.modelDao().forProvider(p.id).maxOfOrNull { it.sortOrder } ?: -1) + 1
+                    app.database.modelDao().insert(m.copy(sortOrder = next))
                     showNewModel = false
                 }
             },
@@ -414,8 +449,9 @@ fun ProviderDetailScreen(id: Long, onBack: () -> Unit) {
             onDismiss = { fetchedModels = null },
             onConfirm = { selected ->
                 scope.launch {
+                    val base = (app.database.modelDao().forProvider(p.id).maxOfOrNull { it.sortOrder } ?: -1) + 1
                     app.database.modelDao().insertAll(
-                        selected.map { rm ->
+                        selected.mapIndexed { i, rm ->
                             ModelEntity(
                                 providerId = p.id,
                                 name = rm.id,
@@ -429,6 +465,7 @@ fun ProviderDetailScreen(id: Long, onBack: () -> Unit) {
                                 outputVideo = rm.outputVideo,
                                 capabilityTools = rm.tools,
                                 capabilityReasoning = rm.reasoning,
+                                sortOrder = base + i,
                             )
                         }
                     )
@@ -447,39 +484,52 @@ private fun BackButton(onBack: () -> Unit) {
 }
 
 @Composable
-private fun ModelRow(
+private fun ModelRowCard(
     model: ModelEntity,
+    reorderState: ReorderState,
+    modifier: Modifier = Modifier,
     onToggle: (Boolean) -> Unit,
     onEdit: () -> Unit,
     onDelete: () -> Unit,
 ) {
-    Row(
-        verticalAlignment = Alignment.CenterVertically,
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(vertical = 4.dp),
+    Card(
+        modifier = modifier.reorderDragged(reorderState, model.id),
     ) {
-        Column(Modifier.weight(1f)) {
-            Text(
-                model.alias?.takeIf { it.isNotBlank() }?.let { alias -> "$alias（${model.name}）" }
-                    ?: model.name + if (!model.enabled) "（已停用）" else "",
-                style = MaterialTheme.typography.bodyMedium,
-            )
-            ModelBadgesRow(model, Modifier.padding(top = 2.dp))
-            paramsSummary(model)?.let {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 12.dp, vertical = 8.dp),
+        ) {
+            Column(Modifier.weight(1f)) {
                 Text(
-                    it,
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    model.alias?.takeIf { it.isNotBlank() }?.let { alias -> "$alias（${model.name}）" }
+                        ?: model.name + if (!model.enabled) "（已停用）" else "",
+                    style = MaterialTheme.typography.bodyMedium,
                 )
+                ModelBadgesRow(model, Modifier.padding(top = 2.dp))
+                paramsSummary(model)?.let {
+                    Text(
+                        it,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
             }
-        }
-        Switch(checked = model.enabled, onCheckedChange = onToggle)
-        IconButton(onClick = onEdit) {
-            Icon(Icons.Filled.Edit, contentDescription = "编辑模型", tint = MaterialTheme.colorScheme.onSurfaceVariant)
-        }
-        IconButton(onClick = onDelete) {
-            Icon(Icons.Filled.Delete, contentDescription = "删除模型", tint = MaterialTheme.colorScheme.onSurfaceVariant)
+            Switch(checked = model.enabled, onCheckedChange = onToggle)
+            IconButton(onClick = onEdit) {
+                Icon(Icons.Filled.Edit, contentDescription = "编辑模型", tint = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            IconButton(onClick = onDelete) {
+                Icon(Icons.Filled.Delete, contentDescription = "删除模型", tint = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            // 长按拖动排序手柄
+            Icon(
+                Icons.Filled.DragIndicator,
+                contentDescription = "长按拖动排序",
+                tint = MaterialTheme.colorScheme.outlineVariant,
+                modifier = Modifier.reorderHandle(reorderState, model.id),
+            )
         }
     }
 }

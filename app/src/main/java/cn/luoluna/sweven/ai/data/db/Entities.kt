@@ -19,6 +19,8 @@ data class ProviderEntity(
     val lastTestAt: Long? = null,
     /** 用户备注（计费方式、注意事项等），仅本地展示 */
     val remark: String? = null,
+    /** 手动拖拽排序权重，小者在前；同值按 createdAt */
+    val sortOrder: Int = 0,
     val createdAt: Long = System.currentTimeMillis(),
 )
 
@@ -93,6 +95,33 @@ data class ModelEntity(
     val presencePenalty: Double? = null,
     val frequencyPenalty: Double? = null,
     val remark: String? = null,
+    /** 手动拖拽排序权重，小者在前；同值按 name */
+    val sortOrder: Int = 0,
+)
+
+/**
+ * 智能路由（smartAi 聚合模型）的候选模型条目，按 [sortOrder] 升序回退。
+ * 以 providerId + modelName 引用模型（与会话一致），重新拉取模型列表不丢配置。
+ */
+@Entity(
+    tableName = "smart_routes",
+    foreignKeys = [
+        ForeignKey(
+            entity = ProviderEntity::class,
+            parentColumns = ["id"],
+            childColumns = ["providerId"],
+            onDelete = ForeignKey.CASCADE,
+        )
+    ],
+    indices = [Index("providerId")],
+)
+data class SmartRouteEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val providerId: Long,
+    val modelName: String,
+    val sortOrder: Int = 0,
+    /** false = 从 smartAi 回退链中排除（模型本身不受影响） */
+    val enabled: Boolean = true,
 )
 
 @Entity(tableName = "conversations")

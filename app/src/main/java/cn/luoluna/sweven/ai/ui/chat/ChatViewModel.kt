@@ -88,9 +88,17 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
 
     val pickerModels: StateFlow<List<PickerModel>> =
         combine(providerDao.observeAll(), modelDao.observeEnabled()) { providers, models ->
+            val providerRank = providers.withIndex().associate { it.value.id to it.index }
             models.mapNotNull { m ->
                 providers.firstOrNull { it.id == m.providerId }?.let { PickerModel(it, m) }
-            }.sortedWith(compareBy({ it.provider.alias.lowercase() }, { it.model.name.lowercase() }))
+            }.sortedWith(
+                // 厂商按用户拖拽顺序分组，厂商内按模型拖拽顺序
+                compareBy(
+                    { providerRank[it.provider.id] ?: Int.MAX_VALUE },
+                    { it.model.sortOrder },
+                    { it.model.name.lowercase() },
+                )
+            )
         }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     val drawerState: StateFlow<DrawerState> =

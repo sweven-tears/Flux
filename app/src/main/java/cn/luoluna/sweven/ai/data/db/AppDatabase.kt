@@ -12,19 +12,21 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         ProviderEntity::class,
         ApiKeyEntity::class,
         ModelEntity::class,
+        SmartRouteEntity::class,
         ConversationEntity::class,
         MessageEntity::class,
         AuthDeviceEntity::class,
         FolderEntity::class,
         PresetEntity::class,
     ],
-    version = 6,
+    version = 7,
     exportSchema = false,
 )
 abstract class AppDatabase : RoomDatabase() {
     abstract fun providerDao(): ProviderDao
     abstract fun apiKeyDao(): ApiKeyDao
     abstract fun modelDao(): ModelDao
+    abstract fun smartRouteDao(): SmartRouteDao
     abstract fun conversationDao(): ConversationDao
     abstract fun messageDao(): MessageDao
     abstract fun authDeviceDao(): AuthDeviceDao
@@ -89,9 +91,37 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        /** v6 → v7：厂商/模型表增加排序字段；新增智能路由候选表 */
+        private val MIGRATION_6_7 = object : Migration(6, 7) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE `providers` ADD COLUMN `sortOrder` INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("ALTER TABLE `models` ADD COLUMN `sortOrder` INTEGER NOT NULL DEFAULT 0")
+                // 按迁移前的展示顺序初始化排序权重：厂商按创建时间，模型按同厂商内名称
+                db.execSQL(
+                    "UPDATE `providers` SET `sortOrder` = (" +
+                        "SELECT COUNT(*) FROM `providers` p2 WHERE p2.`createdAt` < `providers`.`createdAt`" +
+                        ")"
+                )
+                db.execSQL(
+                    "UPDATE `models` SET `sortOrder` = (" +
+                        "SELECT COUNT(*) FROM `models` m2 WHERE m2.`providerId` = `models`.`providerId` " +
+                        "AND (m2.`name` < `models`.`name` COLLATE NOCASE " +
+                        "OR (m2.`name` = `models`.`name` AND m2.`id` < `models`.`id`))" +
+                        ")"
+                )
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `smart_routes` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, " +
+                        "`providerId` INTEGER NOT NULL, `modelName` TEXT NOT NULL, " +
+                        "`sortOrder` INTEGER NOT NULL DEFAULT 0, `enabled` INTEGER NOT NULL DEFAULT 1, " +
+                        "FOREIGN KEY(`providerId`) REFERENCES `providers`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE )"
+                )
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_smart_routes_providerId` ON `smart_routes` (`providerId`)")
+            }
+        }
+
         fun build(context: Context): AppDatabase =
             Room.databaseBuilder(context, AppDatabase::class.java, "phone_router.db")
-                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6)
+                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7)
                 .fallbackToDestructiveMigration()
                 .build()
     }

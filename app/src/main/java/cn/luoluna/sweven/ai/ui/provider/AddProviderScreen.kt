@@ -238,6 +238,7 @@ fun AddProviderScreen(
                                 return@launch
                             }
                             val isPreset = mode == 0 && selectedPresetId != null
+                            val nextSort = app.database.providerDao().all().maxOfOrNull { it.sortOrder } ?: -1
                             val providerId = app.database.providerDao().insert(
                                 ProviderEntity(
                                     alias = finalAlias,
@@ -245,6 +246,7 @@ fun AddProviderScreen(
                                     remark = remark.trim().ifBlank { null },
                                     isPreset = isPreset,
                                     presetId = if (isPreset) selectedPresetId else null,
+                                    sortOrder = nextSort + 1,
                                 )
                             )
                             if (apiKey.isNotBlank()) {

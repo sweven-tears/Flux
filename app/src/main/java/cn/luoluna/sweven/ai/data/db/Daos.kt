@@ -9,10 +9,10 @@ import kotlinx.coroutines.flow.Flow
 
 @Dao
 interface ProviderDao {
-    @Query("SELECT * FROM providers ORDER BY createdAt ASC")
+    @Query("SELECT * FROM providers ORDER BY sortOrder ASC, createdAt ASC")
     fun observeAll(): Flow<List<ProviderEntity>>
 
-    @Query("SELECT * FROM providers ORDER BY createdAt ASC")
+    @Query("SELECT * FROM providers ORDER BY sortOrder ASC, createdAt ASC")
     suspend fun all(): List<ProviderEntity>
 
     @Query("SELECT * FROM providers WHERE id = :id")
@@ -32,6 +32,9 @@ interface ProviderDao {
 
     @Update
     suspend fun update(p: ProviderEntity)
+
+    @Update
+    suspend fun updateAll(list: List<ProviderEntity>)
 
     @Delete
     suspend fun delete(p: ProviderEntity)
@@ -66,16 +69,16 @@ interface ApiKeyDao {
 
 @Dao
 interface ModelDao {
-    @Query("SELECT * FROM models ORDER BY name COLLATE NOCASE ASC")
+    @Query("SELECT * FROM models ORDER BY sortOrder ASC, name COLLATE NOCASE ASC")
     fun observeAll(): Flow<List<ModelEntity>>
 
-    @Query("SELECT * FROM models WHERE providerId = :providerId ORDER BY name COLLATE NOCASE ASC")
+    @Query("SELECT * FROM models WHERE providerId = :providerId ORDER BY sortOrder ASC, name COLLATE NOCASE ASC")
     fun observeForProvider(providerId: Long): Flow<List<ModelEntity>>
 
-    @Query("SELECT * FROM models WHERE enabled = 1 ORDER BY name COLLATE NOCASE ASC")
+    @Query("SELECT * FROM models WHERE enabled = 1 ORDER BY sortOrder ASC, name COLLATE NOCASE ASC")
     fun observeEnabled(): Flow<List<ModelEntity>>
 
-    @Query("SELECT * FROM models WHERE providerId = :providerId ORDER BY name COLLATE NOCASE ASC")
+    @Query("SELECT * FROM models WHERE providerId = :providerId ORDER BY sortOrder ASC, name COLLATE NOCASE ASC")
     suspend fun forProvider(providerId: Long): List<ModelEntity>
 
     @Query("SELECT * FROM models WHERE providerId = :providerId AND name = :name LIMIT 1")
@@ -90,8 +93,41 @@ interface ModelDao {
     @Update
     suspend fun update(m: ModelEntity)
 
+    @Update
+    suspend fun updateAll(list: List<ModelEntity>)
+
     @Delete
     suspend fun delete(m: ModelEntity)
+}
+
+@Dao
+interface SmartRouteDao {
+    @Query("SELECT * FROM smart_routes ORDER BY sortOrder ASC, id ASC")
+    fun observeAll(): Flow<List<SmartRouteEntity>>
+
+    @Query("SELECT * FROM smart_routes ORDER BY sortOrder ASC, id ASC")
+    suspend fun all(): List<SmartRouteEntity>
+
+    @Query("SELECT * FROM smart_routes WHERE providerId = :providerId AND modelName = :modelName LIMIT 1")
+    suspend fun find(providerId: Long, modelName: String): SmartRouteEntity?
+
+    @Query("SELECT MAX(sortOrder) FROM smart_routes")
+    suspend fun maxSortOrder(): Int?
+
+    @Insert
+    suspend fun insert(e: SmartRouteEntity): Long
+
+    @Insert
+    suspend fun insertAll(list: List<SmartRouteEntity>)
+
+    @Update
+    suspend fun update(e: SmartRouteEntity)
+
+    @Update
+    suspend fun updateAll(list: List<SmartRouteEntity>)
+
+    @Delete
+    suspend fun delete(e: SmartRouteEntity)
 }
 
 @Dao

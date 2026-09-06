@@ -6,6 +6,7 @@ import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.jsonObject
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -170,4 +171,31 @@ class ProviderClient {
             emit(ChatEvent.Done)
         }
     }.flowOn(Dispatchers.IO)
+
+    /** 非流式聊天：stream=false 请求并返回完整响应 JSON（含 tool_calls 等原始字段） */
+    suspend fun chatOnce(
+        baseUrl: String,
+        apiKey: String?,
+        body: JsonObject,
+        extraHeaders: Map<String, String> = emptyMap(),
+    ): Result<JsonObject> = withContext(Dispatchers.IO) {
+        runCatching {
+            val jsonBody = body.toString()
+                .toRequestBody("application/json; charset=utf-8".toMediaType())
+            val request = Request.Builder()
+                .url("${baseUrl.trimEnd('/')}/chat/completions")
+                .header("Authorization", "Bearer ${apiKey.orEmpty()}")
+                .header("Accept", "application/json")
+                .apply { extraHeaders.forEach { (k, v) -> header(k, v) } }
+                .post(jsonBody)
+                .build()
+            http.newCall(request).execute().use { resp ->
+                val respBody = resp.body?.string().orEmpty()
+                if (!resp.isSuccessful) {
+                    throw HttpApiException(resp.code, respBody, parseErrorMessage(resp.code, respBody))
+                }
+                ChatJson.json.parseToJsonElement(respBody).jsonObject
+            }
+        }
+    }
 }

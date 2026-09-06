@@ -42,6 +42,13 @@ fun JsonObject.intAt(vararg keys: String): Int? {
 
 class ApiException(message: String) : Exception(message)
 
+/** 携带原始响应体的 HTTP 错误，供测试日志等场景展示完整内容 */
+class HttpApiException(
+    val httpCode: Int,
+    val rawBody: String,
+    message: String,
+) : Exception(message)
+
 /** 模型输入/输出类型 */
 object Modality {
     const val TEXT = "text"
@@ -489,4 +496,27 @@ fun applyBuiltinTools(
         )
     }
     return merged
+}
+
+/** 非流式响应中的工具调用项 */
+data class ToolCall(val name: String, val arguments: String)
+
+private fun JsonObject.firstChoiceMessage(): JsonObject? =
+    ((this["choices"] as? JsonArray)?.firstOrNull() as? JsonObject)
+        ?.get("message") as? JsonObject
+
+/** 从非流式响应提取 choices[0].message.content */
+fun extractMessageContent(response: JsonObject): String? =
+    (response.firstChoiceMessage()?.get("content") as? JsonPrimitive)
+        ?.takeIf { it !is JsonNull }?.content
+
+/** 从非流式响应提取 choices[0].message.tool_calls（模型不支持工具调用时返回空列表） */
+fun extractToolCalls(response: JsonObject): List<ToolCall> {
+    val message = response.firstChoiceMessage() ?: return emptyList()
+    val calls = message["tool_calls"] as? JsonArray ?: return emptyList()
+    return calls.mapNotNull { el ->
+        val fn = (el as? JsonObject)?.get("function") as? JsonObject ?: return@mapNotNull null
+        val name = (fn["name"] as? JsonPrimitive)?.content ?: return@mapNotNull null
+        ToolCall(name, (fn["arguments"] as? JsonPrimitive)?.content ?: "{}")
+    }
 }

@@ -16,6 +16,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.DragIndicator
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.Science
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -88,6 +89,7 @@ fun ProviderDetailScreen(id: Long, onBack: () -> Unit) {
     var editModel by remember { mutableStateOf<ModelEntity?>(null) }
     var showNewModel by remember { mutableStateOf(false) }
     var showDeleteProvider by remember { mutableStateOf(false) }
+    var showModelTest by remember { mutableStateOf(false) }
 
     // 获取模型列表
     var fetching by remember { mutableStateOf(false) }
@@ -111,6 +113,9 @@ fun ProviderDetailScreen(id: Long, onBack: () -> Unit) {
                 title = { Text(p.alias) },
                 navigationIcon = { BackButton(onBack) },
                 actions = {
+                    IconButton(onClick = { showModelTest = true }) {
+                        Icon(Icons.Filled.Science, contentDescription = "模型测试")
+                    }
                     IconButton(onClick = { showAliasEdit = true }) {
                         Icon(Icons.Filled.Edit, contentDescription = "修改厂商名称")
                     }
@@ -305,6 +310,13 @@ fun ProviderDetailScreen(id: Long, onBack: () -> Unit) {
     }
 
     // ---- 对话框 ----
+    if (showModelTest) {
+        ModelTestDialog(
+            provider = p,
+            models = models,
+            onDismiss = { showModelTest = false },
+        )
+    }
     if (showBaseEdit) {
         TextFieldDialog(
             title = "修改 Base URL",

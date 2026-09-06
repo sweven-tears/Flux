@@ -22,6 +22,7 @@ fun TextFieldDialog(
     onConfirm: (String) -> Unit,
     /** 可选校验：返回错误文案则显示在输入框下方并阻止确认 */
     onValidate: (suspend (String) -> String?)? = null,
+    singleLine: Boolean = true,
 ) {
     var value by remember { mutableStateOf(initial) }
     var error by remember { mutableStateOf<String?>(null) }
@@ -55,7 +56,8 @@ fun TextFieldDialog(
                     value = it
                     error = null
                 },
-                singleLine = true,
+                singleLine = singleLine,
+                minLines = if (singleLine) 1 else 3,
                 isError = error != null,
                 supportingText = error?.let { e -> { Text(e) } },
                 modifier = Modifier.fillMaxWidth(),

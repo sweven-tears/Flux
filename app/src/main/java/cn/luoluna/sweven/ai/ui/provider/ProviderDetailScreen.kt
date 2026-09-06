@@ -76,6 +76,7 @@ fun ProviderDetailScreen(id: Long, onBack: () -> Unit) {
 
     var showBaseEdit by remember { mutableStateOf(false) }
     var showAliasEdit by remember { mutableStateOf(false) }
+    var showRemarkEdit by remember { mutableStateOf(false) }
     var showAddKey by remember { mutableStateOf(false) }
     var deleteKeyTarget by remember { mutableStateOf<ApiKeyEntity?>(null) }
     var deleteModelTarget by remember { mutableStateOf<ModelEntity?>(null) }
@@ -129,6 +130,18 @@ fun ProviderDetailScreen(id: Long, onBack: () -> Unit) {
                         Text(p.baseUrl, style = MaterialTheme.typography.bodyMedium, fontFamily = MonoFont)
                     }
                     IconButton(onClick = { showBaseEdit = true }) { Icon(Icons.Filled.Edit, contentDescription = "修改 Base URL") }
+                }
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text("备注", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Text(
+                            p.remark?.takeIf { it.isNotBlank() } ?: "未填写",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = if (p.remark?.isNotBlank() == true) MaterialTheme.colorScheme.onSurface
+                            else MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    IconButton(onClick = { showRemarkEdit = true }) { Icon(Icons.Filled.Edit, contentDescription = "修改备注") }
                 }
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     testResult?.let { r ->
@@ -289,6 +302,20 @@ fun ProviderDetailScreen(id: Long, onBack: () -> Unit) {
                 scope.launch {
                     app.database.providerDao().update(p.copy(alias = v.trim()))
                     showAliasEdit = false
+                }
+            },
+        )
+    }
+    if (showRemarkEdit) {
+        TextFieldDialog(
+            title = "修改备注",
+            initial = p.remark.orEmpty(),
+            singleLine = false,
+            onDismiss = { showRemarkEdit = false },
+            onConfirm = { v ->
+                scope.launch {
+                    app.database.providerDao().update(p.copy(remark = v.trim().ifBlank { null }))
+                    showRemarkEdit = false
                 }
             },
         )

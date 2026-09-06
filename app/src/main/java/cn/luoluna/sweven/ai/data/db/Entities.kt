@@ -17,6 +17,8 @@ data class ProviderEntity(
     val lastTestLatencyMs: Long? = null,
     val lastTestMessage: String? = null,
     val lastTestAt: Long? = null,
+    /** 用户备注（计费方式、注意事项等），仅本地展示 */
+    val remark: String? = null,
     val createdAt: Long = System.currentTimeMillis(),
 )
 

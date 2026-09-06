@@ -72,6 +72,7 @@ fun AddProviderScreen(
 
     var alias by rememberSaveable { mutableStateOf("") }
     var baseUrl by rememberSaveable { mutableStateOf("") }
+    var remark by rememberSaveable { mutableStateOf("") }
     var keyAlias by rememberSaveable { mutableStateOf("默认 Key") }
     var apiKey by rememberSaveable { mutableStateOf("") }
     var keyVisible by rememberSaveable { mutableStateOf(false) }
@@ -167,6 +168,14 @@ fun AddProviderScreen(
                 modifier = Modifier.fillMaxWidth(),
             )
             OutlinedTextField(
+                value = remark,
+                onValueChange = { remark = it },
+                label = { Text("备注") },
+                supportingText = { Text("可选，记录计费方式、额度、注意事项等") },
+                minLines = 2,
+                modifier = Modifier.fillMaxWidth(),
+            )
+            OutlinedTextField(
                 value = keyAlias,
                 onValueChange = { keyAlias = it },
                 label = { Text("API Key 别名") },
@@ -233,6 +242,7 @@ fun AddProviderScreen(
                                 ProviderEntity(
                                     alias = finalAlias,
                                     baseUrl = finalUrl,
+                                    remark = remark.trim().ifBlank { null },
                                     isPreset = isPreset,
                                     presetId = if (isPreset) selectedPresetId else null,
                                 )

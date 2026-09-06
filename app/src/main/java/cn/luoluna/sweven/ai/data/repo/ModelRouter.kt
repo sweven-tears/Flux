@@ -31,6 +31,13 @@ data class ModelRoute(
     val displayKey: String get() = "${provider.alias}/${model?.name ?: ""}"
 }
 
+/** 智能路由聚合模型 smartAi：会话/设置中以哨兵 providerId 标识 */
+object SmartAi {
+    const val PROVIDER_ID = -1L
+    const val MODEL_NAME = "smartAi"
+    val pair: Pair<Long, String> get() = PROVIDER_ID to MODEL_NAME
+}
+
 class ModelRouter(
     private val providerDao: ProviderDao,
     private val apiKeyDao: ApiKeyDao,

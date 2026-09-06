@@ -18,6 +18,11 @@ import cn.luoluna.sweven.ai.data.db.PresetEntity
 import cn.luoluna.sweven.ai.data.db.ProviderDao
 import cn.luoluna.sweven.ai.data.db.ProviderEntity
 import cn.luoluna.sweven.ai.data.db.Role
+import cn.luoluna.sweven.ai.data.db.SmartRouteDao
+import cn.luoluna.sweven.ai.data.repo.SmartAi
+import cn.luoluna.sweven.ai.data.repo.SmartCandidate
+import cn.luoluna.sweven.ai.data.repo.SmartEvent
+import cn.luoluna.sweven.ai.data.repo.SmartRouteExecutor
 import cn.luoluna.sweven.ai.net.AdvancedParams
 import cn.luoluna.sweven.ai.net.ChatEvent
 import cn.luoluna.sweven.ai.net.ProviderClient
@@ -36,8 +41,10 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import kotlinx.serialization.json.JsonObject
 
 /** 模型选择器条目：厂商 + 模型 */
 data class PickerModel(val provider: ProviderEntity, val model: ModelEntity) {
@@ -46,6 +53,12 @@ data class PickerModel(val provider: ProviderEntity, val model: ModelEntity) {
     /** 展示名（优先别名） */
     val displayName: String get() = model.alias?.takeIf { it.isNotBlank() } ?: model.name
     val displayId: String get() = "${provider.alias}/$displayName"
+}
+
+/** 当前生效的聊天目标：单个模型或 smartAi 聚合 */
+sealed interface ChatTarget {
+    data class Single(val picker: PickerModel) : ChatTarget
+    data object SmartAi : ChatTarget
 }
 
 /** 抽屉展示状态：文件夹 + 各文件夹的预设对话与会话 */
@@ -64,9 +77,11 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
     private val modelDao: ModelDao = ctx.database.modelDao()
     private val folderDao: FolderDao = ctx.database.folderDao()
     private val presetDao: PresetDao = ctx.database.presetDao()
+    private val smartRouteDao: SmartRouteDao = ctx.database.smartRouteDao()
     private val client: ProviderClient = ctx.providerClient
     private val router = ctx.modelRouter
     private val settings = ctx.settings
+    private val smartExecutor = SmartRouteExecutor(client)
 
     private val currentId = MutableStateFlow<Long?>(null)
 
@@ -126,15 +141,28 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
             conv?.thinkingDepth ?: pending
         }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
 
-    /** 当前生效模型：优先会话自己选的，否则回退到上次使用的模型 */
-    val currentModel: StateFlow<PickerModel?> =
-        combine(current, pickerModels, lastModel) { conv, models, last ->
-            val fromConv = conv?.let { c ->
-                models.firstOrNull { it.provider.id == c.providerId && it.model.name == c.modelName }
+    /** 智能路由启用的候选数量（>0 时聊天选择器显示 smartAi） */
+    private val smartEnabledCount: StateFlow<Int> =
+        smartRouteDao.observeAll().map { routes -> routes.count { it.enabled } }
+            .stateIn(viewModelScope, SharingStarted.Eagerly, 0)
+
+    /** 聊天模型选择器是否显示 smartAi 条目 */
+    val smartAiAvailable: StateFlow<Boolean> =
+        smartEnabledCount.map { it > 0 }
+            .stateIn(viewModelScope, SharingStarted.Eagerly, false)
+
+    /** 当前生效目标：优先会话自己选的，否则回退到上次使用的目标 */
+    val currentTarget: StateFlow<ChatTarget?> =
+        combine(current, pickerModels, lastModel, smartEnabledCount) { conv, models, last, smartCount ->
+            fun resolve(providerId: Long, modelName: String?): ChatTarget? {
+                if (providerId == SmartAi.PROVIDER_ID) {
+                    return if (smartCount > 0) ChatTarget.SmartAi else null
+                }
+                return models.firstOrNull { it.provider.id == providerId && it.model.name == modelName }
+                    ?.let { ChatTarget.Single(it) }
             }
-            fromConv ?: last?.let { (pid, name) ->
-                models.firstOrNull { it.provider.id == pid && it.model.name == name }
-            }
+            conv?.providerId?.let { pid -> resolve(pid, conv.modelName) }
+                ?: last?.let { (pid, name) -> resolve(pid, name) }
         }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
 
     private val _streaming = MutableStateFlow(false)
@@ -210,18 +238,25 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         _error.value = null
     }
 
+    /** 会话持久化的目标标识：单个模型为真实厂商 id；smartAi 为哨兵值 */
+    private fun ChatTarget.identifiers(): Pair<Long, String> = when (this) {
+        is ChatTarget.Single -> picker.provider.id to picker.model.name
+        ChatTarget.SmartAi -> SmartAi.pair
+    }
+
     fun send(text: String, imageUris: List<Uri>) {
-        val picker = currentModel.value
-        if (picker == null) {
+        val target = currentTarget.value
+        if (target == null) {
             _error.value = "请先选择模型"
             return
         }
         if (text.isBlank() && imageUris.isEmpty()) return
+        val (providerId, modelName) = target.identifiers()
         viewModelScope.launch {
             var convId = currentId.value
             if (convId == null) {
                 convId = conversationDao.insert(
-                    ConversationEntity(providerId = picker.provider.id, modelName = picker.model.name)
+                    ConversationEntity(providerId = providerId, modelName = modelName)
                 )
                 currentId.value = convId
                 _pendingThinkingDepth.value?.let {
@@ -229,8 +264,8 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                     _pendingThinkingDepth.value = null
                 }
             } else if (current.value?.providerId == null) {
-                // 会话没有固定模型时，把实际使用的模型写回会话
-                conversationDao.setModel(convId, picker.provider.id, picker.model.name)
+                // 会话没有固定模型时，把实际使用的目标写回会话
+                conversationDao.setModel(convId, providerId, modelName)
             }
 
             val images = imageUris.mapNotNull { ChatImages.uriToDataUrl(getApplication(), it) }
@@ -248,21 +283,26 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
             }
             conversationDao.touch(convId, System.currentTimeMillis())
 
-            startStreaming(convId, picker)
+            startStreaming(convId, target)
         }
     }
 
-    /** 依据会话内现有消息构建请求体并发起流式请求，完成后将助手消息落库 */
-    private suspend fun startStreaming(convId: Long, picker: PickerModel) {
-        val key = router.activeKey(picker.provider)
-        if (key == null || key.key.isBlank()) {
-            _error.value = "厂商「${picker.provider.alias}」未配置 API Key，请到「厂商」页添加"
-            return
+    /** 按目标发起流式请求：单个模型直连；smartAi 走回退链 */
+    private suspend fun startStreaming(convId: Long, target: ChatTarget) {
+        when (target) {
+            is ChatTarget.Single -> streamSingle(convId, target.picker)
+            ChatTarget.SmartAi -> streamSmart(convId)
         }
+    }
 
-        val history = messageDao.forConversation(convId)
+    /** 构建聊天请求体（单个模型与 smartAi 候选共用） */
+    private suspend fun buildRequestBody(
+        provider: ProviderEntity,
+        model: ModelEntity,
+        conversation: ConversationEntity?,
+        history: List<MessageEntity>,
+    ): JsonObject {
         val chatMessages = history.map { Triple(it.role, it.content, it.images) }
-        val conversation = conversationDao.byId(convId)
         val systemPrompt = conversation?.systemPrompt?.takeIf { it.isNotBlank() }
         val messagesJson = if (systemPrompt != null) {
             buildMessagesJson(listOf(Triple(Role.SYSTEM, systemPrompt, emptyList<String>())) + chatMessages)
@@ -270,82 +310,157 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
             buildMessagesJson(chatMessages)
         }
         var body = buildChatBody(
-            modelName = picker.model.name,
+            modelName = model.name,
             messages = messagesJson,
             stream = true,
-            defaults = advancedParamsOf(picker.model),
+            defaults = advancedParamsOf(model),
         )
-        body = applyThinkingDepth(body, conversation?.thinkingDepth, picker.model.name)
-        body = mergeCustomBody(body, picker.model.customBody)
-        if (picker.provider.presetId == "gemini") {
+        body = applyThinkingDepth(body, conversation?.thinkingDepth, model.name)
+        body = mergeCustomBody(body, model.customBody)
+        if (provider.presetId == "gemini") {
             body = applyBuiltinTools(
                 body,
-                picker.model.builtinGoogleSearch,
-                picker.model.builtinUrlContext,
-                picker.model.builtinImageGen,
+                model.builtinGoogleSearch,
+                model.builtinUrlContext,
+                model.builtinImageGen,
             )
         }
+        return body
+    }
+
+    private suspend fun streamSingle(convId: Long, picker: PickerModel) {
+        val key = router.activeKey(picker.provider)
+        if (key == null || key.key.isBlank()) {
+            _error.value = "厂商「${picker.provider.alias}」未配置 API Key，请到「厂商」页添加"
+            return
+        }
+
+        val conversation = conversationDao.byId(convId)
+        val history = messageDao.forConversation(convId)
+        val body = buildRequestBody(picker.provider, picker.model, conversation, history)
         val extraHeaders = parseCustomHeaders(picker.model.customHeaders)
 
         _error.value = null
         _streaming.value = true
         _streamingText.value = ""
         _streamingReasoning.value = ""
-        val thinkParser = ThinkParser()
-        val explicitReasoning = StringBuilder()
+        val publisher = StreamPublisher()
         sendJob = viewModelScope.launch {
             var failed: String? = null
-            // 增量先攒进缓冲区，最多每隔 STREAM_PUBLISH_INTERVAL_MS 才解析并发布一次，
-            // 避免每个 token 都在主线程做全量重解析 + 触发重组
-            val pending = StringBuilder()
-            var lastPublishAt = 0L
-            fun publish(force: Boolean = false) {
-                val now = System.nanoTime() / 1_000_000L
-                if (!force && now - lastPublishAt < STREAM_PUBLISH_INTERVAL_MS) return
-                lastPublishAt = now
-                if (pending.isNotEmpty()) {
-                    thinkParser.append(pending.toString())
-                    pending.clear()
-                }
-                _streamingText.value = thinkParser.content
-                _streamingReasoning.value =
-                    listOf(explicitReasoning.toString(), thinkParser.reasoning)
-                        .filter { it.isNotBlank() }
-                        .joinToString("\n")
-            }
             client.chatDeltas(picker.provider.baseUrl, key.key, body, extraHeaders).collect { ev ->
                 when (ev) {
-                    is ChatEvent.Delta -> {
-                        pending.append(ev.text)
-                        publish()
-                    }
-                    is ChatEvent.ReasoningDelta -> {
-                        explicitReasoning.append(ev.text)
-                        publish()
-                    }
+                    is ChatEvent.Delta -> publisher.delta(ev.text)
+                    is ChatEvent.ReasoningDelta -> publisher.reasoning(ev.text)
                     is ChatEvent.Failed -> failed = ev.message
                     ChatEvent.Done -> Unit
                 }
             }
-            publish(force = true)
-            _streaming.value = false
-            val finalContent = _streamingText.value
-            val finalReasoning = _streamingReasoning.value.trim().takeIf { it.isNotEmpty() }
-            _streamingText.value = ""
-            _streamingReasoning.value = ""
-            if (finalContent.isNotEmpty() || finalReasoning != null) {
-                messageDao.insert(
-                    MessageEntity(
-                        conversationId = convId,
-                        role = Role.ASSISTANT,
-                        content = finalContent,
-                        reasoning = finalReasoning,
-                    )
-                )
-                conversationDao.touch(convId, System.currentTimeMillis())
-            }
-            failed?.let { _error.value = it }
+            finishStreaming(convId, publisher, failed)
         }
+    }
+
+    /** smartAi：按智能路由候选顺序发起请求，首字前失败/超时自动切换下一个 */
+    private suspend fun streamSmart(convId: Long) {
+        val routes = smartRouteDao.all().filter { it.enabled }
+        if (routes.isEmpty()) {
+            _error.value = "smartAi 没有启用的候选模型，请到「厂商」页右上角 → 智能路由配置"
+            return
+        }
+        val conversation = conversationDao.byId(convId)
+        val history = messageDao.forConversation(convId)
+        val candidates = routes.mapNotNull { route ->
+            val resolved = router.resolveById(route.providerId, route.modelName) ?: return@mapNotNull null
+            val key = resolved.apiKey ?: return@mapNotNull null
+            if (key.key.isBlank()) return@mapNotNull null
+            // 模型配置行可能已被删除，此时退回空配置继续路由
+            val model = resolved.model
+                ?: ModelEntity(providerId = resolved.provider.id, name = route.modelName)
+            SmartCandidate(
+                label = "${resolved.provider.alias}/${model.alias?.takeIf { it.isNotBlank() } ?: model.name}",
+                baseUrl = resolved.provider.baseUrl,
+                apiKey = key.key,
+                extraHeaders = parseCustomHeaders(model.customHeaders),
+                body = buildRequestBody(resolved.provider, model, conversation, history),
+            )
+        }
+        if (candidates.isEmpty()) {
+            _error.value = "smartAi 的候选模型均不可用（缺少 API Key 或已被删除）"
+            return
+        }
+        val timeoutMs = settings.smartFirstTokenTimeoutSeconds.value * 1000L
+
+        _error.value = null
+        _streaming.value = true
+        _streamingText.value = ""
+        _streamingReasoning.value = ""
+        val publisher = StreamPublisher()
+        sendJob = viewModelScope.launch {
+            var failed: String? = null
+            smartExecutor.stream(candidates, timeoutMs).collect { ev ->
+                when (ev) {
+                    is SmartEvent.Delta -> publisher.delta(ev.text)
+                    is SmartEvent.ReasoningDelta -> publisher.reasoning(ev.text)
+                    is SmartEvent.Failed -> failed = ev.message
+                    is SmartEvent.Trying, SmartEvent.Done -> Unit
+                }
+            }
+            finishStreaming(convId, publisher, failed)
+        }
+    }
+
+    /** 流式输出的节流发布器：增量先入缓冲区，最多 ~10Hz 刷新 UI */
+    private inner class StreamPublisher {
+        private val thinkParser = ThinkParser()
+        private val explicitReasoning = StringBuilder()
+        private val pending = StringBuilder()
+        private var lastPublishAt = 0L
+
+        fun delta(text: String) {
+            pending.append(text)
+            publish()
+        }
+
+        fun reasoning(text: String) {
+            explicitReasoning.append(text)
+            publish()
+        }
+
+        fun publish(force: Boolean = false) {
+            val now = System.nanoTime() / 1_000_000L
+            if (!force && now - lastPublishAt < STREAM_PUBLISH_INTERVAL_MS) return
+            lastPublishAt = now
+            if (pending.isNotEmpty()) {
+                thinkParser.append(pending.toString())
+                pending.clear()
+            }
+            _streamingText.value = thinkParser.content
+            _streamingReasoning.value =
+                listOf(explicitReasoning.toString(), thinkParser.reasoning)
+                    .filter { it.isNotBlank() }
+                    .joinToString("\n")
+        }
+    }
+
+    /** 收尾：发布剩余内容并落库助手消息，失败则呈现错误 */
+    private suspend fun finishStreaming(convId: Long, publisher: StreamPublisher, failed: String?) {
+        publisher.publish(force = true)
+        _streaming.value = false
+        val finalContent = _streamingText.value
+        val finalReasoning = _streamingReasoning.value.trim().takeIf { it.isNotEmpty() }
+        _streamingText.value = ""
+        _streamingReasoning.value = ""
+        if (finalContent.isNotEmpty() || finalReasoning != null) {
+            messageDao.insert(
+                MessageEntity(
+                    conversationId = convId,
+                    role = Role.ASSISTANT,
+                    content = finalContent,
+                    reasoning = finalReasoning,
+                )
+            )
+            conversationDao.touch(convId, System.currentTimeMillis())
+        }
+        failed?.let { _error.value = it }
     }
 
     /** 取消流式并丢弃未完成的半截内容（重新生成前调用，不落库） */
@@ -371,8 +486,8 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                 messageDao.deleteFromInclusive(convId, message.id)
             }
             conversationDao.touch(convId, System.currentTimeMillis())
-            val picker = currentModel.value ?: return@launch
-            startStreaming(convId, picker)
+            val target = currentTarget.value ?: return@launch
+            startStreaming(convId, target)
         }
     }
 

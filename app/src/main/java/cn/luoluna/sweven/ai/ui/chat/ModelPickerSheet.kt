@@ -11,9 +11,12 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.RadioButton
@@ -53,6 +56,9 @@ fun ModelPickerSheet(
     selectedModelName: String?,
     onSelect: (PickerModel) -> Unit,
     onGoProviders: () -> Unit,
+    smartAiAvailable: Boolean = false,
+    smartAiSelected: Boolean = false,
+    onSelectSmartAi: () -> Unit = {},
 ) {
     var filter by remember { mutableStateOf(InputFilter.ALL) }
     var providerFilter by remember { mutableStateOf<String?>(null) }
@@ -136,6 +142,35 @@ fun ModelPickerSheet(
             }
         } else {
             LazyColumn(Modifier.fillMaxWidth().padding(bottom = 24.dp)) {
+                // 智能路由聚合模型，固定置顶
+                if (smartAiAvailable) {
+                    item(key = "smart_ai") {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { onSelectSmartAi() }
+                                .padding(horizontal = 8.dp, vertical = 2.dp),
+                        ) {
+                            RadioButton(selected = smartAiSelected, onClick = onSelectSmartAi)
+                            Icon(
+                                Icons.Filled.AutoAwesome,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.padding(end = 8.dp),
+                            )
+                            Column(Modifier.weight(1f).padding(vertical = 6.dp)) {
+                                Text("smartAi", style = MaterialTheme.typography.bodyMedium)
+                                Text(
+                                    "智能路由 · 失败自动切换候选",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                        }
+                        HorizontalDivider(Modifier.padding(top = 8.dp))
+                    }
+                }
                 items(rows, key = { it.item.model.id }) { row ->
                     if (row.showHeader) {
                         if (rows.indexOf(row) != 0) HorizontalDivider(Modifier.padding(top = 8.dp))

@@ -9,6 +9,7 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonObject
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
+import okhttp3.Call
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.Response
@@ -104,17 +105,33 @@ class ProviderClient {
         extraHeaders: Map<String, String> = emptyMap(),
     ): Response =
         withContext(Dispatchers.IO) {
-            val jsonBody = body.toString()
-                .toRequestBody("application/json; charset=utf-8".toMediaType())
-            val request = Request.Builder()
-                .url("${baseUrl.trimEnd('/')}/chat/completions")
-                .header("Authorization", "Bearer ${apiKey.orEmpty()}")
-                .header("Accept", "text/event-stream, application/json")
-                .apply { extraHeaders.forEach { (k, v) -> header(k, v) } }
-                .post(jsonBody)
-                .build()
-            streamHttp.newCall(request).execute()
+            streamHttp.newCall(chatRequest(baseUrl, apiKey, body, extraHeaders)).execute()
         }
+
+    /** 构建未执行的流式请求 Call（供调用方在超时时 cancel 整个请求，如智能路由） */
+    fun newStreamingCall(
+        baseUrl: String,
+        apiKey: String?,
+        body: JsonObject,
+        extraHeaders: Map<String, String> = emptyMap(),
+    ): Call = streamHttp.newCall(chatRequest(baseUrl, apiKey, body, extraHeaders))
+
+    private fun chatRequest(
+        baseUrl: String,
+        apiKey: String?,
+        body: JsonObject,
+        extraHeaders: Map<String, String>,
+    ): Request {
+        val jsonBody = body.toString()
+            .toRequestBody("application/json; charset=utf-8".toMediaType())
+        return Request.Builder()
+            .url("${baseUrl.trimEnd('/')}/chat/completions")
+            .header("Authorization", "Bearer ${apiKey.orEmpty()}")
+            .header("Accept", "text/event-stream, application/json")
+            .apply { extraHeaders.forEach { (k, v) -> header(k, v) } }
+            .post(jsonBody)
+            .build()
+    }
 
     /** 非流式：读取完整响应体文本（可能为上游错误信息） */
     suspend fun readBody(resp: Response): String = withContext(Dispatchers.IO) {
@@ -147,6 +164,11 @@ class ProviderClient {
             emit(ChatEvent.Failed("连接失败: ${e.message ?: e.javaClass.simpleName}"))
             return@flow
         }
+        chatEvents(resp).collect { emit(it) }
+    }.flowOn(Dispatchers.IO)
+
+    /** 从已打开的 chat completion 响应读取流式事件（负责 close，供智能路由等复用） */
+    fun chatEvents(resp: Response): Flow<ChatEvent> = flow {
         resp.use { r ->
             if (!r.isSuccessful) {
                 emit(ChatEvent.Failed(parseErrorMessage(r.code, readBody(r))))

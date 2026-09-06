@@ -102,6 +102,7 @@ import cn.luoluna.sweven.ai.data.db.FolderEntity
 import cn.luoluna.sweven.ai.data.db.MessageEntity
 import cn.luoluna.sweven.ai.data.db.PresetEntity
 import cn.luoluna.sweven.ai.data.db.Role
+import cn.luoluna.sweven.ai.data.repo.SmartAi
 import cn.luoluna.sweven.ai.net.ThinkingDepth
 import cn.luoluna.sweven.ai.ui.common.ConfirmDialog
 import cn.luoluna.sweven.ai.ui.common.InAppBrowser
@@ -122,7 +123,9 @@ fun ChatScreen(
     val current by vm.current.collectAsStateWithLifecycle()
     val messages by vm.messages.collectAsStateWithLifecycle()
     val pickerModels by vm.pickerModels.collectAsStateWithLifecycle()
-    val currentModel by vm.currentModel.collectAsStateWithLifecycle()
+    val currentTarget by vm.currentTarget.collectAsStateWithLifecycle()
+    val smartAiAvailable by vm.smartAiAvailable.collectAsStateWithLifecycle()
+    val currentPicker = (currentTarget as? ChatTarget.Single)?.picker
     val streaming by vm.streaming.collectAsStateWithLifecycle()
     val error by vm.error.collectAsStateWithLifecycle()
     val drawer by vm.drawerState.collectAsStateWithLifecycle()
@@ -319,7 +322,8 @@ fun ChatScreen(
                                 .combinedClickable(onClick = { pickerOpen = true }),
                         ) {
                             Text(
-                                currentModel?.displayId ?: "选择模型",
+                                if (currentTarget is ChatTarget.SmartAi) "smartAi"
+                                else currentPicker?.displayId ?: "选择模型",
                                 style = MaterialTheme.typography.titleMedium,
                                 maxLines = 1,
                             )
@@ -454,8 +458,8 @@ fun ChatScreen(
                         .fillMaxWidth()
                         .padding(horizontal = 8.dp, vertical = 6.dp),
                 ) {
-                    // 思考深度：仅具备推理能力的模型显示
-                    if (currentModel?.model?.capabilityReasoning == true) {
+                    // 思考深度：仅具备推理能力的模型显示（smartAi 聚合模型不显示）
+                    if (currentPicker?.model?.capabilityReasoning == true) {
                         Box {
                             IconButton(onClick = { thinkMenuOpen = true }) {
                                 Icon(
@@ -493,7 +497,7 @@ fun ChatScreen(
                             }
                         }
                     }
-                    if (currentModel?.model?.inputImage == true) {
+                    if (currentPicker?.model?.inputImage == true) {
                         IconButton(onClick = {
                             pickImages.launch(
                                 PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
@@ -536,13 +540,19 @@ fun ChatScreen(
         ModelPickerSheet(
             onDismiss = { pickerOpen = false },
             models = pickerModels,
-            selectedProviderId = currentModel?.provider?.id,
-            selectedModelName = currentModel?.model?.name,
+            selectedProviderId = currentPicker?.provider?.id,
+            selectedModelName = currentPicker?.model?.name,
             onSelect = {
                 vm.selectModel(it.provider.id, it.model.name)
                 pickerOpen = false
             },
             onGoProviders = onGoProviders,
+            smartAiAvailable = smartAiAvailable,
+            smartAiSelected = currentTarget is ChatTarget.SmartAi,
+            onSelectSmartAi = {
+                vm.selectModel(SmartAi.PROVIDER_ID, SmartAi.MODEL_NAME)
+                pickerOpen = false
+            },
         )
     }
 

@@ -26,12 +26,14 @@ import cn.luoluna.sweven.ai.ui.lan.LanScreen
 import cn.luoluna.sweven.ai.ui.provider.AddProviderScreen
 import cn.luoluna.sweven.ai.ui.provider.ProviderDetailScreen
 import cn.luoluna.sweven.ai.ui.provider.ProviderListScreen
+import cn.luoluna.sweven.ai.ui.provider.SmartRouteScreen
 
 object Routes {
     const val CHAT = "chat"
     const val PROVIDERS = "providers"
     const val ADD_PROVIDER = "add_provider"
     const val PROVIDER_DETAIL = "provider/{id}"
+    const val SMART_ROUTE = "smart_route"
     const val LAN = "lan"
 }
 
@@ -101,6 +103,12 @@ fun PhoneRouterApp(openLanTick: Int) {
                 ProviderListScreen(
                     onAdd = { navController.navigate(Routes.ADD_PROVIDER) },
                     onOpen = { id -> navController.navigate("provider/$id") },
+                    onSmartRoute = { navController.navigate(Routes.SMART_ROUTE) },
+                )
+            }
+            composable(Routes.SMART_ROUTE) {
+                SmartRouteScreen(
+                    onBack = { navController.popBackStack() },
                 )
             }
             composable(Routes.ADD_PROVIDER) {

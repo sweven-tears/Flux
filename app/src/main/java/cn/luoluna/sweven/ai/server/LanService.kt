@@ -36,6 +36,7 @@ object ServerRunner {
             modelDao = app.database.modelDao(),
             smartRouteDao = app.database.smartRouteDao(),
             settings = app.settings,
+            logDao = app.database.requestLogDao(),
             authDao = app.database.authDeviceDao(),
         )
         server = s

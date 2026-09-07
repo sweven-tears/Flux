@@ -122,4 +122,12 @@ fun maskKey(key: String): String = when {
 fun normalizeModelId(s: String): String =
     s.lowercase().replace(Regex("[-_. ]"), "")
 
+/** token 数的紧凑显示：800 → "800"，12345 → "12.3k"，128000 → "128k" */
+fun formatTokens(tokens: Long): String = when {
+    tokens >= 1_000_000L -> "%.1fM".format(java.util.Locale.ROOT, tokens / 1_000_000f)
+    tokens >= 10_000L -> "${tokens / 1000}k"
+    tokens >= 1000L -> "%.1fk".format(java.util.Locale.ROOT, tokens / 1000f)
+    else -> "$tokens"
+}
+
 val MonoFont = FontFamily.Monospace

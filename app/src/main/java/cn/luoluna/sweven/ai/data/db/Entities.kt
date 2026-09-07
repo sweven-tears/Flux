@@ -237,3 +237,30 @@ object Role {
     const val ASSISTANT = "assistant"
     const val SYSTEM = "system"
 }
+
+/** 局域网请求日志：一次 /v1/chat/completions 请求一条（含校验失败），自动修剪保留最近若干条 */
+@Entity(
+    tableName = "request_logs",
+    indices = [Index("at"), Index("deviceId")],
+)
+data class RequestLogEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val at: Long,
+    val deviceId: String,
+    val ip: String,
+    /** 请求的聚合模型 id（厂商别名/模型名 或 smartAi） */
+    val model: String,
+    /** 实际命中的上游（直连厂商/模型或 smartAi 胜出候选）；请求在校验阶段失败时为 null */
+    val via: String? = null,
+    val stream: Boolean = false,
+    /** 流式：首字耗时；非流式为 null */
+    val ttftMs: Long? = null,
+    /** 从收到请求到响应结束的总耗时 */
+    val totalMs: Long? = null,
+    val ok: Boolean = false,
+    /** 失败原因摘要（截断存储），成功时为 null */
+    val error: String? = null,
+    /** 上游 usage 的 token 计数，上游未返回时为 null */
+    val promptTokens: Long? = null,
+    val completionTokens: Long? = null,
+)

@@ -8,6 +8,8 @@ import cn.luoluna.sweven.ai.data.db.ModelDao
 import cn.luoluna.sweven.ai.data.db.ModelEntity
 import cn.luoluna.sweven.ai.data.db.ProviderDao
 import cn.luoluna.sweven.ai.data.db.ProviderEntity
+import cn.luoluna.sweven.ai.data.db.RequestLogDao
+import cn.luoluna.sweven.ai.data.db.RequestLogEntity
 import cn.luoluna.sweven.ai.data.db.SmartRouteDao
 import cn.luoluna.sweven.ai.data.repo.ModelRouter
 import cn.luoluna.sweven.ai.data.repo.SmartAi
@@ -24,6 +26,7 @@ import cn.luoluna.sweven.ai.net.ChatJson
 import cn.luoluna.sweven.ai.net.ProviderClient
 import cn.luoluna.sweven.ai.net.applyBuiltinTools
 import cn.luoluna.sweven.ai.net.buildChatBody
+import cn.luoluna.sweven.ai.net.extractUsage
 import cn.luoluna.sweven.ai.net.mergeCustomBody
 import cn.luoluna.sweven.ai.net.parseCustomHeaders
 import cn.luoluna.sweven.ai.net.stringAt
@@ -47,6 +50,7 @@ import io.ktor.utils.io.writeStringUtf8
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
@@ -75,12 +79,64 @@ class LanServer(
     private val modelDao: ModelDao,
     private val smartRouteDao: SmartRouteDao,
     private val settings: AppSettings,
+    private val logDao: RequestLogDao,
     @Suppress("unused") private val authDao: AuthDeviceDao,
 ) {
 
     private var engine: io.ktor.server.engine.ApplicationEngine? = null
 
     val isRunning: Boolean get() = engine != null
+
+    private companion object {
+        /** 请求日志保留条数，写入时自动修剪 */
+        const val LOG_KEEP = 1000
+    }
+
+    /**
+     * 请求日志落盘（开关关闭时忽略）。每条 /v1/chat/completions 请求一条，
+     * 含校验失败路径；流式在透传结束/中断的 finally 里记，客户端断开按成功计。
+     */
+    private suspend fun ApplicationCall.logRequest(
+        device: AuthDeviceEntity,
+        model: String,
+        via: String?,
+        stream: Boolean,
+        startedAt: Long,
+        ttftMs: Long?,
+        ok: Boolean,
+        error: String?,
+        promptTokens: Long? = null,
+        completionTokens: Long? = null,
+    ) {
+        if (!settings.logRequestsEnabled.value) return
+        runCatching {
+            logDao.insert(
+                RequestLogEntity(
+                    at = System.currentTimeMillis(),
+                    deviceId = device.deviceId,
+                    ip = peerIp(),
+                    model = model,
+                    via = via,
+                    stream = stream,
+                    ttftMs = ttftMs,
+                    totalMs = System.currentTimeMillis() - startedAt,
+                    ok = ok,
+                    error = error?.take(300),
+                    promptTokens = promptTokens,
+                    completionTokens = completionTokens,
+                )
+            )
+            logDao.prune(LOG_KEEP)
+        }
+    }
+
+    /** 从流式载荷帧里提取 usage（仅帧内容含 "usage" 时才解析，避免每帧 parse） */
+    private fun usageOfPayload(payload: String): Pair<Long?, Long?>? {
+        if (!payload.contains("\"usage\"")) return null
+        return runCatching {
+            extractUsage(ChatJson.json.parseToJsonElement(payload).jsonObject)
+        }.getOrNull()
+    }
 
     fun start() {
         if (engine != null) return
@@ -232,40 +288,47 @@ class LanServer(
     }
 
     private suspend fun ApplicationCall.handleChatCompletion(device: AuthDeviceEntity) {
+        val startedAt = System.currentTimeMillis()
         val raw = try {
             receiveText()
         } catch (e: Exception) {
+            logRequest(device, "-", null, false, startedAt, null, false, "读取请求体失败: ${e.message}")
             respondOpenAiError(HttpStatusCode.BadRequest, "读取请求体失败: ${e.message}")
             return
         }
         val body: JsonObject = try {
             ChatJson.json.parseToJsonElement(raw).jsonObject
         } catch (e: Exception) {
+            logRequest(device, "-", null, false, startedAt, null, false, "请求体不是合法 JSON: ${e.message}")
             respondOpenAiError(HttpStatusCode.BadRequest, "请求体不是合法 JSON: ${e.message}")
             return
         }
         val aggregateId = body.stringAt("model")
         if (aggregateId.isNullOrBlank()) {
+            logRequest(device, "-", null, false, startedAt, null, false, "model 字段缺失")
             respondOpenAiError(HttpStatusCode.BadRequest, "model 字段必填，格式：厂商别名/模型名")
             return
         }
         if (aggregateId == SmartAi.MODEL_NAME) {
             // 响应模式按请求设备区分：不同设备对首字延迟的需求不同
-            handleSmartCompletion(body, device.responseMode)
+            handleSmartCompletion(body, device, device.responseMode, startedAt)
             return
         }
         val route = router.resolveByAggregateId(aggregateId)
         if (route == null) {
+            logRequest(device, aggregateId, null, false, startedAt, null, false, "模型不存在")
             respondOpenAiError(HttpStatusCode.NotFound, "模型 '$aggregateId' 不存在，聚合模型 id 格式：厂商别名/模型名，可用模型见 GET /v1/models")
             return
         }
         val apiKey = route.apiKey
         if (apiKey == null || apiKey.key.isBlank()) {
+            logRequest(device, aggregateId, null, false, startedAt, null, false, "厂商 '${route.provider.alias}' 未配置 API Key")
             respondOpenAiError(HttpStatusCode.BadRequest, "厂商 '${route.provider.alias}' 尚未配置 API Key")
             return
         }
         val messages = body["messages"] as? JsonArray
         if (messages == null) {
+            logRequest(device, aggregateId, null, false, startedAt, null, false, "messages 字段缺失")
             respondOpenAiError(HttpStatusCode.BadRequest, "messages 字段必填")
             return
         }
@@ -288,39 +351,81 @@ class LanServer(
             )
         }
         val extraHeaders = parseCustomHeaders(route.model?.customHeaders)
+        val via = "${route.provider.alias}/$modelName"
 
         val upstream = try {
             client.openChat(route.provider.baseUrl, apiKey.key, payload, extraHeaders)
         } catch (e: Exception) {
+            logRequest(device, aggregateId, via, stream, startedAt, null, false, "上游连接失败: ${e.message ?: e.javaClass.simpleName}")
             respondOpenAiError(HttpStatusCode.BadGateway, "上游连接失败: ${e.message ?: e.javaClass.simpleName}")
             return
         }
 
-        try {
-            if (!upstream.isSuccessful) {
-                val errBody = client.readBody(upstream)
-                respondText(
-                    errBody.ifBlank { """{"error":{"message":"upstream HTTP ${upstream.code}"}}""" },
-                    ContentType.Application.Json,
-                    HttpStatusCode.fromValue(upstream.code),
-                )
-                return
-            }
-            if (stream) {
+        if (!upstream.isSuccessful) {
+            val errBody = client.readBody(upstream)
+            upstream.close()
+            logRequest(
+                device, aggregateId, via, stream, startedAt, null, false,
+                "上游 HTTP ${upstream.code}: ${errBody.take(200)}",
+            )
+            respondText(
+                errBody.ifBlank { """{"error":{"message":"upstream HTTP ${upstream.code}"}}""" },
+                ContentType.Application.Json,
+                HttpStatusCode.fromValue(upstream.code),
+            )
+            return
+        }
+
+        if (stream) {
+            var ttft: Long? = null
+            var promptTok: Long? = null
+            var completionTok: Long? = null
+            var streamError: String? = null
+            try {
                 respondBytesWriter(contentType = ContentType("text", "event-stream")) {
                     client.ssePayloads(upstream).collect { payloadLine ->
+                        if (ttft == null) ttft = System.currentTimeMillis() - startedAt
+                        usageOfPayload(payloadLine)?.let { (p, c) ->
+                            if (p != null) promptTok = p
+                            if (c != null) completionTok = c
+                        }
                         writeStringUtf8("data: $payloadLine\n\n")
                         flush()
                     }
                     writeStringUtf8("data: [DONE]\n\n")
                     flush()
                 }
-            } else {
-                val respBody = client.readBody(upstream)
-                respondText(respBody, ContentType.Application.Json)
+            } catch (e: CancellationException) {
+                // 客户端提前断开：数据已正常流动，按成功记录
+                streamError = "客户端中断"
+                throw e
+            } catch (e: Exception) {
+                streamError = "流式传输中断: ${e.message ?: e.javaClass.simpleName}"
+                throw e
+            } finally {
+                upstream.close()
+                val err = streamError
+                withContext(NonCancellable) {
+                    logRequest(
+                        device, aggregateId, via, stream, startedAt, ttft,
+                        ok = err == null || err == "客户端中断",
+                        error = err,
+                        promptTokens = promptTok,
+                        completionTokens = completionTok,
+                    )
+                }
             }
-        } finally {
+        } else {
+            val respBody = client.readBody(upstream)
             upstream.close()
+            val usage = runCatching {
+                extractUsage(ChatJson.json.parseToJsonElement(respBody).jsonObject)
+            }.getOrNull()
+            logRequest(
+                device, aggregateId, via, stream, startedAt, null, true, null,
+                usage?.first, usage?.second,
+            )
+            respondText(respBody, ContentType.Application.Json)
         }
     }
 
@@ -328,10 +433,19 @@ class LanServer(
      * smartAi 聚合模型：按启用候选顺序回退。
      * 流式候选限时建立连接，成功后原样透传 SSE；非流式候选请求完整 JSON 后转发。
      * 响应模式按请求设备区分（device.responseMode），构造 [SmartPolicy]；
-     * 每次尝试结果打点 [SmartHealth]，与 App 内聊天共享健康状态。
+     * 每次尝试结果打点 [SmartHealth]，与 App 内聊天共享健康状态；
+     * 整次请求（含校验失败与全部候选失败）写一条 [RequestLogEntity]。
      */
-    private suspend fun ApplicationCall.handleSmartCompletion(rawBody: JsonObject, mode: String) {
+    private suspend fun ApplicationCall.handleSmartCompletion(
+        rawBody: JsonObject,
+        device: AuthDeviceEntity,
+        mode: String,
+        startedAt: Long,
+    ) {
+        val stream = streamFlagOf(rawBody)
+        val aggregateId = SmartAi.MODEL_NAME
         if (!settings.lanSmartAiEnabled.value) {
+            logRequest(device, aggregateId, null, stream, startedAt, null, false, "smartAi 未开放")
             respondOpenAiError(
                 HttpStatusCode.NotFound,
                 "smartAi 未开放：请在 PhoneRouter App 的「局域网」页面开启 smartAi 聚合模型",
@@ -340,15 +454,16 @@ class LanServer(
         }
         val routes = smartRouteDao.all().filter { it.enabled }
         if (routes.isEmpty()) {
+            logRequest(device, aggregateId, null, stream, startedAt, null, false, "smartAi 没有启用的候选模型")
             respondOpenAiError(HttpStatusCode.NotFound, "smartAi 没有启用的候选模型，请先在「智能路由」中配置")
             return
         }
         val messages = rawBody["messages"] as? JsonArray
         if (messages == null) {
+            logRequest(device, aggregateId, null, stream, startedAt, null, false, "messages 字段缺失")
             respondOpenAiError(HttpStatusCode.BadRequest, "messages 字段必填")
             return
         }
-        val stream = streamFlagOf(rawBody)
         val policy = SmartPolicy(
             mode = mode,
             fastMs = settings.smartFastFirstTokenMs.value.toLong(),
@@ -452,6 +567,11 @@ class LanServer(
                     SmartHealth.recordSuccess(
                         candidate.provider.id, candidate.model.name, System.currentTimeMillis() - startedAt,
                     )
+                    val usage = extractUsage(resp)
+                    logRequest(
+                        device, aggregateId, candidate.label, stream, startedAt, null, true, null,
+                        usage?.first, usage?.second,
+                    )
                     respondText(resp.toString(), ContentType.Application.Json)
                     return
                 }
@@ -515,11 +635,23 @@ class LanServer(
                 SmartHealth.recordSuccess(
                     candidate.provider.id, candidate.model.name, System.currentTimeMillis() - startedAt,
                 )
+                val ttft = System.currentTimeMillis() - startedAt
+                var promptTok: Long? = null
+                var completionTok: Long? = null
+                usageOfPayload(firstPayload)?.let { (p, c) ->
+                    if (p != null) promptTok = p
+                    if (c != null) completionTok = c
+                }
+                var streamError: String? = null
                 try {
                     respondBytesWriter(contentType = ContentType("text", "event-stream")) {
                         writeStringUtf8("data: $firstPayload\n\n")
                         flush()
                         for (payloadLine in payloads) {
+                            usageOfPayload(payloadLine)?.let { (p, c) ->
+                                if (p != null) promptTok = p
+                                if (c != null) completionTok = c
+                            }
                             writeStringUtf8("data: $payloadLine\n\n")
                             flush()
                         }
@@ -527,19 +659,33 @@ class LanServer(
                         flush()
                     }
                 } catch (e: CancellationException) {
+                    // 客户端提前断开：数据已正常流动，按成功记录
+                    streamError = "客户端中断"
                     throw e
                 } catch (e: Exception) {
                     // 透传中断：上游不稳信号，累积健康度失败后原样抛给 Ktor 断开客户端
+                    streamError = "流式传输中断: ${e.message ?: e.javaClass.simpleName}"
                     recordFailure(candidate)
                     throw e
                 } finally {
                     producer.cancel()
                     upstream.close()
+                    val err = streamError
+                    withContext(NonCancellable) {
+                        logRequest(
+                            device, aggregateId, candidate.label, true, startedAt, ttft,
+                            ok = err == null || err == "客户端中断",
+                            error = err,
+                            promptTokens = promptTok,
+                            completionTokens = completionTok,
+                        )
+                    }
                 }
                 return
             }
         }
         val summary = lastErrors.entries.joinToString("；") { "${it.key}：${it.value}" }
+        logRequest(device, aggregateId, null, stream, startedAt, null, false, "全部候选不可用：$summary")
         respondOpenAiError(
             HttpStatusCode.BadGateway,
             "smartAi 全部 ${prepared.size} 个候选均不可用（已尝试 $maxRounds 轮）：$summary",

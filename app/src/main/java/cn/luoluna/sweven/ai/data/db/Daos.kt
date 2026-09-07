@@ -294,3 +294,56 @@ interface AuthDeviceDao {
     @Query("DELETE FROM auth_devices WHERE deviceId = :deviceId")
     suspend fun delete(deviceId: String)
 }
+
+/** 按设备聚合的用量统计（请求日志页展示） */
+data class DeviceUsageStat(
+    val deviceId: String,
+    val requests: Int,
+    val promptTokens: Long,
+    val completionTokens: Long,
+    val lastAt: Long,
+)
+
+/** 一段时间窗内的整体统计 */
+data class LogStats(
+    val total: Int,
+    val okCount: Int,
+    val promptTokens: Long,
+    val completionTokens: Long,
+)
+
+@Dao
+interface RequestLogDao {
+    @Query("SELECT * FROM request_logs ORDER BY id DESC LIMIT :limit")
+    fun observeRecent(limit: Int): Flow<List<RequestLogEntity>>
+
+    @Insert
+    suspend fun insert(e: RequestLogEntity): Long
+
+    /** 只保留最近 keep 条，写入时调用防表无限膨胀 */
+    @Query("DELETE FROM request_logs WHERE id NOT IN (SELECT id FROM request_logs ORDER BY id DESC LIMIT :keep)")
+    suspend fun prune(keep: Int)
+
+    @Query("DELETE FROM request_logs")
+    suspend fun clear()
+
+    /** 时间窗内的整体统计（单行，无记录时各列为 0） */
+    @Query(
+        "SELECT COUNT(*) AS total, " +
+            "COALESCE(SUM(CASE WHEN ok = 1 THEN 1 ELSE 0 END), 0) AS okCount, " +
+            "COALESCE(SUM(promptTokens), 0) AS promptTokens, " +
+            "COALESCE(SUM(completionTokens), 0) AS completionTokens " +
+            "FROM request_logs WHERE at >= :since"
+    )
+    fun observeStatsSince(since: Long): Flow<LogStats>
+
+    /** 时间窗内按设备聚合的用量 */
+    @Query(
+        "SELECT deviceId, COUNT(*) AS requests, " +
+            "COALESCE(SUM(promptTokens), 0) AS promptTokens, " +
+            "COALESCE(SUM(completionTokens), 0) AS completionTokens, " +
+            "MAX(at) AS lastAt " +
+            "FROM request_logs WHERE at >= :since GROUP BY deviceId ORDER BY requests DESC"
+    )
+    fun observeUsageByDeviceSince(since: Long): Flow<List<DeviceUsageStat>>
+}

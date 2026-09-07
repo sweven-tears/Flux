@@ -18,6 +18,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         AuthDeviceEntity::class,
         FolderEntity::class,
         PresetEntity::class,
+        RequestLogEntity::class,
     ],
     version = 9,
     exportSchema = false,
@@ -32,6 +33,7 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun authDeviceDao(): AuthDeviceDao
     abstract fun folderDao(): FolderDao
     abstract fun presetDao(): PresetDao
+    abstract fun requestLogDao(): RequestLogDao
 
     companion object {
         /** v1 → v2：新增文件夹、预设对话表；会话表增加 folderId / systemPrompt */

@@ -20,6 +20,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AltRoute
+import androidx.compose.material.icons.filled.ReceiptLong
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -67,6 +68,7 @@ private fun fmtTime(ts: Long?): String =
 @Composable
 fun LanScreen(
     onSmartRoute: () -> Unit = {},
+    onRequestLog: () -> Unit = {},
     vm: LanViewModel = viewModel(),
 ) {
     val context = LocalContext.current
@@ -118,6 +120,9 @@ fun LanScreen(
             TopAppBar(
                 title = { Text("局域网路由") },
                 actions = {
+                    IconButton(onClick = onRequestLog) {
+                        Icon(Icons.Filled.ReceiptLong, contentDescription = "请求日志")
+                    }
                     IconButton(onClick = onSmartRoute) {
                         Icon(Icons.Filled.AltRoute, contentDescription = "智能路由")
                     }

@@ -60,6 +60,10 @@ class AppSettings(context: Context) {
         MutableStateFlow(prefs.getInt(KEY_SMART_COOLDOWN_SECONDS, DEFAULT_SMART_COOLDOWN_SECONDS))
     val smartCooldownSeconds: StateFlow<Int> = _smartCooldownSeconds
 
+    /** 是否记录局域网请求日志（失败排查与用量统计的数据源） */
+    private val _logRequestsEnabled = MutableStateFlow(prefs.getBoolean(KEY_LOG_REQUESTS, true))
+    val logRequestsEnabled: StateFlow<Boolean> = _logRequestsEnabled
+
     fun setLanEnabled(enabled: Boolean) {
         prefs.edit().putBoolean(KEY_LAN_ENABLED, enabled).apply()
         _lanEnabled.value = enabled
@@ -126,6 +130,11 @@ class AppSettings(context: Context) {
         _smartCooldownSeconds.value = v
     }
 
+    fun setLogRequestsEnabled(enabled: Boolean) {
+        prefs.edit().putBoolean(KEY_LOG_REQUESTS, enabled).apply()
+        _logRequestsEnabled.value = enabled
+    }
+
     companion object {
         const val DEFAULT_PORT = 8787
         const val DEFAULT_SMART_FIRST_TOKEN_TIMEOUT = 30
@@ -146,5 +155,6 @@ class AppSettings(context: Context) {
         private const val KEY_SMART_LEISURE_FIRST_TOKEN = "smart_leisure_first_token_seconds"
         private const val KEY_SMART_COOLDOWN_THRESHOLD = "smart_cooldown_threshold"
         private const val KEY_SMART_COOLDOWN_SECONDS = "smart_cooldown_seconds"
+        private const val KEY_LOG_REQUESTS = "log_requests_enabled"
     }
 }

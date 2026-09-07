@@ -557,3 +557,22 @@ fun extractToolCalls(response: JsonObject): List<ToolCall> {
         ToolCall(name, (fn["arguments"] as? JsonPrimitive)?.content ?: "{}")
     }
 }
+
+/**
+ * 从响应 JSON 提取 usage 的 token 计数（非流式响应或流式里带 usage 的帧）。
+ * 兼容 prompt/completion 与 input/output 两种命名；没有 usage 字段返回 null。
+ */
+fun extractUsage(response: JsonObject): Pair<Long?, Long?>? {
+    val usage = response["usage"] as? JsonObject ?: return null
+    fun num(vararg keys: String): Long? {
+        var el: JsonElement? = usage
+        for (k in keys) {
+            el = (el as? JsonObject)?.get(k) ?: return null
+        }
+        return (el as? JsonPrimitive)?.takeIf { it !is JsonNull }?.contentOrNull?.toLongOrNull()
+    }
+    val prompt = num("prompt_tokens") ?: num("input_tokens")
+    val completion = num("completion_tokens") ?: num("output_tokens")
+    if (prompt == null && completion == null) return null
+    return prompt to completion
+}

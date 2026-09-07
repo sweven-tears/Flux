@@ -110,6 +110,7 @@ import cn.luoluna.sweven.ai.net.ThinkingDepth
 import cn.luoluna.sweven.ai.ui.common.ConfirmDialog
 import cn.luoluna.sweven.ai.ui.common.InAppBrowser
 import cn.luoluna.sweven.ai.ui.common.TextFieldDialog
+import cn.luoluna.sweven.ai.ui.common.formatTokens
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -597,8 +598,8 @@ fun ChatScreen(
                         val ratio = est.window?.let { w -> est.usedTokens.toFloat() / w }
                         Text(
                             text = est.window
-                                ?.let { w -> "上下文 ≈${formatTokens(est.usedTokens)} / ${formatTokens(w)}" }
-                                ?: "上下文 ≈${formatTokens(est.usedTokens)}",
+                                ?.let { w -> "上下文 ≈${formatTokens(est.usedTokens.toLong())} / ${formatTokens(w.toLong())}" }
+                                ?: "上下文 ≈${formatTokens(est.usedTokens.toLong())}",
                             style = MaterialTheme.typography.labelSmall,
                             color = when {
                                 ratio != null && ratio >= 1f -> MaterialTheme.colorScheme.error
@@ -1305,14 +1306,6 @@ private fun DataUrlThumb(url: String, onRemove: () -> Unit) {
 private fun copyText(context: Context, text: String) {
     val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
     cm.setPrimaryClip(ClipData.newPlainText("phoneRouter", text))
-}
-
-/** token 数的紧凑显示：800 → "800"，12345 → "12.3k"，128000 → "128k" */
-private fun formatTokens(tokens: Int): String = when {
-    tokens >= 1_000_000 -> "%.1fM".format(java.util.Locale.ROOT, tokens / 1_000_000f)
-    tokens >= 10_000 -> "${tokens / 1000}k"
-    tokens >= 1000 -> "%.1fk".format(java.util.Locale.ROOT, tokens / 1000f)
-    else -> "$tokens"
 }
 
 /** 抽屉分组横向 tab 的胶囊按钮 */

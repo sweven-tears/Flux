@@ -24,6 +24,7 @@ import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import cn.luoluna.sweven.ai.ui.chat.ChatScreen
 import cn.luoluna.sweven.ai.ui.lan.LanScreen
+import cn.luoluna.sweven.ai.ui.lan.RequestLogScreen
 import cn.luoluna.sweven.ai.ui.provider.AddProviderScreen
 import cn.luoluna.sweven.ai.ui.provider.ProviderDetailScreen
 import cn.luoluna.sweven.ai.ui.provider.ProviderListScreen
@@ -36,6 +37,7 @@ object Routes {
     const val ADD_PROVIDER = "add_provider"
     const val PROVIDER_DETAIL = "provider/{id}"
     const val SMART_ROUTE = "smart_route"
+    const val REQUEST_LOG = "request_log"
     const val LAN = "lan"
     const val SETTINGS = "settings"
 }
@@ -139,6 +141,12 @@ fun PhoneRouterApp(openLanTick: Int) {
             composable(Routes.LAN) {
                 LanScreen(
                     onSmartRoute = { navController.navigate(Routes.SMART_ROUTE) },
+                    onRequestLog = { navController.navigate(Routes.REQUEST_LOG) },
+                )
+            }
+            composable(Routes.REQUEST_LOG) {
+                RequestLogScreen(
+                    onBack = { navController.popBackStack() },
                 )
             }
             composable(Routes.SETTINGS) {

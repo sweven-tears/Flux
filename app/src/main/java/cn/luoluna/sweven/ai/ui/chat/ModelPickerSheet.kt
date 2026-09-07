@@ -200,7 +200,7 @@ fun ModelPickerSheet(
                                 .padding(vertical = 6.dp)
                         ) {
                             Text(
-                                row.item.displayId,
+                                row.item.displayId + if (row.item.enabled) "" else "（已禁用）",
                                 style = MaterialTheme.typography.bodyMedium,
                                 maxLines = 1,
                             )

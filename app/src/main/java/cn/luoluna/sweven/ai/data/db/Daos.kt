@@ -164,6 +164,29 @@ interface ConversationDao {
 
     @Query("UPDATE conversations SET thinkingDepth = :depth WHERE id = :id")
     suspend fun setThinkingDepth(id: Long, depth: String?)
+
+    @Query("UPDATE conversations SET systemPrompt = :prompt WHERE id = :id")
+    suspend fun setSystemPrompt(id: Long, prompt: String?)
+
+    /** 分组内无消息、无系统提示词的空会话（新建对话前复用它，保证每组只有一个空窗口） */
+    @Query(
+        "SELECT * FROM conversations WHERE " +
+            "((:folderId IS NULL AND folderId IS NULL) OR folderId = :folderId) " +
+            "AND systemPrompt IS NULL " +
+            "AND NOT EXISTS (SELECT 1 FROM messages WHERE messages.conversationId = conversations.id) " +
+            "ORDER BY updatedAt DESC LIMIT 1"
+    )
+    suspend fun findEmptyConversation(folderId: Long?): ConversationEntity?
+
+    /** 分组内由同一预设创建、尚未使用的空会话（点击预设时复用，不重复建窗口） */
+    @Query(
+        "SELECT * FROM conversations WHERE " +
+            "((:folderId IS NULL AND folderId IS NULL) OR folderId = :folderId) " +
+            "AND title = :title AND systemPrompt IS :systemPrompt " +
+            "AND NOT EXISTS (SELECT 1 FROM messages WHERE messages.conversationId = conversations.id) " +
+            "ORDER BY updatedAt DESC LIMIT 1"
+    )
+    suspend fun findEmptyByPreset(folderId: Long?, title: String, systemPrompt: String?): ConversationEntity?
 }
 
 @Dao

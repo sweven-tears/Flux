@@ -43,6 +43,7 @@ import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Face
 import androidx.compose.material.icons.filled.Folder
@@ -123,9 +124,21 @@ fun ChatScreen(
     val current by vm.current.collectAsStateWithLifecycle()
     val messages by vm.messages.collectAsStateWithLifecycle()
     val pickerModels by vm.pickerModels.collectAsStateWithLifecycle()
+    val allPickerModels by vm.allPickerModels.collectAsStateWithLifecycle()
     val currentTarget by vm.currentTarget.collectAsStateWithLifecycle()
     val smartAiAvailable by vm.smartAiAvailable.collectAsStateWithLifecycle()
     val currentPicker = (currentTarget as? ChatTarget.Single)?.picker
+    // 会话记录的模型/目标已不可用、当前展示的是回退目标时为 true（顶栏提示）
+    val modelFallback = current?.providerId?.let { pid ->
+        val single = currentTarget as? ChatTarget.Single
+        when {
+            currentTarget == null -> true
+            pid == SmartAi.PROVIDER_ID -> currentTarget !is ChatTarget.SmartAi
+            single != null -> pid != single.picker.provider.id ||
+                current?.modelName != single.picker.model.name
+            else -> false
+        }
+    } ?: false
     val streaming by vm.streaming.collectAsStateWithLifecycle()
     val error by vm.error.collectAsStateWithLifecycle()
     val drawer by vm.drawerState.collectAsStateWithLifecycle()
@@ -149,6 +162,7 @@ fun ChatScreen(
     var webRenderMessage by remember { mutableStateOf<MessageEntity?>(null) }
     var deleteMessageTarget by remember { mutableStateOf<MessageEntity?>(null) }
     var thinkMenuOpen by remember { mutableStateOf(false) }
+    var systemPromptOpen by remember { mutableStateOf(false) }
 
     val pickImages = rememberLauncherForActivityResult(
         ActivityResultContracts.PickMultipleVisualMedia(maxItems = 4)
@@ -178,7 +192,7 @@ fun ChatScreen(
                         Text("新建文件夹", style = MaterialTheme.typography.labelMedium)
                     }
                     IconButton(onClick = {
-                        vm.newConversation()
+                        vm.newConversation(selectedFolderTab)
                         scope.launch { drawerState.close() }
                     }) { Icon(Icons.Filled.Add, contentDescription = "新建对话") }
                 }
@@ -315,23 +329,45 @@ fun ChatScreen(
                         }
                     },
                     title = {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
+                        Column(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .combinedClickable(onClick = { pickerOpen = true }),
                         ) {
-                            Text(
-                                if (currentTarget is ChatTarget.SmartAi) "smartAi"
-                                else currentPicker?.displayId ?: "选择模型",
-                                style = MaterialTheme.typography.titleMedium,
-                                maxLines = 1,
-                            )
-                            Icon(Icons.Filled.ArrowDropDown, contentDescription = "切换模型")
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text(
+                                    if (currentTarget is ChatTarget.SmartAi) "smartAi"
+                                    else currentPicker?.displayId ?: "选择模型",
+                                    style = MaterialTheme.typography.titleMedium,
+                                    maxLines = 1,
+                                )
+                                Icon(Icons.Filled.ArrowDropDown, contentDescription = "切换模型")
+                            }
+                            if (modelFallback) {
+                                Text(
+                                    "会话原模型不可用，已回退",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.error,
+                                    maxLines = 1,
+                                )
+                            }
                         }
                     },
                     actions = {
-                        IconButton(onClick = { vm.newConversation() }) {
+                        if (current != null) {
+                            IconButton(onClick = { systemPromptOpen = true }) {
+                                Icon(
+                                    Icons.Filled.Description,
+                                    contentDescription = "系统提示词",
+                                    tint = if (current?.systemPrompt != null) {
+                                        MaterialTheme.colorScheme.primary
+                                    } else {
+                                        MaterialTheme.colorScheme.onSurfaceVariant
+                                    },
+                                )
+                            }
+                        }
+                        IconButton(onClick = { vm.newConversation(selectedFolderTab) }) {
                             Icon(Icons.Filled.Add, contentDescription = "新对话")
                         }
                     },
@@ -609,13 +645,23 @@ fun ChatScreen(
     presetDialog?.let { (folderId, existing) ->
         PresetDialog(
             existing = existing,
-            models = pickerModels,
+            models = allPickerModels,
             onDismiss = { presetDialog = null },
             onSave = { name, sys, pid, mn ->
                 vm.savePreset(folderId, existing, name, sys, pid, mn)
                 presetDialog = null
             },
             onDelete = existing?.let { p -> ({ vm.deletePreset(p); presetDialog = null }) },
+        )
+    }
+    if (systemPromptOpen) {
+        SystemPromptDialog(
+            initial = current?.systemPrompt.orEmpty(),
+            onDismiss = { systemPromptOpen = false },
+            onSave = { prompt ->
+                vm.setSystemPrompt(prompt)
+                systemPromptOpen = false
+            },
         )
     }
     moveTarget?.let { conv ->
@@ -1189,4 +1235,42 @@ private fun MoveRadioRow(label: String, folderId: Long?, selected: Long?, onSele
         RadioButton(selected = selected == folderId, onClick = { onSelect(folderId) })
         Text(label, style = MaterialTheme.typography.bodyMedium)
     }
+}
+
+/** 当前会话的系统提示词（人设）查看与编辑：怀疑预设没生效时可在此确认 */
+@Composable
+private fun SystemPromptDialog(
+    initial: String,
+    onDismiss: () -> Unit,
+    onSave: (String) -> Unit,
+) {
+    var text by remember { mutableStateOf(initial) }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        confirmButton = {
+            TextButton(onClick = { onSave(text) }) { Text("保存") }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("取消") }
+        },
+        title = { Text("系统提示词（人设）") },
+        text = {
+            Column {
+                OutlinedTextField(
+                    value = text,
+                    onValueChange = { text = it },
+                    placeholder = { Text("为空表示没有人设；预设创建的会话会自动带上") },
+                    minLines = 4,
+                    maxLines = 10,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                Text(
+                    "怀疑预设没生效时，在此确认当前会话是否真的带了人设",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(top = 6.dp),
+                )
+            }
+        },
+    )
 }

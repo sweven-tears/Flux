@@ -53,6 +53,8 @@ data class PickerModel(val provider: ProviderEntity, val model: ModelEntity) {
     /** 展示名（优先别名） */
     val displayName: String get() = model.alias?.takeIf { it.isNotBlank() } ?: model.name
     val displayId: String get() = "${provider.alias}/$displayName"
+    /** 模型是否处于启用状态（禁用模型仅供预设编辑回显，聊天选择器不出现） */
+    val enabled: Boolean get() = model.enabled
 }
 
 /** 当前生效的聊天目标：单个模型或 smartAi 聚合 */
@@ -103,17 +105,13 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
 
     val pickerModels: StateFlow<List<PickerModel>> =
         combine(providerDao.observeAll(), modelDao.observeEnabled()) { providers, models ->
-            val providerRank = providers.withIndex().associate { it.value.id to it.index }
-            models.mapNotNull { m ->
-                providers.firstOrNull { it.id == m.providerId }?.let { PickerModel(it, m) }
-            }.sortedWith(
-                // 厂商按用户拖拽顺序分组，厂商内按模型拖拽顺序
-                compareBy(
-                    { providerRank[it.provider.id] ?: Int.MAX_VALUE },
-                    { it.model.sortOrder },
-                    { it.model.name.lowercase() },
-                )
-            )
+            buildPickerModels(providers, models)
+        }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    /** 全部模型（含禁用）：预设编辑弹窗使用，避免预设模型已禁用时编辑一次就被静默清空 */
+    val allPickerModels: StateFlow<List<PickerModel>> =
+        combine(providerDao.observeAll(), modelDao.observeAll()) { providers, models ->
+            buildPickerModels(providers, models)
         }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     val drawerState: StateFlow<DrawerState> =
@@ -188,15 +186,23 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
 
     // ---- 会话 ----
 
-    fun newConversation() = viewModelScope.launch {
+    fun newConversation(folderId: Long? = null) = viewModelScope.launch {
         stopStreamingInternal()
-        val last = lastModel.value
-        val id = conversationDao.insert(
-            ConversationEntity(
-                providerId = last?.first,
-                modelName = last?.second,
+        // 当前分组已有空会话则直接复用，保证每个分组只有一个没有内容的新窗口
+        val id = conversationDao.findEmptyConversation(folderId)?.let { existing ->
+            lastModel.value?.let { (pid, name) -> conversationDao.setModel(existing.id, pid, name) }
+            conversationDao.touch(existing.id, System.currentTimeMillis())
+            existing.id
+        } ?: run {
+            val last = lastModel.value
+            conversationDao.insert(
+                ConversationEntity(
+                    providerId = last?.first,
+                    modelName = last?.second,
+                    folderId = folderId,
+                )
             )
-        )
+        }
         currentId.value = id
         _pendingThinkingDepth.value?.let {
             conversationDao.setThinkingDepth(id, it)
@@ -225,12 +231,17 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         conversationDao.setFolder(id, folderId)
     }
 
+    /** 复用分组内的空会话（没有则新建），供无当前会话时的隐式创建路径共用 */
+    private suspend fun reuseOrCreateEmpty(folderId: Long?): Long =
+        conversationDao.findEmptyConversation(folderId)?.let { existing ->
+            conversationDao.touch(existing.id, System.currentTimeMillis())
+            existing.id
+        } ?: conversationDao.insert(ConversationEntity(folderId = folderId))
+
     fun selectModel(providerId: Long, modelName: String) = viewModelScope.launch {
         settings.setLastModel(providerId, modelName)
         val convId = currentId.value
-            ?: conversationDao.insert(
-                ConversationEntity(providerId = providerId, modelName = modelName)
-            ).also { currentId.value = it }
+            ?: reuseOrCreateEmpty(null).also { currentId.value = it }
         conversationDao.setModel(convId, providerId, modelName)
     }
 
@@ -255,10 +266,9 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             var convId = currentId.value
             if (convId == null) {
-                convId = conversationDao.insert(
-                    ConversationEntity(providerId = providerId, modelName = modelName)
-                )
+                convId = reuseOrCreateEmpty(null)
                 currentId.value = convId
+                conversationDao.setModel(convId, providerId, modelName)
                 _pendingThinkingDepth.value?.let {
                     conversationDao.setThinkingDepth(convId, it)
                     _pendingThinkingDepth.value = null
@@ -278,7 +288,8 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                     imagesJson = MessageEntity.imagesJsonOf(images),
                 )
             )
-            if (isFirst && text.isNotBlank()) {
+            // 预设创建的会话保留预设名，让带人设的窗口在抽屉里始终可识别
+            if (isFirst && text.isNotBlank() && conversationDao.byId(convId)?.systemPrompt == null) {
                 conversationDao.rename(convId, text.take(16).replace('\n', ' ').trim())
             }
             conversationDao.touch(convId, System.currentTimeMillis())
@@ -537,6 +548,12 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    /** 修改当前会话的系统提示词（人设），顶栏入口可查看与编辑 */
+    fun setSystemPrompt(prompt: String?) = viewModelScope.launch {
+        val convId = currentId.value ?: return@launch
+        conversationDao.setSystemPrompt(convId, prompt?.takeIf { it.isNotBlank() })
+    }
+
     fun stopStreaming() {
         val partial = _streamingText.value
         val partialReasoning = _streamingReasoning.value.trim().takeIf { it.isNotEmpty() }
@@ -637,14 +654,20 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         presetDao.delete(preset)
     }
 
-    /** 用预设对话新建会话：应用其系统提示词与模型 */
+    /** 用预设对话新建会话：应用其系统提示词与模型；同一预设的空会话直接复用 */
     fun startFromPreset(preset: PresetEntity) = viewModelScope.launch {
         stopStreamingInternal()
-        val id = conversationDao.insert(
+        val providerId = preset.providerId ?: lastModel.value?.first
+        val modelName = preset.modelName ?: lastModel.value?.second
+        val id = conversationDao.findEmptyByPreset(preset.folderId, preset.name, preset.systemPrompt)?.let { existing ->
+            conversationDao.setModel(existing.id, providerId, modelName)
+            conversationDao.touch(existing.id, System.currentTimeMillis())
+            existing.id
+        } ?: conversationDao.insert(
             ConversationEntity(
                 title = preset.name,
-                providerId = preset.providerId ?: lastModel.value?.first,
-                modelName = preset.modelName ?: lastModel.value?.second,
+                providerId = providerId,
+                modelName = modelName,
                 folderId = preset.folderId,
                 systemPrompt = preset.systemPrompt,
             )
@@ -656,6 +679,23 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
     companion object {
         /** 流式文本的发布节流间隔：UI 最多以 ~10Hz 刷新，而不是每个 token 刷新 */
         private const val STREAM_PUBLISH_INTERVAL_MS = 100L
+
+        /** 厂商按用户拖拽顺序分组，厂商内按模型拖拽顺序 */
+        private fun buildPickerModels(
+            providers: List<ProviderEntity>,
+            models: List<ModelEntity>,
+        ): List<PickerModel> {
+            val providerRank = providers.withIndex().associate { it.value.id to it.index }
+            return models.mapNotNull { m ->
+                providers.firstOrNull { it.id == m.providerId }?.let { PickerModel(it, m) }
+            }.sortedWith(
+                compareBy(
+                    { providerRank[it.provider.id] ?: Int.MAX_VALUE },
+                    { it.model.sortOrder },
+                    { it.model.name.lowercase() },
+                )
+            )
+        }
 
         fun advancedParamsOf(m: ModelEntity): AdvancedParams? {
             if (m.temperature == null && m.topP == null && m.maxTokens == null &&

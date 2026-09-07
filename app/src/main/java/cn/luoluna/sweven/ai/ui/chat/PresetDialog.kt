@@ -115,7 +115,8 @@ fun PresetDialog(
                     Column(Modifier.weight(1f)) {
                         Text("指定模型（可选）", style = MaterialTheme.typography.labelMedium)
                         Text(
-                            selected?.aggregateId ?: "未指定（使用上次选择的模型）",
+                            selected?.let { it.aggregateId + if (it.enabled) "" else "（已禁用）" }
+                                ?: "未指定（使用上次选择的模型）",
                             style = MaterialTheme.typography.bodySmall,
                             fontFamily = MonoFont,
                             color = if (selected == null) MaterialTheme.colorScheme.onSurfaceVariant

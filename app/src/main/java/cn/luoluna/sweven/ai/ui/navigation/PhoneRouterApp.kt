@@ -1,5 +1,6 @@
 package cn.luoluna.sweven.ai.ui.navigation
 
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Build
@@ -27,6 +28,7 @@ import cn.luoluna.sweven.ai.ui.provider.AddProviderScreen
 import cn.luoluna.sweven.ai.ui.provider.ProviderDetailScreen
 import cn.luoluna.sweven.ai.ui.provider.ProviderListScreen
 import cn.luoluna.sweven.ai.ui.provider.SmartRouteScreen
+import cn.luoluna.sweven.ai.ui.settings.SettingsScreen
 
 object Routes {
     const val CHAT = "chat"
@@ -35,6 +37,7 @@ object Routes {
     const val PROVIDER_DETAIL = "provider/{id}"
     const val SMART_ROUTE = "smart_route"
     const val LAN = "lan"
+    const val SETTINGS = "settings"
 }
 
 private val TOP_ROUTES = setOf(Routes.CHAT, Routes.PROVIDERS, Routes.LAN)
@@ -64,6 +67,8 @@ fun PhoneRouterApp(openLanTick: Int) {
     }
 
     Scaffold(
+        // 顶栏 insets 由各页面自己的 Scaffold/TopAppBar 处理，外层不再叠加，避免顶部双重空白
+        contentWindowInsets = WindowInsets(0, 0, 0, 0),
         bottomBar = {
             if (currentRoute in TOP_ROUTES) {
                 NavigationBar {
@@ -97,13 +102,13 @@ fun PhoneRouterApp(openLanTick: Int) {
             composable(Routes.CHAT) {
                 ChatScreen(
                     onGoProviders = { gotoTab(Routes.PROVIDERS) },
+                    onOpenSettings = { navController.navigate(Routes.SETTINGS) },
                 )
             }
             composable(Routes.PROVIDERS) {
                 ProviderListScreen(
                     onAdd = { navController.navigate(Routes.ADD_PROVIDER) },
                     onOpen = { id -> navController.navigate("provider/$id") },
-                    onSmartRoute = { navController.navigate(Routes.SMART_ROUTE) },
                 )
             }
             composable(Routes.SMART_ROUTE) {
@@ -132,7 +137,14 @@ fun PhoneRouterApp(openLanTick: Int) {
                 )
             }
             composable(Routes.LAN) {
-                LanScreen()
+                LanScreen(
+                    onSmartRoute = { navController.navigate(Routes.SMART_ROUTE) },
+                )
+            }
+            composable(Routes.SETTINGS) {
+                SettingsScreen(
+                    onBack = { navController.popBackStack() },
+                )
             }
         }
     }

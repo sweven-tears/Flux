@@ -55,6 +55,7 @@ import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Psychology
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -115,6 +116,7 @@ import kotlinx.coroutines.launch
 @Composable
 fun ChatScreen(
     onGoProviders: () -> Unit,
+    onOpenSettings: () -> Unit,
     vm: ChatViewModel = viewModel(),
 ) {
     val context = LocalContext.current
@@ -278,7 +280,7 @@ fun ChatScreen(
                         }
                     }
                 }
-                LazyColumn(Modifier.fillMaxWidth()) {
+                LazyColumn(Modifier.fillMaxWidth().weight(1f)) {
                     val tabId = selectedFolderTab
                     val tabConvs = drawer.conversationsByFolder[tabId].orEmpty()
                     if (tabId != null) {
@@ -317,6 +319,16 @@ fun ChatScreen(
                     }
                     item(key = "bottom-space") { Spacer(Modifier.height(24.dp)) }
                 }
+                HorizontalDivider()
+                NavigationDrawerItem(
+                    icon = { Icon(Icons.Filled.Settings, contentDescription = null) },
+                    label = { Text("设置") },
+                    selected = false,
+                    onClick = {
+                        scope.launch { drawerState.close() }
+                        onOpenSettings()
+                    },
+                )
             }
         },
     ) {

@@ -17,14 +17,10 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Build
 import androidx.compose.material.icons.filled.DragIndicator
-import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material3.Card
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
@@ -54,7 +50,6 @@ import kotlinx.coroutines.launch
 fun ProviderListScreen(
     onAdd: () -> Unit,
     onOpen: (Long) -> Unit,
-    onSmartRoute: () -> Unit = {},
 ) {
     val app = androidx.compose.ui.platform.LocalContext.current.applicationContext as App
     val providers by remember { app.database.providerDao().observeAll() }
@@ -85,25 +80,7 @@ fun ProviderListScreen(
 
     Scaffold(
         topBar = {
-            TopAppBar(
-                title = { Text("模型厂商") },
-                actions = {
-                    // 右上角：页面级配置入口
-                    var menuOpen by remember { mutableStateOf(false) }
-                    IconButton(onClick = { menuOpen = true }) {
-                        Icon(Icons.Filled.MoreVert, contentDescription = "更多")
-                    }
-                    DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
-                        DropdownMenuItem(
-                            text = { Text("智能路由") },
-                            onClick = {
-                                menuOpen = false
-                                onSmartRoute()
-                            },
-                        )
-                    }
-                },
-            )
+            TopAppBar(title = { Text("模型厂商") })
         },
         floatingActionButton = {
             FloatingActionButton(onClick = onAdd) {

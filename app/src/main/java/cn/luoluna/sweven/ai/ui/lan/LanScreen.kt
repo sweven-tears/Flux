@@ -14,9 +14,13 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.AltRoute
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
@@ -52,7 +56,10 @@ private fun fmtTime(ts: Long?): String =
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun LanScreen(vm: LanViewModel = viewModel()) {
+fun LanScreen(
+    onSmartRoute: () -> Unit = {},
+    vm: LanViewModel = viewModel(),
+) {
     val context = LocalContext.current
     val lanEnabled by vm.lanEnabled.collectAsStateWithLifecycle()
     val lanPort by vm.lanPort.collectAsStateWithLifecycle()
@@ -82,7 +89,18 @@ fun LanScreen(vm: LanViewModel = viewModel()) {
         }
     }
 
-    Scaffold(topBar = { TopAppBar(title = { Text("局域网路由") }) }) { padding ->
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = { Text("局域网路由") },
+                actions = {
+                    IconButton(onClick = onSmartRoute) {
+                        Icon(Icons.Filled.AltRoute, contentDescription = "智能路由")
+                    }
+                },
+            )
+        },
+    ) { padding ->
         Column(
             Modifier
                 .fillMaxWidth()

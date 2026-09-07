@@ -23,6 +23,7 @@ import cn.luoluna.sweven.ai.data.repo.SmartAi
 import cn.luoluna.sweven.ai.data.repo.SmartCandidate
 import cn.luoluna.sweven.ai.data.repo.SmartEvent
 import cn.luoluna.sweven.ai.data.repo.SmartRouteExecutor
+import cn.luoluna.sweven.ai.data.repo.isSelfGatewayUrl
 import cn.luoluna.sweven.ai.net.AdvancedParams
 import cn.luoluna.sweven.ai.net.ChatEvent
 import cn.luoluna.sweven.ai.net.ProviderClient
@@ -33,6 +34,7 @@ import cn.luoluna.sweven.ai.net.buildChatBody
 import cn.luoluna.sweven.ai.net.buildMessagesJson
 import cn.luoluna.sweven.ai.net.mergeCustomBody
 import cn.luoluna.sweven.ai.net.parseCustomHeaders
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -358,13 +360,19 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         val publisher = StreamPublisher()
         sendJob = viewModelScope.launch {
             var failed: String? = null
-            client.chatDeltas(picker.provider.baseUrl, key.key, body, extraHeaders).collect { ev ->
-                when (ev) {
-                    is ChatEvent.Delta -> publisher.delta(ev.text)
-                    is ChatEvent.ReasoningDelta -> publisher.reasoning(ev.text)
-                    is ChatEvent.Failed -> failed = ev.message
-                    ChatEvent.Done -> Unit
+            try {
+                client.chatDeltas(picker.provider.baseUrl, key.key, body, extraHeaders).collect { ev ->
+                    when (ev) {
+                        is ChatEvent.Delta -> publisher.delta(ev.text)
+                        is ChatEvent.ReasoningDelta -> publisher.reasoning(ev.text)
+                        is ChatEvent.Failed -> failed = ev.message
+                        ChatEvent.Done -> Unit
+                    }
                 }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                failed = e.message ?: e.javaClass.simpleName
             }
             finishStreaming(convId, publisher, failed)
         }
@@ -383,6 +391,8 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
             val resolved = router.resolveById(route.providerId, route.modelName) ?: return@mapNotNull null
             val key = resolved.apiKey ?: return@mapNotNull null
             if (key.key.isBlank()) return@mapNotNull null
+            // 指向本机网关自身的候选跳过，避免自连回环
+            if (isSelfGatewayUrl(resolved.provider.baseUrl, settings.lanPort.value)) return@mapNotNull null
             // 模型配置行可能已被删除，此时退回空配置继续路由
             val model = resolved.model
                 ?: ModelEntity(providerId = resolved.provider.id, name = route.modelName)
@@ -407,13 +417,19 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         val publisher = StreamPublisher()
         sendJob = viewModelScope.launch {
             var failed: String? = null
-            smartExecutor.stream(candidates, timeoutMs).collect { ev ->
-                when (ev) {
-                    is SmartEvent.Delta -> publisher.delta(ev.text)
-                    is SmartEvent.ReasoningDelta -> publisher.reasoning(ev.text)
-                    is SmartEvent.Failed -> failed = ev.message
-                    is SmartEvent.Trying, SmartEvent.Done -> Unit
+            try {
+                smartExecutor.stream(candidates, timeoutMs).collect { ev ->
+                    when (ev) {
+                        is SmartEvent.Delta -> publisher.delta(ev.text)
+                        is SmartEvent.ReasoningDelta -> publisher.reasoning(ev.text)
+                        is SmartEvent.Failed -> failed = ev.message
+                        is SmartEvent.Trying, SmartEvent.Done -> Unit
+                    }
                 }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                failed = e.message ?: e.javaClass.simpleName
             }
             finishStreaming(convId, publisher, failed)
         }

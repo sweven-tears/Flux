@@ -8,6 +8,7 @@ import cn.luoluna.sweven.ai.data.db.ProviderDao
 import cn.luoluna.sweven.ai.data.db.SmartRouteDao
 import cn.luoluna.sweven.ai.data.repo.ModelRouter
 import cn.luoluna.sweven.ai.data.repo.SmartAi
+import cn.luoluna.sweven.ai.data.repo.isSelfGatewayUrl
 import cn.luoluna.sweven.ai.net.ChatJson
 import cn.luoluna.sweven.ai.net.ProviderClient
 import cn.luoluna.sweven.ai.net.applyBuiltinTools
@@ -31,6 +32,7 @@ import io.ktor.server.routing.get
 import io.ktor.server.routing.post
 import io.ktor.server.routing.routing
 import io.ktor.utils.io.writeStringUtf8
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withContext
@@ -305,6 +307,8 @@ class LanServer(
             val resolved = router.resolveById(route.providerId, route.modelName) ?: continue
             val apiKey = resolved.apiKey ?: continue
             if (apiKey.key.isBlank()) continue
+            // 指向本机网关自身的候选直接跳过，避免自连回环
+            if (isSelfGatewayUrl(resolved.provider.baseUrl, port)) continue
             // 模型配置行可能已被删除，此时退回空配置继续路由
             val model = resolved.model
                 ?: ModelEntity(providerId = resolved.provider.id, name = route.modelName)
@@ -334,15 +338,18 @@ class LanServer(
                 return
             }
 
-            // 流式候选：限时建立连接，超时取消并尝试下一个
-            val call = client.newStreamingCall(resolved.provider.baseUrl, apiKey.key, payload, extraHeaders)
-            val upstream = withTimeoutOrNull(timeoutMs) {
-                withContext(Dispatchers.IO) { call.execute() }
-            }
-            if (upstream == null) {
-                call.cancel()
+            // 流式候选：限时建立连接，超时或连接失败（拒绝/DNS/坏地址）均取消并尝试下一个
+            val upstream = try {
+                val call = client.newStreamingCall(resolved.provider.baseUrl, apiKey.key, payload, extraHeaders)
+                withTimeoutOrNull(timeoutMs) {
+                    withContext(Dispatchers.IO) { call.execute() }
+                }.also { if (it == null) call.cancel() }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
                 continue
             }
+            if (upstream == null) continue
             if (!upstream.isSuccessful) {
                 client.readBody(upstream)
                 upstream.close()

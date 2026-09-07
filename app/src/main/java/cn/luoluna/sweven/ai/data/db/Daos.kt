@@ -168,6 +168,16 @@ interface ConversationDao {
     @Query("UPDATE conversations SET systemPrompt = :prompt WHERE id = :id")
     suspend fun setSystemPrompt(id: Long, prompt: String?)
 
+    /** 全局搜索：会话标题或任一条消息内容命中即返回（不搜 imagesJson，避开 base64 噪声），按最近活跃排序 */
+    @Query(
+        "SELECT DISTINCT conversations.* FROM conversations " +
+            "LEFT JOIN messages ON messages.conversationId = conversations.id " +
+            "WHERE conversations.title LIKE '%' || :query || '%' " +
+            "OR messages.content LIKE '%' || :query || '%' " +
+            "ORDER BY conversations.updatedAt DESC"
+    )
+    suspend fun search(query: String): List<ConversationEntity>
+
     /** 分组内无消息、无系统提示词的空会话（新建对话前复用它，保证每组只有一个空窗口） */
     @Query(
         "SELECT * FROM conversations WHERE " +
@@ -246,6 +256,13 @@ interface MessageDao {
 
     @Insert
     suspend fun insert(m: MessageEntity): Long
+
+    /** 会话内首条命中搜索词的消息内容，供搜索结果展示命中片段 */
+    @Query(
+        "SELECT content FROM messages WHERE conversationId = :conversationId " +
+            "AND content LIKE '%' || :query || '%' ORDER BY id ASC LIMIT 1"
+    )
+    suspend fun firstMatchContent(conversationId: Long, query: String): String?
 
     @Delete
     suspend fun delete(m: MessageEntity)

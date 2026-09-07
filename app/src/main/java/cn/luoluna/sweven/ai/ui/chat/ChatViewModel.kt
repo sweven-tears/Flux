@@ -41,13 +41,17 @@ import cn.luoluna.sweven.ai.net.buildMessagesJson
 import cn.luoluna.sweven.ai.net.mergeCustomBody
 import cn.luoluna.sweven.ai.net.parseCustomHeaders
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.debounce
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
@@ -77,6 +81,9 @@ data class DrawerState(
     val presetsByFolder: Map<Long, List<PresetEntity>> = emptyMap(),
     val conversationsByFolder: Map<Long?, List<ConversationEntity>> = emptyMap(),
 )
+
+/** 会话搜索命中条目：标题命中时 snippet 为 null，否则为首条命中消息的内容片段 */
+data class ConversationHit(val conversation: ConversationEntity, val snippet: String?)
 
 class ChatViewModel(app: Application) : AndroidViewModel(app) {
 
@@ -192,6 +199,42 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
 
     private val _error = MutableStateFlow<String?>(null)
     val error: StateFlow<String?> = _error
+
+    // ---- 会话搜索 ----
+
+    private val _searchQuery = MutableStateFlow("")
+    val searchQuery: StateFlow<String> = _searchQuery
+
+    fun setSearchQuery(query: String) {
+        _searchQuery.value = query
+    }
+
+    /** 全局搜索结果：标题或消息内容命中；标题未命中时附首条命中消息片段 */
+    @OptIn(FlowPreview::class)
+    val searchResults: StateFlow<List<ConversationHit>> =
+        _searchQuery
+            .debounce(300)
+            .map { it.trim() }
+            .distinctUntilChanged()
+            .flatMapLatest { q ->
+                if (q.isEmpty()) {
+                    flowOf(emptyList())
+                } else {
+                    flow {
+                        emit(
+                            conversationDao.search(q).map { conv ->
+                                val snippet = if (conv.title.contains(q, ignoreCase = true)) {
+                                    null
+                                } else {
+                                    messageDao.firstMatchContent(conv.id, q)
+                                }
+                                ConversationHit(conv, snippet)
+                            }
+                        )
+                    }
+                }
+            }
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     private var sendJob: Job? = null
 
@@ -558,6 +601,45 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
             }
             conversationDao.touch(convId, System.currentTimeMillis())
             val target = currentTarget.value ?: return@launch
+            startStreaming(convId, target)
+        }
+    }
+
+    /**
+     * 编辑并重发：删除原用户消息及其后全部消息，以新内容重新发送。
+     * 原消息的图片附件以 data URL 形式保留（已压缩过，不再处理），新选图片走正常压缩。
+     */
+    fun editAndResend(
+        message: MessageEntity,
+        newText: String,
+        keepDataUrls: List<String>,
+        newImageUris: List<Uri>,
+    ) {
+        val convId = message.conversationId
+        if (convId != currentId.value) return
+        if (newText.isBlank() && keepDataUrls.isEmpty() && newImageUris.isEmpty()) return
+        if (_streaming.value) {
+            _error.value = "上一条回复尚未结束，请先停止或等待完成"
+            return
+        }
+        val target = currentTarget.value
+        if (target == null) {
+            _error.value = "请先选择模型"
+            return
+        }
+        viewModelScope.launch {
+            cancelStreamingDiscard()
+            messageDao.deleteFromInclusive(convId, message.id)
+            val newImages = newImageUris.mapNotNull { ChatImages.uriToDataUrl(getApplication(), it) }
+            messageDao.insert(
+                MessageEntity(
+                    conversationId = convId,
+                    role = Role.USER,
+                    content = newText,
+                    imagesJson = MessageEntity.imagesJsonOf(keepDataUrls + newImages),
+                )
+            )
+            conversationDao.touch(convId, System.currentTimeMillis())
             startStreaming(convId, target)
         }
     }

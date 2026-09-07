@@ -17,6 +17,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.AccountTree
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Web
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -40,15 +41,16 @@ import androidx.compose.ui.window.DialogProperties
 import cn.luoluna.sweven.ai.data.db.MessageEntity
 import cn.luoluna.sweven.ai.data.db.Role
 
-/** 「更多」弹层的动作集合 */
+/** 「更多」弹层的动作集合；onEdit 仅用户消息传入（编辑并重发） */
 data class MessageActions(
     val onFreeCopy: () -> Unit,
     val onWebRender: () -> Unit,
+    val onEdit: (() -> Unit)? = null,
     val onBranch: () -> Unit,
     val onDelete: () -> Unit,
 )
 
-/** 消息「更多」弹层：自由选择复制 / 网页视图渲染 / 创建分支 / 删除 */
+/** 消息「更多」弹层：自由选择复制 / 编辑并重发（仅用户消息）/ 网页视图渲染 / 创建分支 / 删除 */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun MessageActionSheet(
@@ -65,6 +67,11 @@ fun MessageActionSheet(
             )
             MessageActionRow(Icons.Filled.ContentCopy, "复制（自由选择）") {
                 onDismiss(); actions.onFreeCopy()
+            }
+            if (message.role == Role.USER && actions.onEdit != null) {
+                MessageActionRow(Icons.Filled.Edit, "编辑并重发") {
+                    onDismiss(); actions.onEdit?.invoke()
+                }
             }
             MessageActionRow(Icons.Filled.Web, "网页视图渲染") {
                 onDismiss(); actions.onWebRender()

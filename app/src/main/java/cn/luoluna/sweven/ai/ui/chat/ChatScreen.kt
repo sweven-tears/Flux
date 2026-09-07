@@ -55,6 +55,7 @@ import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Psychology
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DropdownMenu
@@ -174,6 +175,18 @@ fun ChatScreen(
     var deleteMessageTarget by remember { mutableStateOf<MessageEntity?>(null) }
     var thinkMenuOpen by remember { mutableStateOf(false) }
     var systemPromptOpen by remember { mutableStateOf(false) }
+    // 消息编辑态：正在编辑的原消息 + 保留的原图（已是 data URL，不再压缩）
+    var editingMessage by remember { mutableStateOf<MessageEntity?>(null) }
+    var editAttachments by remember { mutableStateOf(listOf<String>()) }
+
+    val searchQuery by vm.searchQuery.collectAsStateWithLifecycle()
+    val searchResults by vm.searchResults.collectAsStateWithLifecycle()
+
+    // 切换会话时退出编辑态，避免把编辑内容发到别的会话
+    LaunchedEffect(current?.id) {
+        editingMessage = null
+        editAttachments = emptyList()
+    }
 
     val pickImages = rememberLauncherForActivityResult(
         ActivityResultContracts.PickMultipleVisualMedia(maxItems = 4)
@@ -207,12 +220,43 @@ fun ChatScreen(
                         scope.launch { drawerState.close() }
                     }) { Icon(Icons.Filled.Add, contentDescription = "新建对话") }
                 }
+                OutlinedTextField(
+                    value = searchQuery,
+                    onValueChange = { vm.setSearchQuery(it) },
+                    placeholder = {
+                        Text("搜索对话与消息…", style = MaterialTheme.typography.bodySmall)
+                    },
+                    leadingIcon = {
+                        Icon(
+                            Icons.Filled.Search,
+                            contentDescription = null,
+                            modifier = Modifier.size(18.dp),
+                        )
+                    },
+                    trailingIcon = {
+                        if (searchQuery.isNotEmpty()) {
+                            IconButton(onClick = { vm.setSearchQuery("") }) {
+                                Icon(
+                                    Icons.Filled.Close,
+                                    contentDescription = "清空搜索",
+                                    modifier = Modifier.size(18.dp),
+                                )
+                            }
+                        }
+                    },
+                    singleLine = true,
+                    shape = RoundedCornerShape(24.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 12.dp, vertical = 4.dp),
+                )
                 // 分组横向 tab：「聊天」（默认分组）+ 各文件夹
                 LaunchedEffect(drawer.folders, selectedFolderTab) {
                     if (selectedFolderTab != null && drawer.folders.none { it.id == selectedFolderTab }) {
                         selectedFolderTab = null
                     }
                 }
+                if (searchQuery.isBlank()) {
                 Row(
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                     modifier = Modifier
@@ -327,6 +371,34 @@ fun ChatScreen(
                         }
                     }
                     item(key = "bottom-space") { Spacer(Modifier.height(24.dp)) }
+                }
+                } else {
+                    // 搜索模式：全局命中结果（标题或消息内容），忽略文件夹分组
+                    LazyColumn(Modifier.fillMaxWidth().weight(1f)) {
+                        items(searchResults, key = { it.conversation.id }) { hit ->
+                            SearchHitItem(
+                                hit = hit,
+                                folderName = drawer.folders
+                                    .firstOrNull { it.id == hit.conversation.folderId }?.name,
+                                selected = hit.conversation.id == current?.id,
+                                onClick = {
+                                    vm.selectConversation(hit.conversation.id)
+                                    scope.launch { drawerState.close() }
+                                },
+                            )
+                        }
+                        if (searchResults.isEmpty()) {
+                            item(key = "no-result") {
+                                Text(
+                                    "没有匹配的对话",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
+                                )
+                            }
+                        }
+                        item(key = "search-bottom-space") { Spacer(Modifier.height(24.dp)) }
+                    }
                 }
                 HorizontalDivider()
                 NavigationDrawerItem(
@@ -492,14 +564,47 @@ fun ChatScreen(
                     }
                 }
 
-                // 待发送附件
-                if (attachments.isNotEmpty()) {
+                // 编辑态提示条：发送后将替换原消息并重发
+                if (editingMessage != null) {
+                    Surface(
+                        color = MaterialTheme.colorScheme.secondaryContainer,
+                        shape = RoundedCornerShape(10.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 12.dp, vertical = 4.dp),
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.padding(start = 12.dp),
+                        ) {
+                            Text(
+                                "正在编辑消息，发送后将替换原消息并重发",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.onSecondaryContainer,
+                                modifier = Modifier.weight(1f),
+                            )
+                            IconButton(onClick = {
+                                editingMessage = null
+                                editAttachments = emptyList()
+                                input = ""
+                            }) { Icon(Icons.Filled.Close, contentDescription = "取消编辑") }
+                        }
+                    }
+                }
+
+                // 待发送附件（编辑态先列保留的原图，再列新选图片）
+                if (editAttachments.isNotEmpty() || attachments.isNotEmpty()) {
                     Row(
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
                         modifier = Modifier
                             .fillMaxWidth()
                             .padding(horizontal = 12.dp, vertical = 4.dp),
                     ) {
+                        editAttachments.forEach { url ->
+                            DataUrlThumb(url = url, onRemove = {
+                                editAttachments = editAttachments - url
+                            })
+                        }
                         attachments.forEach { uri ->
                             AttachmentThumb(uri = uri, onRemove = {
                                 attachments = attachments - uri
@@ -579,13 +684,22 @@ fun ChatScreen(
                     } else {
                         FilledIconButton(
                             onClick = {
+                                val editing = editingMessage
                                 val text = input
-                                val images = attachments
+                                val newUris = attachments
                                 input = ""
                                 attachments = emptyList()
-                                vm.send(text, images)
+                                if (editing != null) {
+                                    val keepImages = editAttachments
+                                    editAttachments = emptyList()
+                                    editingMessage = null
+                                    vm.editAndResend(editing, text, keepImages, newUris)
+                                } else {
+                                    vm.send(text, newUris)
+                                }
                             },
-                            enabled = input.isNotBlank() || attachments.isNotEmpty(),
+                            enabled = input.isNotBlank() || attachments.isNotEmpty() ||
+                                editAttachments.isNotEmpty(),
                         ) { Icon(Icons.AutoMirrored.Filled.Send, contentDescription = "发送") }
                     }
                 }
@@ -720,6 +834,15 @@ fun ChatScreen(
             actions = MessageActions(
                 onFreeCopy = { freeCopyMessage = msg },
                 onWebRender = { webRenderMessage = msg },
+                onEdit = if (msg.role == Role.USER) {
+                    {
+                        input = msg.content
+                        editAttachments = msg.images
+                        editingMessage = msg
+                    }
+                } else {
+                    null
+                },
                 onBranch = { vm.branchConversation(msg) },
                 onDelete = { deleteMessageTarget = msg },
             ),
@@ -1110,6 +1233,27 @@ private fun AttachmentThumb(uri: android.net.Uri, onRemove: () -> Unit) {
     }
 }
 
+/** 编辑态保留的原图附件（已是压缩过的 data URL，直接解码展示） */
+@Composable
+private fun DataUrlThumb(url: String, onRemove: () -> Unit) {
+    val bitmap = rememberDataUrlBitmap(url).value
+    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+        Surface(shape = RoundedCornerShape(8.dp)) {
+            if (bitmap != null) {
+                androidx.compose.foundation.Image(
+                    bitmap = bitmap,
+                    contentDescription = null,
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier.size(72.dp),
+                )
+            } else {
+                Surface(color = MaterialTheme.colorScheme.surfaceVariant, modifier = Modifier.size(72.dp)) {}
+            }
+        }
+        TextButton(onClick = onRemove) { Text("移除", style = MaterialTheme.typography.labelSmall) }
+    }
+}
+
 private fun copyText(context: Context, text: String) {
     val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
     cm.setPrimaryClip(ClipData.newPlainText("phoneRouter", text))
@@ -1203,6 +1347,52 @@ private fun PresetDrawerItem(
                 contentDescription = "编辑预设",
                 tint = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.size(16.dp),
+            )
+        }
+    }
+}
+
+/** 搜索结果项：会话标题 + 命中片段/所在文件夹 */
+@Composable
+private fun SearchHitItem(
+    hit: ConversationHit,
+    folderName: String?,
+    selected: Boolean,
+    onClick: () -> Unit,
+) {
+    val snippet = hit.snippet
+    val subtitle = when {
+        snippet != null -> snippet.replace('\n', ' ').take(60) +
+            (folderName?.let { "  ·  $it" } ?: "")
+        folderName != null -> "「$folderName」中的对话"
+        else -> "标题命中"
+    }
+    Surface(
+        color = if (selected) {
+            MaterialTheme.colorScheme.secondaryContainer
+        } else {
+            androidx.compose.ui.graphics.Color.Transparent
+        },
+        shape = RoundedCornerShape(12.dp),
+        modifier = Modifier
+            .padding(horizontal = 8.dp)
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .clickable(onClick = onClick),
+    ) {
+        Column(Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
+            Text(
+                hit.conversation.title,
+                style = MaterialTheme.typography.bodyMedium,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Text(
+                subtitle,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
             )
         }
     }

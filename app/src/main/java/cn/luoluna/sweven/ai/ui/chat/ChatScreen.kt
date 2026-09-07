@@ -152,6 +152,8 @@ fun ChatScreen(
     val error by vm.error.collectAsStateWithLifecycle()
     val drawer by vm.drawerState.collectAsStateWithLifecycle()
     val thinkingDepth by vm.thinkingDepth.collectAsStateWithLifecycle()
+    // 未设置(null) 视为自动挡；菜单勾选与图标状态都按生效档位判断
+    val effectiveThinkingDepth = thinkingDepth ?: ThinkingDepth.AUTO
 
     var pickerOpen by remember { mutableStateOf(false) }
     var attachments by remember { mutableStateOf(listOf<android.net.Uri>()) }
@@ -520,7 +522,7 @@ fun ChatScreen(
                                 Icon(
                                     Icons.Filled.Psychology,
                                     contentDescription = "思考深度",
-                                    tint = if (thinkingDepth != null && thinkingDepth != ThinkingDepth.OFF) {
+                                    tint = if (effectiveThinkingDepth != ThinkingDepth.OFF) {
                                         MaterialTheme.colorScheme.primary
                                     } else {
                                         MaterialTheme.colorScheme.onSurfaceVariant
@@ -535,7 +537,7 @@ fun ChatScreen(
                                     DropdownMenuItem(
                                         text = { Text(label) },
                                         leadingIcon = {
-                                            if (thinkingDepth == value) {
+                                            if (effectiveThinkingDepth == value) {
                                                 Icon(
                                                     Icons.Filled.Check,
                                                     contentDescription = null,

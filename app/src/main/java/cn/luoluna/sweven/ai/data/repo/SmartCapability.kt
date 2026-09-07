@@ -94,7 +94,8 @@ fun featuresOfHistory(
     thinkingDepth: String?,
 ): SmartRequestFeatures = SmartRequestFeatures(
     needsImageInput = hasImageAttachment,
-    needsReasoning = !thinkingDepth.isNullOrBlank() && thinkingDepth != "off",
+    // 自动挡不注入思考参数，也不强制优先推理候选
+    needsReasoning = !thinkingDepth.isNullOrBlank() && thinkingDepth != "off" && thinkingDepth != "auto",
 )
 
 /** 候选能力与请求特征的匹配得分：模态匹配权重高（不匹配大概率直接报错），工具/推理次之 */

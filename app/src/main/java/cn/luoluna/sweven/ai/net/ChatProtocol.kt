@@ -165,6 +165,7 @@ fun parseErrorMessage(httpCode: Int, body: String?): String {
 
 /**
  * 将思考深度合入请求体（在自定义 body 合入前调用，customBody 可覆盖）：
+ * - auto：不注入任何思考参数，是否思考由模型/厂商默认行为决定
  * - off：Qwen 系注入 enable_thinking=false，其余家族不注入（默认即不思考）
  * - low / medium / high：注入 OpenAI 兼容的 reasoning_effort
  */
@@ -173,7 +174,7 @@ fun applyThinkingDepth(
     depth: String?,
     modelName: String,
 ): JsonObject {
-    if (depth.isNullOrBlank() || depth == ThinkingDepth.DEFAULT) return body
+    if (depth.isNullOrBlank() || depth == ThinkingDepth.DEFAULT || depth == ThinkingDepth.AUTO) return body
     val lower = modelName.lowercase()
     return when (depth) {
         ThinkingDepth.OFF -> {
@@ -197,6 +198,8 @@ fun applyThinkingDepth(
 
 /** 思考深度档位（存于 ConversationEntity.thinkingDepth） */
 object ThinkingDepth {
+    /** 自动：不注入任何思考参数（模型/厂商默认行为），未设置的会话同样按自动处理 */
+    const val AUTO = "auto"
     const val OFF = "off"
     const val LOW = "low"
     const val MEDIUM = "medium"
@@ -206,6 +209,7 @@ object ThinkingDepth {
 
     /** 输入框菜单的展示顺序与文案 */
     val LABELS = linkedMapOf(
+        AUTO to "自动",
         OFF to "关闭",
         LOW to "低",
         MEDIUM to "中",

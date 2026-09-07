@@ -429,6 +429,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
             return
         }
         val timeoutMs = settings.smartFirstTokenTimeoutSeconds.value * 1000L
+        val maxRounds = settings.smartRouteMaxRounds.value
 
         _error.value = null
         _streaming.value = true
@@ -438,7 +439,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         sendJob = viewModelScope.launch {
             var failed: String? = null
             try {
-                smartExecutor.stream(candidates, timeoutMs).collect { ev ->
+                smartExecutor.stream(candidates, timeoutMs, maxRounds).collect { ev ->
                     when (ev) {
                         is SmartEvent.Delta -> publisher.delta(ev.text)
                         is SmartEvent.ReasoningDelta -> publisher.reasoning(ev.text)

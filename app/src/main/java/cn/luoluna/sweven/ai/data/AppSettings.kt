@@ -26,6 +26,11 @@ class AppSettings(context: Context) {
         MutableStateFlow(prefs.getInt(KEY_SMART_FIRST_TOKEN_TIMEOUT, DEFAULT_SMART_FIRST_TOKEN_TIMEOUT))
     val smartFirstTokenTimeoutSeconds: StateFlow<Int> = _smartFirstTokenTimeoutSeconds
 
+    /** 智能路由轮巡次数：整条候选链尝试 N 轮仍全部失败才报「全部候选不可用」 */
+    private val _smartRouteMaxRounds =
+        MutableStateFlow(prefs.getInt(KEY_SMART_ROUTE_MAX_ROUNDS, DEFAULT_SMART_ROUTE_MAX_ROUNDS))
+    val smartRouteMaxRounds: StateFlow<Int> = _smartRouteMaxRounds
+
     /** 局域网代理是否开放 smartAi 聚合模型 */
     private val _lanSmartAiEnabled = MutableStateFlow(prefs.getBoolean(KEY_LAN_SMART_AI, false))
     val lanSmartAiEnabled: StateFlow<Boolean> = _lanSmartAiEnabled
@@ -55,6 +60,12 @@ class AppSettings(context: Context) {
         _smartFirstTokenTimeoutSeconds.value = v
     }
 
+    fun setSmartRouteMaxRounds(rounds: Int) {
+        val v = rounds.coerceIn(1, 5)
+        prefs.edit().putInt(KEY_SMART_ROUTE_MAX_ROUNDS, v).apply()
+        _smartRouteMaxRounds.value = v
+    }
+
     fun setLanSmartAiEnabled(enabled: Boolean) {
         prefs.edit().putBoolean(KEY_LAN_SMART_AI, enabled).apply()
         _lanSmartAiEnabled.value = enabled
@@ -63,11 +74,13 @@ class AppSettings(context: Context) {
     companion object {
         const val DEFAULT_PORT = 8787
         const val DEFAULT_SMART_FIRST_TOKEN_TIMEOUT = 30
+        const val DEFAULT_SMART_ROUTE_MAX_ROUNDS = 3
         private const val KEY_LAN_ENABLED = "lan_enabled"
         private const val KEY_LAN_PORT = "lan_port"
         private const val KEY_LAST_MODEL_PROVIDER = "last_model_provider_id"
         private const val KEY_LAST_MODEL_NAME = "last_model_name"
         private const val KEY_SMART_FIRST_TOKEN_TIMEOUT = "smart_first_token_timeout_seconds"
+        private const val KEY_SMART_ROUTE_MAX_ROUNDS = "smart_route_max_rounds"
         private const val KEY_LAN_SMART_AI = "lan_smart_ai_enabled"
     }
 }

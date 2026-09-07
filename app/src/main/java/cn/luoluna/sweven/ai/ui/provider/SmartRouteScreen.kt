@@ -91,8 +91,11 @@ fun SmartRouteScreen(onBack: () -> Unit) {
         .collectAsStateWithLifecycle(emptyList())
     val timeoutSeconds by remember { app.settings.smartFirstTokenTimeoutSeconds }
         .collectAsStateWithLifecycle(30)
+    val maxRounds by remember { app.settings.smartRouteMaxRounds }
+        .collectAsStateWithLifecycle(3)
 
     var showTimeoutEdit by remember { mutableStateOf(false) }
+    var showRoundsEdit by remember { mutableStateOf(false) }
     var showAddModels by remember { mutableStateOf(false) }
 
     // 拖拽换位后的本地顺序，落库完成前临时覆盖 Flow 数据
@@ -143,7 +146,8 @@ fun SmartRouteScreen(onBack: () -> Unit) {
                         Text("聚合模型 smartAi", style = MaterialTheme.typography.titleMedium)
                         Text(
                             "把候选模型整合成一个 smartAi。聊天时按下方顺序依次尝试：某模型失败" +
-                                "或 ${timeoutSeconds}s 内无输出，自动切换下一个；已开始输出后失败则不再切换。",
+                                "或 ${timeoutSeconds}s 内无输出，自动切换下一个；已开始输出后失败则不再切换。" +
+                                "整条候选链轮巡 $maxRounds 轮仍全部失败，才提示全部候选不可用。",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             modifier = Modifier.padding(top = 4.dp),
@@ -152,6 +156,10 @@ fun SmartRouteScreen(onBack: () -> Unit) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Text("首字超时", style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
                             TextButton(onClick = { showTimeoutEdit = true }) { Text("$timeoutSeconds 秒  修改") }
+                        }
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text("轮巡次数", style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
+                            TextButton(onClick = { showRoundsEdit = true }) { Text("$maxRounds 轮  修改") }
                         }
                     }
                 }
@@ -218,6 +226,25 @@ fun SmartRouteScreen(onBack: () -> Unit) {
             onConfirm = { v ->
                 v.trim().toIntOrNull()?.let { app.settings.setSmartFirstTokenTimeout(it) }
                 showTimeoutEdit = false
+            },
+        )
+    }
+    if (showRoundsEdit) {
+        TextFieldDialog(
+            title = "轮巡次数",
+            initial = maxRounds.toString(),
+            onDismiss = { showRoundsEdit = false },
+            onValidate = { v ->
+                val n = v.trim().toIntOrNull()
+                when {
+                    n == null -> "请输入数字"
+                    n < 1 || n > 5 -> "范围 1 ~ 5 轮"
+                    else -> null
+                }
+            },
+            onConfirm = { v ->
+                v.trim().toIntOrNull()?.let { app.settings.setSmartRouteMaxRounds(it) }
+                showRoundsEdit = false
             },
         )
     }

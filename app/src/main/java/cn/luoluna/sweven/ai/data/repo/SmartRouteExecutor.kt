@@ -38,106 +38,119 @@ sealed interface SmartEvent {
  * 智能路由回退链：按候选顺序发起流式请求，
  * 收到首个内容事件之前失败或超过 [firstTokenTimeoutMs] 均切换下一个候选；
  * 一旦开始输出内容，失败即终态（避免向用户重复输出半截内容）。
+ * 整条链尝试 [maxRounds] 轮仍全部失败才报「全部候选均不可用」，并附各候选最后一次的失败原因。
  */
 class SmartRouteExecutor(private val client: ProviderClient) {
 
     fun stream(
         candidates: List<SmartCandidate>,
         firstTokenTimeoutMs: Long,
+        maxRounds: Int,
     ): Flow<SmartEvent> = channelFlow {
-        var lastError = "没有可用的候选模型"
-        candidateLoop@ for ((index, candidate) in candidates.withIndex()) {
-            send(SmartEvent.Trying(index, candidate.label))
-
-            // 连接 + 等响应头阶段：整体受首字超时约束，超时直接 cancel 底层 Call；
-            // 连接被拒/超时/DNS 失败/坏地址等异常同样视为该候选失败，切换下一个
-            val call = try {
-                client.newStreamingCall(candidate.baseUrl, candidate.apiKey, candidate.body, candidate.extraHeaders)
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                lastError = "${candidate.label}：连接失败（${e.message ?: e.javaClass.simpleName}）"
-                continue@candidateLoop
-            }
-            val resp = try {
-                withTimeoutOrNull(firstTokenTimeoutMs) {
-                    withContext(Dispatchers.IO) { call.execute() }
-                }
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                call.cancel()
-                lastError = "${candidate.label}：连接失败（${e.message ?: e.javaClass.simpleName}）"
-                continue@candidateLoop
-            }
-            if (resp == null) {
-                call.cancel()
-                lastError = "${candidate.label}：${timeoutLabel(firstTokenTimeoutMs)} 内未建立连接"
-                continue@candidateLoop
-            }
-
-            val events = Channel<ChatEvent>(Channel.UNLIMITED)
-            val producer = launch(Dispatchers.IO) {
-                try {
-                    client.chatEvents(resp).collect { events.send(it) }
-                } catch (e: Exception) {
-                    if (e is kotlinx.coroutines.CancellationException) throw e
-                    events.send(ChatEvent.Failed(e.message ?: e.javaClass.simpleName))
-                } finally {
-                    events.close()
-                }
-            }
-            var gotContent = false
-            var success = false
-            try {
-                while (true) {
-                    val ev: ChatEvent? = if (gotContent) {
-                        // 已开始输出：不设超时，等待流自然结束
-                        events.receiveCatching().getOrNull()
-                    } else {
-                        withTimeoutOrNull(firstTokenTimeoutMs) { events.receive() }
-                    }
-                    when (ev) {
-                        null -> {
-                            if (gotContent) {
-                                success = true
-                            } else {
-                                lastError = "${candidate.label}：${timeoutLabel(firstTokenTimeoutMs)} 内无输出"
-                            }
-                            break
-                        }
-                        is ChatEvent.Delta -> {
-                            gotContent = true
-                            send(SmartEvent.Delta(ev.text))
-                        }
-                        is ChatEvent.ReasoningDelta -> {
-                            gotContent = true
-                            send(SmartEvent.ReasoningDelta(ev.text))
-                        }
-                        is ChatEvent.Failed -> {
-                            lastError = "${candidate.label}：${ev.message}"
-                            if (gotContent) {
-                                send(SmartEvent.Failed(lastError))
-                                return@channelFlow
-                            }
-                            break
-                        }
-                        ChatEvent.Done -> {
-                            success = true
-                            break
-                        }
-                    }
-                }
-            } finally {
-                producer.cancel()
-                if (!success) call.cancel()
-            }
-            if (success) {
-                send(SmartEvent.Done)
-                return@channelFlow
-            }
+        if (candidates.isEmpty()) {
+            send(SmartEvent.Failed("没有可用的候选模型"))
+            return@channelFlow
         }
-        send(SmartEvent.Failed(lastError))
+        val rounds = maxRounds.coerceAtLeast(1)
+        // 每个候选保留最后一次失败原因（跨轮覆盖），终态汇总展示
+        val lastErrors = LinkedHashMap<String, String>()
+        for (round in 1..rounds) {
+            candidateLoop@ for ((index, candidate) in candidates.withIndex()) {
+                send(SmartEvent.Trying(index, candidate.label))
+
+                // 连接 + 等响应头阶段：整体受首字超时约束，超时直接 cancel 底层 Call；
+                // 连接被拒/超时/DNS 失败/坏地址等异常同样视为该候选失败，切换下一个
+                val call = try {
+                    client.newStreamingCall(candidate.baseUrl, candidate.apiKey, candidate.body, candidate.extraHeaders)
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    lastErrors[candidate.label] = "连接失败（${e.message ?: e.javaClass.simpleName}）"
+                    continue@candidateLoop
+                }
+                val resp = try {
+                    withTimeoutOrNull(firstTokenTimeoutMs) {
+                        withContext(Dispatchers.IO) { call.execute() }
+                    }
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    call.cancel()
+                    lastErrors[candidate.label] = "连接失败（${e.message ?: e.javaClass.simpleName}）"
+                    continue@candidateLoop
+                }
+                if (resp == null) {
+                    call.cancel()
+                    lastErrors[candidate.label] = "${timeoutLabel(firstTokenTimeoutMs)} 内未建立连接"
+                    continue@candidateLoop
+                }
+
+                val events = Channel<ChatEvent>(Channel.UNLIMITED)
+                val producer = launch(Dispatchers.IO) {
+                    try {
+                        client.chatEvents(resp).collect { events.send(it) }
+                    } catch (e: Exception) {
+                        if (e is kotlinx.coroutines.CancellationException) throw e
+                        events.send(ChatEvent.Failed(e.message ?: e.javaClass.simpleName))
+                    } finally {
+                        events.close()
+                    }
+                }
+                var gotContent = false
+                var success = false
+                try {
+                    while (true) {
+                        val ev: ChatEvent? = if (gotContent) {
+                            // 已开始输出：不设超时，等待流自然结束
+                            events.receiveCatching().getOrNull()
+                        } else {
+                            withTimeoutOrNull(firstTokenTimeoutMs) { events.receive() }
+                        }
+                        when (ev) {
+                            null -> {
+                                if (gotContent) {
+                                    success = true
+                                } else {
+                                    lastErrors[candidate.label] = "${timeoutLabel(firstTokenTimeoutMs)} 内无输出"
+                                }
+                                break
+                            }
+                            is ChatEvent.Delta -> {
+                                gotContent = true
+                                send(SmartEvent.Delta(ev.text))
+                            }
+                            is ChatEvent.ReasoningDelta -> {
+                                gotContent = true
+                                send(SmartEvent.ReasoningDelta(ev.text))
+                            }
+                            is ChatEvent.Failed -> {
+                                if (gotContent) {
+                                    // 已开始输出后中断：不再回退，直接终态
+                                    send(SmartEvent.Failed("${candidate.label}：${ev.message}"))
+                                    return@channelFlow
+                                }
+                                lastErrors[candidate.label] = ev.message
+                                break
+                            }
+                            ChatEvent.Done -> {
+                                success = true
+                                break
+                            }
+                        }
+                    }
+                } finally {
+                    producer.cancel()
+                    if (!success) call.cancel()
+                }
+                if (success) {
+                    send(SmartEvent.Done)
+                    return@channelFlow
+                }
+            }
+            // 一轮跑完仍未成功，继续下一轮（首轮/末轮不做区分，由外层 for 控制）
+        }
+        val summary = lastErrors.entries.joinToString("；") { "${it.key}：${it.value}" }
+        send(SmartEvent.Failed("全部 ${candidates.size} 个候选均不可用（已尝试 $rounds 轮）：$summary"))
     }
 
     private fun timeoutLabel(ms: Long) = "${ms / 1000}s"

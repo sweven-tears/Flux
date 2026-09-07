@@ -5,6 +5,7 @@ import cn.luoluna.sweven.ai.data.db.AuthDeviceDao
 import cn.luoluna.sweven.ai.data.db.ModelDao
 import cn.luoluna.sweven.ai.data.db.ModelEntity
 import cn.luoluna.sweven.ai.data.db.ProviderDao
+import cn.luoluna.sweven.ai.data.db.ProviderEntity
 import cn.luoluna.sweven.ai.data.db.SmartRouteDao
 import cn.luoluna.sweven.ai.data.repo.ModelRouter
 import cn.luoluna.sweven.ai.data.repo.SmartAi
@@ -37,8 +38,11 @@ import io.ktor.server.routing.post
 import io.ktor.server.routing.routing
 import io.ktor.utils.io.writeStringUtf8
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.JsonArray
@@ -46,6 +50,7 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.put
+import kotlin.coroutines.coroutineContext
 
 /**
  * 局域网聚合路由服务器（OpenAI 兼容协议）：
@@ -310,6 +315,7 @@ class LanServer(
         }
         val stream = streamFlagOf(rawBody)
         val timeoutMs = settings.smartFirstTokenTimeoutSeconds.value * 1000L
+        val maxRounds = settings.smartRouteMaxRounds.value.coerceAtLeast(1)
 
         // 先解析并校验全部候选，再按请求特征稳定排序：
         // 带图/视频输入优先多模态候选，带 tools 优先支持工具的，其余保持原顺序兜底
@@ -328,65 +334,117 @@ class LanServer(
             features,
         ) { it.model }
 
-        for (candidate in prepared) {
-            var payload = buildChatBody(
-                modelName = candidate.model.name,
-                messages = messages,
-                stream = stream,
-                defaults = candidate.advancedParams,
-                base = rawBody,
-            )
-            payload = mergeCustomBody(payload, candidate.model.customBody)
-            if (candidate.provider.presetId == "gemini") {
-                payload = applyBuiltinTools(
-                    payload,
-                    candidate.model.builtinGoogleSearch,
-                    candidate.model.builtinUrlContext,
-                    candidate.model.builtinImageGen,
+        // 轮巡 N 轮：每轮按顺序尝试全部候选，全部失败才进入下一轮；
+        // 每个候选保留最后一次失败原因，轮巡结束汇总返回，明确「全部候选不可用」
+        val lastErrors = LinkedHashMap<String, String>()
+        val timeoutLabel = "${timeoutMs / 1000}s"
+        for (round in 1..maxRounds) {
+            for (candidate in prepared) {
+                var payload = buildChatBody(
+                    modelName = candidate.model.name,
+                    messages = messages,
+                    stream = stream,
+                    defaults = candidate.advancedParams,
+                    base = rawBody,
                 )
-            }
-            val extraHeaders = parseCustomHeaders(candidate.model.customHeaders)
+                payload = mergeCustomBody(payload, candidate.model.customBody)
+                if (candidate.provider.presetId == "gemini") {
+                    payload = applyBuiltinTools(
+                        payload,
+                        candidate.model.builtinGoogleSearch,
+                        candidate.model.builtinUrlContext,
+                        candidate.model.builtinImageGen,
+                    )
+                }
+                val extraHeaders = parseCustomHeaders(candidate.model.customHeaders)
 
-            if (!stream) {
-                // 非流式候选：带读超时的完整请求，成功即转发
-                val resp = client.chatOnce(candidate.provider.baseUrl, candidate.apiKey, payload, extraHeaders)
-                    .getOrNull() ?: continue
-                respondText(resp.toString(), ContentType.Application.Json)
-                return
-            }
+                if (!stream) {
+                    // 非流式候选：带读超时的完整请求，成功即转发
+                    val result = client.chatOnce(candidate.provider.baseUrl, candidate.apiKey, payload, extraHeaders)
+                    val resp = result.getOrNull()
+                    if (resp == null) {
+                        lastErrors[candidate.label] = result.exceptionOrNull()?.message ?: "请求失败"
+                        continue
+                    }
+                    respondText(resp.toString(), ContentType.Application.Json)
+                    return
+                }
 
-            // 流式候选：限时建立连接，超时或连接失败（拒绝/DNS/坏地址）均取消并尝试下一个
-            val upstream = try {
-                val call = client.newStreamingCall(candidate.provider.baseUrl, candidate.apiKey, payload, extraHeaders)
-                withTimeoutOrNull(timeoutMs) {
-                    withContext(Dispatchers.IO) { call.execute() }
-                }.also { if (it == null) call.cancel() }
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                continue
-            }
-            if (upstream == null) continue
-            if (!upstream.isSuccessful) {
-                client.readBody(upstream)
-                upstream.close()
-                continue
-            }
-            try {
-                respondBytesWriter(contentType = ContentType("text", "event-stream")) {
-                    client.ssePayloads(upstream).collect { payloadLine ->
-                        writeStringUtf8("data: $payloadLine\n\n")
+                // 流式候选：限时建立连接，超时或连接失败（拒绝/DNS/坏地址）均取消并尝试下一个
+                val upstream = try {
+                    val call = client.newStreamingCall(candidate.provider.baseUrl, candidate.apiKey, payload, extraHeaders)
+                    withTimeoutOrNull(timeoutMs) {
+                        withContext(Dispatchers.IO) { call.execute() }
+                    }.also { if (it == null) call.cancel() }
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    lastErrors[candidate.label] = "连接失败（${e.message ?: e.javaClass.simpleName}）"
+                    continue
+                }
+                if (upstream == null) {
+                    lastErrors[candidate.label] = "$timeoutLabel 内未建立连接"
+                    continue
+                }
+                if (!upstream.isSuccessful) {
+                    client.readBody(upstream)
+                    upstream.close()
+                    lastErrors[candidate.label] = "上游 HTTP ${upstream.code}"
+                    continue
+                }
+
+                // 建连成功 ≠ 有输出：限时等首个 data 帧，超时同样切换下一个
+                val payloads = Channel<String>(Channel.UNLIMITED)
+                // ApplicationCall 不是 CoroutineScope，用请求自身的 coroutineContext 挂载生产者，
+                // 请求取消时随之取消
+                val producer = CoroutineScope(coroutineContext).launch(Dispatchers.IO) {
+                    try {
+                        client.ssePayloads(upstream).collect { payloads.send(it) }
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (e: Exception) {
+                        // 首帧前失败按无输出处理；首帧后失败让透传侧感知中断
+                        payloads.close(e)
+                    } finally {
+                        payloads.close()
+                    }
+                }
+                val firstPayload = try {
+                    withTimeoutOrNull(timeoutMs) { payloads.receiveCatching().getOrNull() }
+                } catch (e: CancellationException) {
+                    producer.cancel()
+                    upstream.close()
+                    throw e
+                }
+                if (firstPayload == null) {
+                    producer.cancel()
+                    upstream.close()
+                    lastErrors[candidate.label] = "$timeoutLabel 内无输出"
+                    continue
+                }
+                try {
+                    respondBytesWriter(contentType = ContentType("text", "event-stream")) {
+                        writeStringUtf8("data: $firstPayload\n\n")
+                        flush()
+                        for (payloadLine in payloads) {
+                            writeStringUtf8("data: $payloadLine\n\n")
+                            flush()
+                        }
+                        writeStringUtf8("data: [DONE]\n\n")
                         flush()
                     }
-                    writeStringUtf8("data: [DONE]\n\n")
-                    flush()
+                } finally {
+                    producer.cancel()
+                    upstream.close()
                 }
-            } finally {
-                upstream.close()
+                return
             }
-            return
         }
-        respondOpenAiError(HttpStatusCode.BadGateway, "smartAi 全部候选模型请求失败")
+        val summary = lastErrors.entries.joinToString("；") { "${it.key}：${it.value}" }
+        respondOpenAiError(
+            HttpStatusCode.BadGateway,
+            "smartAi 全部 ${prepared.size} 个候选均不可用（已尝试 $maxRounds 轮）：$summary",
+        )
     }
 
     private suspend fun ApplicationCall.respondOpenAiError(status: HttpStatusCode, message: String) {
@@ -406,8 +464,11 @@ class LanServer(
 
 /** 已通过校验的 smartAi 候选（解析成功、有 Key、非自连），供排序后逐个尝试 */
 private data class SmartPrepared(
-    val provider: cn.luoluna.sweven.ai.data.db.ProviderEntity,
+    val provider: ProviderEntity,
     val apiKey: String,
     val model: ModelEntity,
     val advancedParams: AdvancedParams?,
-)
+) {
+    val label: String
+        get() = "${provider.alias}/${model.alias?.takeIf { it.isNotBlank() } ?: model.name}"
+}

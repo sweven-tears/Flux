@@ -1,5 +1,6 @@
 package cn.luoluna.sweven.ai.data.repo
 
+import cn.luoluna.sweven.ai.data.SmartModes
 import cn.luoluna.sweven.ai.data.db.ModelEntity
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
@@ -111,12 +112,46 @@ private fun matchScore(model: ModelEntity?, f: SmartRequestFeatures): Int {
     return score
 }
 
-/** 按请求特征对候选稳定排序：匹配得分高者排前，同分保持原顺序（sortOrder） */
+/**
+ * 按请求特征 + 健康桶对候选稳定排序：
+ * 桶优先（冷却/降权候选即使模态完全匹配也后置——踩坑成本是首字超时，远大于模态不匹配的快速报错），
+ * 桶内匹配得分高者排前，同分保持原顺序（sortOrder）。只排序不过滤，不满足特征的候选留在链尾兜底。
+ */
 fun <T> orderCandidates(
     items: List<T>,
     features: SmartRequestFeatures,
     modelOf: (T) -> ModelEntity?,
+    bucketOf: (T) -> Int = { 0 },
 ): List<T> {
     if (items.size <= 1) return items
-    return items.sortedByDescending { matchScore(modelOf(it), features) }
+    return items.sortedWith(
+        compareBy(
+            bucketOf,
+            { -matchScore(modelOf(it), features) },
+        )
+    )
+}
+
+/** 极速轮候选数量上限：限制速度未知候选的「学费」上界（被取消的尝试仍消耗上游输入 token） */
+const val SMART_FAST_ROUND_LIMIT = 3
+
+/**
+ * 极速轮候选：健康（未降桶）且速度未知/实测达标的候选，最多取前 [limit] 个。
+ * 已知慢的候选直接留给放宽轮，极速请求不在其身上开连接，避免重复浪费。
+ */
+inline fun <T> pickFastRound(
+    items: List<T>,
+    limit: Int,
+    bucketOf: (T) -> Int,
+    fastCapableOf: (T) -> Boolean,
+): List<T> = items.filter { bucketOf(it) == 0 && fastCapableOf(it) }.take(limit.coerceAtLeast(1))
+
+/**
+ * 按响应模式与轮次决定本轮首字超时：
+ * 极速模式仅首轮用极速档（一轮无成功后放宽到聊天档），聊天/随缘模式全轮同值
+ */
+fun firstTokenTimeoutMs(mode: String, round: Int, fastMs: Long, chatMs: Long, leisureMs: Long): Long = when {
+    mode == SmartModes.FAST && round <= 1 -> fastMs
+    mode == SmartModes.LEISURE -> leisureMs
+    else -> chatMs
 }

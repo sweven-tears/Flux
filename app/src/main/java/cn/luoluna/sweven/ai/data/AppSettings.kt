@@ -35,6 +35,31 @@ class AppSettings(context: Context) {
     private val _lanSmartAiEnabled = MutableStateFlow(prefs.getBoolean(KEY_LAN_SMART_AI, false))
     val lanSmartAiEnabled: StateFlow<Boolean> = _lanSmartAiEnabled
 
+    /** 本机（App 内聊天）响应模式：极速 / 聊天 / 随缘 */
+    private val _smartResponseMode =
+        MutableStateFlow(prefs.getString(KEY_SMART_RESPONSE_MODE, null)?.takeIf { SmartModes.isKnown(it) } ?: SmartModes.CHAT)
+    val smartResponseMode: StateFlow<String> = _smartResponseMode
+
+    /** 极速档首字超时（毫秒）：仅极速模式首轮使用，超时记「慢」并放宽到聊天档 */
+    private val _smartFastFirstTokenMs =
+        MutableStateFlow(prefs.getInt(KEY_SMART_FAST_FIRST_TOKEN, DEFAULT_SMART_FAST_FIRST_TOKEN))
+    val smartFastFirstTokenMs: StateFlow<Int> = _smartFastFirstTokenMs
+
+    /** 随缘档首字超时（秒）：随缘模式所有轮次使用 */
+    private val _smartLeisureFirstTokenSeconds =
+        MutableStateFlow(prefs.getInt(KEY_SMART_LEISURE_FIRST_TOKEN, DEFAULT_SMART_LEISURE_FIRST_TOKEN))
+    val smartLeisureFirstTokenSeconds: StateFlow<Int> = _smartLeisureFirstTokenSeconds
+
+    /** 智能路由冷却阈值：候选连续失败 N 次进入冷却（降桶垫底） */
+    private val _smartCooldownThreshold =
+        MutableStateFlow(prefs.getInt(KEY_SMART_COOLDOWN_THRESHOLD, DEFAULT_SMART_COOLDOWN_THRESHOLD))
+    val smartCooldownThreshold: StateFlow<Int> = _smartCooldownThreshold
+
+    /** 智能路由冷却时长（秒）：冷却期内候选垫底兜底，到期回中间桶半开试错 */
+    private val _smartCooldownSeconds =
+        MutableStateFlow(prefs.getInt(KEY_SMART_COOLDOWN_SECONDS, DEFAULT_SMART_COOLDOWN_SECONDS))
+    val smartCooldownSeconds: StateFlow<Int> = _smartCooldownSeconds
+
     fun setLanEnabled(enabled: Boolean) {
         prefs.edit().putBoolean(KEY_LAN_ENABLED, enabled).apply()
         _lanEnabled.value = enabled
@@ -71,10 +96,44 @@ class AppSettings(context: Context) {
         _lanSmartAiEnabled.value = enabled
     }
 
+    fun setSmartResponseMode(mode: String) {
+        if (!SmartModes.isKnown(mode)) return
+        prefs.edit().putString(KEY_SMART_RESPONSE_MODE, mode).apply()
+        _smartResponseMode.value = mode
+    }
+
+    fun setSmartFastFirstToken(ms: Int) {
+        val v = ms.coerceIn(500, 5000)
+        prefs.edit().putInt(KEY_SMART_FAST_FIRST_TOKEN, v).apply()
+        _smartFastFirstTokenMs.value = v
+    }
+
+    fun setSmartLeisureFirstToken(seconds: Int) {
+        val v = seconds.coerceIn(30, 600)
+        prefs.edit().putInt(KEY_SMART_LEISURE_FIRST_TOKEN, v).apply()
+        _smartLeisureFirstTokenSeconds.value = v
+    }
+
+    fun setSmartCooldownThreshold(n: Int) {
+        val v = n.coerceIn(1, 5)
+        prefs.edit().putInt(KEY_SMART_COOLDOWN_THRESHOLD, v).apply()
+        _smartCooldownThreshold.value = v
+    }
+
+    fun setSmartCooldownSeconds(seconds: Int) {
+        val v = seconds.coerceIn(10, 600)
+        prefs.edit().putInt(KEY_SMART_COOLDOWN_SECONDS, v).apply()
+        _smartCooldownSeconds.value = v
+    }
+
     companion object {
         const val DEFAULT_PORT = 8787
         const val DEFAULT_SMART_FIRST_TOKEN_TIMEOUT = 30
         const val DEFAULT_SMART_ROUTE_MAX_ROUNDS = 3
+        const val DEFAULT_SMART_FAST_FIRST_TOKEN = 2000
+        const val DEFAULT_SMART_LEISURE_FIRST_TOKEN = 120
+        const val DEFAULT_SMART_COOLDOWN_THRESHOLD = 2
+        const val DEFAULT_SMART_COOLDOWN_SECONDS = 60
         private const val KEY_LAN_ENABLED = "lan_enabled"
         private const val KEY_LAN_PORT = "lan_port"
         private const val KEY_LAST_MODEL_PROVIDER = "last_model_provider_id"
@@ -82,5 +141,10 @@ class AppSettings(context: Context) {
         private const val KEY_SMART_FIRST_TOKEN_TIMEOUT = "smart_first_token_timeout_seconds"
         private const val KEY_SMART_ROUTE_MAX_ROUNDS = "smart_route_max_rounds"
         private const val KEY_LAN_SMART_AI = "lan_smart_ai_enabled"
+        private const val KEY_SMART_RESPONSE_MODE = "smart_response_mode"
+        private const val KEY_SMART_FAST_FIRST_TOKEN = "smart_fast_first_token_ms"
+        private const val KEY_SMART_LEISURE_FIRST_TOKEN = "smart_leisure_first_token_seconds"
+        private const val KEY_SMART_COOLDOWN_THRESHOLD = "smart_cooldown_threshold"
+        private const val KEY_SMART_COOLDOWN_SECONDS = "smart_cooldown_seconds"
     }
 }

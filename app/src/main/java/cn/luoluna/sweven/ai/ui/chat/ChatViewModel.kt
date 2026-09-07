@@ -23,6 +23,8 @@ import cn.luoluna.sweven.ai.data.repo.SmartAggregateCapability
 import cn.luoluna.sweven.ai.data.repo.SmartAi
 import cn.luoluna.sweven.ai.data.repo.SmartCandidate
 import cn.luoluna.sweven.ai.data.repo.SmartEvent
+import cn.luoluna.sweven.ai.data.repo.SmartHealth
+import cn.luoluna.sweven.ai.data.repo.SmartPolicy
 import cn.luoluna.sweven.ai.data.repo.SmartRouteExecutor
 import cn.luoluna.sweven.ai.data.repo.aggregateCapability
 import cn.luoluna.sweven.ai.data.repo.featuresOfHistory
@@ -422,18 +424,34 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                 ?: ModelEntity(providerId = resolved.provider.id, name = route.modelName)
             SmartCandidate(
                 label = "${resolved.provider.alias}/${model.alias?.takeIf { it.isNotBlank() } ?: model.name}",
+                providerId = resolved.provider.id,
+                modelName = model.name,
                 baseUrl = resolved.provider.baseUrl,
                 apiKey = key.key,
                 extraHeaders = parseCustomHeaders(model.customHeaders),
                 body = buildRequestBody(resolved.provider, model, conversation, history),
             ) to model
         }
-        val candidates = orderCandidates(prepared, features) { it.second }.map { it.first }
+        // 健康桶整链取同一时刻：冷却/降权候选垫底，桶内按特征匹配排序
+        val now = System.currentTimeMillis()
+        val candidates = orderCandidates(
+            prepared,
+            features,
+            modelOf = { it.second },
+            bucketOf = { SmartHealth.bucket(it.first.providerId, it.first.modelName, now) },
+        ).map { it.first }
         if (candidates.isEmpty()) {
             _error.value = "smartAi 的候选模型均不可用（缺少 API Key 或已被删除）"
             return
         }
-        val timeoutMs = settings.smartFirstTokenTimeoutSeconds.value * 1000L
+        val policy = SmartPolicy(
+            mode = settings.smartResponseMode.value,
+            fastMs = settings.smartFastFirstTokenMs.value.toLong(),
+            chatMs = settings.smartFirstTokenTimeoutSeconds.value * 1000L,
+            leisureMs = settings.smartLeisureFirstTokenSeconds.value * 1000L,
+            cooldownThreshold = settings.smartCooldownThreshold.value,
+            cooldownMs = settings.smartCooldownSeconds.value * 1000L,
+        )
         val maxRounds = settings.smartRouteMaxRounds.value
 
         _error.value = null
@@ -444,7 +462,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         sendJob = viewModelScope.launch {
             var failed: String? = null
             try {
-                smartExecutor.stream(candidates, timeoutMs, maxRounds).collect { ev ->
+                smartExecutor.stream(candidates, policy, maxRounds).collect { ev ->
                     when (ev) {
                         is SmartEvent.Delta -> publisher.delta(ev.text)
                         is SmartEvent.ReasoningDelta -> publisher.reasoning(ev.text)

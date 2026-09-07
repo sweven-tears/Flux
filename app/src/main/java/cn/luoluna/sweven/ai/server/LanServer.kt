@@ -1,6 +1,7 @@
 package cn.luoluna.sweven.ai.server
 
 import cn.luoluna.sweven.ai.data.AppSettings
+import cn.luoluna.sweven.ai.data.SmartModes
 import cn.luoluna.sweven.ai.data.db.AuthDeviceDao
 import cn.luoluna.sweven.ai.data.db.ModelDao
 import cn.luoluna.sweven.ai.data.db.ModelEntity
@@ -9,10 +10,14 @@ import cn.luoluna.sweven.ai.data.db.ProviderEntity
 import cn.luoluna.sweven.ai.data.db.SmartRouteDao
 import cn.luoluna.sweven.ai.data.repo.ModelRouter
 import cn.luoluna.sweven.ai.data.repo.SmartAi
+import cn.luoluna.sweven.ai.data.repo.SmartHealth
+import cn.luoluna.sweven.ai.data.repo.SmartPolicy
 import cn.luoluna.sweven.ai.data.repo.aggregateCapability
 import cn.luoluna.sweven.ai.data.repo.featuresOfRequestBody
 import cn.luoluna.sweven.ai.data.repo.isSelfGatewayUrl
 import cn.luoluna.sweven.ai.data.repo.orderCandidates
+import cn.luoluna.sweven.ai.data.repo.pickFastRound
+import cn.luoluna.sweven.ai.data.repo.SMART_FAST_ROUND_LIMIT
 import cn.luoluna.sweven.ai.net.AdvancedParams
 import cn.luoluna.sweven.ai.net.ChatJson
 import cn.luoluna.sweven.ai.net.ProviderClient
@@ -108,7 +113,7 @@ class LanServer(
             }
             post("/v1/chat/completions") {
                 if (!call.authorize()) return@post
-                call.handleChatCompletion()
+                call.handleChatCompletion(settings.smartResponseMode.value)
             }
         }
     }
@@ -224,7 +229,7 @@ class LanServer(
         return JsonArray(list)
     }
 
-    private suspend fun ApplicationCall.handleChatCompletion() {
+    private suspend fun ApplicationCall.handleChatCompletion(mode: String) {
         val raw = try {
             receiveText()
         } catch (e: Exception) {
@@ -243,7 +248,7 @@ class LanServer(
             return
         }
         if (aggregateId == SmartAi.MODEL_NAME) {
-            handleSmartCompletion(body)
+            handleSmartCompletion(body, mode)
             return
         }
         val route = router.resolveByAggregateId(aggregateId)
@@ -319,8 +324,10 @@ class LanServer(
     /**
      * smartAi 聚合模型：按启用候选顺序回退。
      * 流式候选限时建立连接，成功后原样透传 SSE；非流式候选请求完整 JSON 后转发。
+     * 响应模式取自请求设备的 [SmartPolicy]（极速首轮只发实测达标候选，超时只记慢并放宽）；
+     * 每次尝试结果打点 [SmartHealth]，与 App 内聊天共享健康状态。
      */
-    private suspend fun ApplicationCall.handleSmartCompletion(rawBody: JsonObject) {
+    private suspend fun ApplicationCall.handleSmartCompletion(rawBody: JsonObject, mode: String) {
         if (!settings.lanSmartAiEnabled.value) {
             respondOpenAiError(
                 HttpStatusCode.NotFound,
@@ -339,12 +346,20 @@ class LanServer(
             return
         }
         val stream = streamFlagOf(rawBody)
-        val timeoutMs = settings.smartFirstTokenTimeoutSeconds.value * 1000L
+        val policy = SmartPolicy(
+            mode = mode,
+            fastMs = settings.smartFastFirstTokenMs.value.toLong(),
+            chatMs = settings.smartFirstTokenTimeoutSeconds.value * 1000L,
+            leisureMs = settings.smartLeisureFirstTokenSeconds.value * 1000L,
+            cooldownThreshold = settings.smartCooldownThreshold.value,
+            cooldownMs = settings.smartCooldownSeconds.value * 1000L,
+        )
         val maxRounds = settings.smartRouteMaxRounds.value.coerceAtLeast(1)
 
-        // 先解析并校验全部候选，再按请求特征稳定排序：
-        // 带图/视频输入优先多模态候选，带 tools 优先支持工具的，其余保持原顺序兜底
+        // 先解析并校验全部候选，再按请求特征 + 健康桶稳定排序：
+        // 冷却/降权候选垫底兜底，桶内带图/视频输入优先多模态候选、带 tools 优先支持工具的
         val features = featuresOfRequestBody(rawBody, messages)
+        val now = System.currentTimeMillis()
         val prepared = orderCandidates(
             routes.mapNotNull { route ->
                 val resolved = router.resolveById(route.providerId, route.modelName) ?: return@mapNotNull null
@@ -357,14 +372,53 @@ class LanServer(
                 SmartPrepared(resolved.provider, apiKey, model, resolved.advancedParams)
             },
             features,
-        ) { it.model }
+            modelOf = { it.model },
+            bucketOf = { SmartHealth.bucket(it.provider.id, it.model.name, now) },
+        )
 
         // 轮巡 N 轮：每轮按顺序尝试全部候选，全部失败才进入下一轮；
         // 每个候选保留最后一次失败原因，轮巡结束汇总返回，明确「全部候选不可用」
         val lastErrors = LinkedHashMap<String, String>()
-        val timeoutLabel = "${timeoutMs / 1000}s"
         for (round in 1..maxRounds) {
-            for (candidate in prepared) {
+            // 健康桶整轮取同一时刻，避免轮内冷却状态漂移
+            val roundNow = System.currentTimeMillis()
+            // 极速模式首轮只发健康且速度未知/实测达标的候选（限制学费上界）；一轮无成功后放宽为完整链
+            val roundCandidates = if (policy.mode == SmartModes.FAST && round == 1) {
+                pickFastRound(
+                    prepared,
+                    SMART_FAST_ROUND_LIMIT,
+                    bucketOf = { SmartHealth.bucket(it.provider.id, it.model.name, roundNow) },
+                    fastCapableOf = { SmartHealth.fastCapable(it.provider.id, it.model.name, policy.fastMs) },
+                )
+            } else {
+                prepared
+            }
+            if (roundCandidates.isEmpty()) continue
+
+            // 极速轮「等首字超时」只记慢（不累积失败，放宽轮成功会带回真实测速）；
+            // 其余失败都是病，累积连续失败达到阈值进入冷却
+            fun recordTimeoutSlow(candidate: SmartPrepared) {
+                if (policy.mode == SmartModes.FAST && round == 1) {
+                    SmartHealth.recordSlow(candidate.provider.id, candidate.model.name, policy.fastMs)
+                } else {
+                    SmartHealth.recordFailure(
+                        candidate.provider.id, candidate.model.name, roundNow,
+                        policy.cooldownThreshold, policy.cooldownMs,
+                    )
+                }
+            }
+
+            fun recordFailure(candidate: SmartPrepared) {
+                SmartHealth.recordFailure(
+                    candidate.provider.id, candidate.model.name, roundNow,
+                    policy.cooldownThreshold, policy.cooldownMs,
+                )
+            }
+
+            for (candidate in roundCandidates) {
+                val timeoutMs = policy.timeoutMs(round)
+                val timeoutLabel = "${timeoutMs / 1000}s"
+                val startedAt = System.currentTimeMillis()
                 var payload = buildChatBody(
                     modelName = candidate.model.name,
                     messages = messages,
@@ -389,8 +443,12 @@ class LanServer(
                     val resp = result.getOrNull()
                     if (resp == null) {
                         lastErrors[candidate.label] = result.exceptionOrNull()?.message ?: "请求失败"
+                        recordFailure(candidate)
                         continue
                     }
+                    SmartHealth.recordSuccess(
+                        candidate.provider.id, candidate.model.name, System.currentTimeMillis() - startedAt,
+                    )
                     respondText(resp.toString(), ContentType.Application.Json)
                     return
                 }
@@ -405,16 +463,19 @@ class LanServer(
                     throw e
                 } catch (e: Exception) {
                     lastErrors[candidate.label] = "连接失败（${e.message ?: e.javaClass.simpleName}）"
+                    recordFailure(candidate)
                     continue
                 }
                 if (upstream == null) {
                     lastErrors[candidate.label] = "$timeoutLabel 内未建立连接"
+                    recordFailure(candidate)
                     continue
                 }
                 if (!upstream.isSuccessful) {
                     client.readBody(upstream)
                     upstream.close()
                     lastErrors[candidate.label] = "上游 HTTP ${upstream.code}"
+                    recordFailure(candidate)
                     continue
                 }
 
@@ -445,8 +506,12 @@ class LanServer(
                     producer.cancel()
                     upstream.close()
                     lastErrors[candidate.label] = "$timeoutLabel 内无输出"
+                    recordTimeoutSlow(candidate)
                     continue
                 }
+                SmartHealth.recordSuccess(
+                    candidate.provider.id, candidate.model.name, System.currentTimeMillis() - startedAt,
+                )
                 try {
                     respondBytesWriter(contentType = ContentType("text", "event-stream")) {
                         writeStringUtf8("data: $firstPayload\n\n")
@@ -458,6 +523,12 @@ class LanServer(
                         writeStringUtf8("data: [DONE]\n\n")
                         flush()
                     }
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    // 透传中断：上游不稳信号，累积健康度失败后原样抛给 Ktor 断开客户端
+                    recordFailure(candidate)
+                    throw e
                 } finally {
                     producer.cancel()
                     upstream.close()

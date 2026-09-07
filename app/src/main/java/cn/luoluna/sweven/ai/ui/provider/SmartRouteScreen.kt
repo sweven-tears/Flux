@@ -66,6 +66,7 @@ import cn.luoluna.sweven.ai.data.db.ModelEntity
 import cn.luoluna.sweven.ai.data.db.ModelType
 import cn.luoluna.sweven.ai.data.db.ProviderEntity
 import cn.luoluna.sweven.ai.data.db.SmartRouteEntity
+import cn.luoluna.sweven.ai.data.repo.SmartHealth
 import cn.luoluna.sweven.ai.ui.common.ModelBadgesRow
 import cn.luoluna.sweven.ai.ui.common.ReorderState
 import cn.luoluna.sweven.ai.ui.common.TextFieldDialog
@@ -99,9 +100,15 @@ fun SmartRouteScreen(onBack: () -> Unit) {
         .collectAsStateWithLifecycle(30)
     val maxRounds by remember { app.settings.smartRouteMaxRounds }
         .collectAsStateWithLifecycle(3)
+    val cooldownThreshold by remember { app.settings.smartCooldownThreshold }
+        .collectAsStateWithLifecycle(2)
+    val cooldownSeconds by remember { app.settings.smartCooldownSeconds }
+        .collectAsStateWithLifecycle(60)
 
     var showTimeoutEdit by remember { mutableStateOf(false) }
     var showRoundsEdit by remember { mutableStateOf(false) }
+    var showCooldownThresholdEdit by remember { mutableStateOf(false) }
+    var showCooldownSecondsEdit by remember { mutableStateOf(false) }
     var showAddModels by remember { mutableStateOf(false) }
     var showCategoryView by remember { mutableStateOf(false) }
 
@@ -170,6 +177,21 @@ fun SmartRouteScreen(onBack: () -> Unit) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Text("轮巡次数", style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
                             TextButton(onClick = { showRoundsEdit = true }) { Text("$maxRounds 轮  修改") }
+                        }
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Column(Modifier.weight(1f)) {
+                                Text("冷却阈值", style = MaterialTheme.typography.bodyMedium)
+                                Text(
+                                    "候选连续失败达到次数后进入冷却，排序时垫底兜底",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                            TextButton(onClick = { showCooldownThresholdEdit = true }) { Text("$cooldownThreshold 次  修改") }
+                        }
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text("冷却时长", style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
+                            TextButton(onClick = { showCooldownSecondsEdit = true }) { Text("$cooldownSeconds 秒  修改") }
                         }
                     }
                 }
@@ -258,6 +280,44 @@ fun SmartRouteScreen(onBack: () -> Unit) {
             },
         )
     }
+    if (showCooldownThresholdEdit) {
+        TextFieldDialog(
+            title = "冷却阈值（连续失败次数）",
+            initial = cooldownThreshold.toString(),
+            onDismiss = { showCooldownThresholdEdit = false },
+            onValidate = { v ->
+                val n = v.trim().toIntOrNull()
+                when {
+                    n == null -> "请输入数字"
+                    n < 1 || n > 5 -> "范围 1 ~ 5 次"
+                    else -> null
+                }
+            },
+            onConfirm = { v ->
+                v.trim().toIntOrNull()?.let { app.settings.setSmartCooldownThreshold(it) }
+                showCooldownThresholdEdit = false
+            },
+        )
+    }
+    if (showCooldownSecondsEdit) {
+        TextFieldDialog(
+            title = "冷却时长（秒）",
+            initial = cooldownSeconds.toString(),
+            onDismiss = { showCooldownSecondsEdit = false },
+            onValidate = { v ->
+                val n = v.trim().toIntOrNull()
+                when {
+                    n == null -> "请输入数字"
+                    n < 10 || n > 600 -> "范围 10 ~ 600 秒"
+                    else -> null
+                }
+            },
+            onConfirm = { v ->
+                v.trim().toIntOrNull()?.let { app.settings.setSmartCooldownSeconds(it) }
+                showCooldownSecondsEdit = false
+            },
+        )
+    }
     if (showCategoryView) {
         CategoryViewSheet(
             entries = display,
@@ -314,6 +374,8 @@ private fun SmartRouteRow(
     val provider = providers.firstOrNull { it.id == entry.providerId }
     val model = models.firstOrNull { it.providerId == entry.providerId && it.name == entry.modelName }
     val displayName = model?.alias?.takeIf { it.isNotBlank() } ?: entry.modelName
+    // 进程内健康度快照（静态读取，进页面时可见，不实时刷新）
+    val health = SmartHealth.info(entry.providerId, entry.modelName)
 
     SwipeRevealActions(
         modifier = modifier,
@@ -350,6 +412,20 @@ private fun SmartRouteRow(
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
                         }
+                        if (entry.enabled && health.cooling) {
+                            Text(
+                                "  冷却中",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.error,
+                            )
+                        }
+                        if (entry.enabled && !health.cooling && health.consecutiveFails > 0) {
+                            Text(
+                                "  连续失败 ${health.consecutiveFails} 次",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.tertiary,
+                            )
+                        }
                     }
                     Text(
                         entry.modelName,
@@ -358,6 +434,13 @@ private fun SmartRouteRow(
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         maxLines = 1,
                     )
+                    if (health.firstTokenEwmaMs != null) {
+                        Text(
+                            "首字 ~${health.firstTokenEwmaMs}ms",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
                 }
                 Icon(
                     Icons.Filled.DragIndicator,

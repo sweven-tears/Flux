@@ -278,6 +278,11 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
             return
         }
         if (text.isBlank() && imageUris.isEmpty()) return
+        // 流式互斥：回复进行中拒绝新消息，避免两轮请求交叉写历史/并发写 _streamingText
+        if (_streaming.value) {
+            _error.value = "上一条回复尚未结束，请先停止或等待完成"
+            return
+        }
         val (providerId, modelName) = target.identifiers()
         viewModelScope.launch {
             var convId = currentId.value

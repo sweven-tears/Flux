@@ -268,12 +268,16 @@ data class AdvancedParams(
     }
 }
 
-/** 从消息实体列表构造 OpenAI messages 数组，图片以 image_url(base64 data URL) 附加 */
+/**
+ * 从消息实体列表构造 OpenAI messages 数组，图片以 image_url(base64 data URL) 附加。
+ * 组装时保证 user/assistant 严格交替（协议转换类网关会把相邻同角色消息合并成一条）：
+ * - 空 content 的 assistant（仅 reasoning 或失败轮次）以空格占位保留，不再整条丢弃
+ * - 相邻同角色消息之间插入对方角色空格占位
+ */
 fun buildMessagesJson(
     items: List<Triple<String, String, List<String>>>,
 ): JsonArray = kotlinx.serialization.json.buildJsonArray {
-    for ((role, content, images) in items) {
-        if (content.isBlank() && images.isEmpty()) continue
+    fun message(role: String, content: String, images: List<String>) {
         add(
             buildJsonObject {
                 put("role", role)
@@ -308,7 +312,31 @@ fun buildMessagesJson(
             }
         )
     }
+
+    var lastChatRole: String? = null
+    for ((role, content, images) in items) {
+        var emitContent = content
+        if (emitContent.isBlank() && images.isEmpty()) {
+            if (role != ROLE_ASSISTANT) continue
+            emitContent = PLACEHOLDER_CONTENT
+        }
+        if (role != ROLE_SYSTEM) {
+            if (lastChatRole == role) {
+                message(if (role == ROLE_USER) ROLE_ASSISTANT else ROLE_USER, PLACEHOLDER_CONTENT, emptyList())
+            }
+            lastChatRole = role
+        }
+        message(role, emitContent, images)
+    }
 }
+
+/** 角色占位文本：空到无法再空，但不会被任何网关当作空消息丢弃 */
+private const val PLACEHOLDER_CONTENT = " "
+
+/** 与 data.db 的 Role 常量对应；net 层不反向依赖数据层，此处以字面量复写 */
+private const val ROLE_SYSTEM = "system"
+private const val ROLE_USER = "user"
+private const val ROLE_ASSISTANT = "assistant"
 
 fun streamFlagOf(body: JsonObject): Boolean =
     (body["stream"] as? JsonPrimitive)?.takeIf { it !is JsonNull }?.booleanOrNull ?: false

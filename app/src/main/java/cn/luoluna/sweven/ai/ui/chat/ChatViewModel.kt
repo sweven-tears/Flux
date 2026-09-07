@@ -38,8 +38,11 @@ import cn.luoluna.sweven.ai.net.applyBuiltinTools
 import cn.luoluna.sweven.ai.net.applyThinkingDepth
 import cn.luoluna.sweven.ai.net.buildChatBody
 import cn.luoluna.sweven.ai.net.buildMessagesJson
+import cn.luoluna.sweven.ai.net.estimateMessageTokens
+import cn.luoluna.sweven.ai.net.estimateTextTokens
 import cn.luoluna.sweven.ai.net.mergeCustomBody
 import cn.luoluna.sweven.ai.net.parseCustomHeaders
+import cn.luoluna.sweven.ai.net.trimToBudget
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.Job
@@ -84,6 +87,9 @@ data class DrawerState(
 
 /** 会话搜索命中条目：标题命中时 snippet 为 null，否则为首条命中消息的内容片段 */
 data class ConversationHit(val conversation: ConversationEntity, val snippet: String?)
+
+/** 聊天页上下文用量指示：按当前会话与目标模型的粗估 token；窗口未知时 window 为 null */
+data class ContextEstimate(val usedTokens: Int, val window: Int?)
 
 class ChatViewModel(app: Application) : AndroidViewModel(app) {
 
@@ -188,6 +194,15 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                 ?: last?.let { (pid, name) -> resolve(pid, name) }
         }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
 
+    /** 上下文用量粗估：当前会话 systemPrompt + 全部历史（含图片），按当前目标的窗口显示 */
+    val contextEstimate: StateFlow<ContextEstimate?> =
+        combine(messages, current, currentTarget) { msgs, conv, target ->
+            val window = (target as? ChatTarget.Single)?.picker?.model?.contextWindow
+            val systemTokens = conv?.systemPrompt?.let { estimateTextTokens(it) + 4 } ?: 0
+            val used = systemTokens + msgs.sumOf { estimateMessageTokens(it.content, it.images.size) }
+            ContextEstimate(used, window)
+        }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
+
     private val _streaming = MutableStateFlow(false)
     val streaming: StateFlow<Boolean> = _streaming
 
@@ -199,6 +214,14 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
 
     private val _error = MutableStateFlow<String?>(null)
     val error: StateFlow<String?> = _error
+
+    /** 非阻断提示（如上下文被裁剪），用信息样式展示，用户可关闭 */
+    private val _notice = MutableStateFlow<String?>(null)
+    val notice: StateFlow<String?> = _notice
+
+    fun dismissNotice() {
+        _notice.value = null
+    }
 
     // ---- 会话搜索 ----
 
@@ -249,6 +272,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
 
     fun newConversation(folderId: Long? = null) = viewModelScope.launch {
         stopStreamingInternal()
+        _notice.value = null
         // 当前分组已有空会话则直接复用，保证每个分组只有一个没有内容的新窗口
         val id = conversationDao.findEmptyConversation(folderId)?.let { existing ->
             lastModel.value?.let { (pid, name) -> conversationDao.setModel(existing.id, pid, name) }
@@ -275,6 +299,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         if (id == currentId.value) return
         stopStreamingInternal()
         currentId.value = id
+        _notice.value = null
         // 切到已有会话后以会话自身的思考深度为准
         _pendingThinkingDepth.value = null
     }
@@ -372,15 +397,40 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    /** 构建聊天请求体（单个模型与 smartAi 候选共用） */
+    /** 请求体构建结果：body + 上下文裁剪统计（用于提示条） */
+    private data class BuiltBody(
+        val body: JsonObject,
+        val droppedCount: Int = 0,
+        val strippedImageCount: Int = 0,
+    )
+
+    /** 裁剪提示文案：都为 0 时返回 null */
+    private fun trimNotice(dropped: Int, strippedImages: Int): String? = when {
+        dropped > 0 -> "上下文超出模型窗口，本次请求已省略最早的 $dropped 条消息"
+        strippedImages > 0 -> "上下文接近模型窗口，早期图片已转为占位文本"
+        else -> null
+    }
+
+    /** 构建聊天请求体（单个模型与 smartAi 候选共用）；模型窗口已知时把历史裁进预算 */
     private suspend fun buildRequestBody(
         provider: ProviderEntity,
         model: ModelEntity,
         conversation: ConversationEntity?,
         history: List<MessageEntity>,
-    ): JsonObject {
-        val chatMessages = history.map { Triple(it.role, it.content, it.images) }
+    ): BuiltBody {
+        var chatMessages = history.map { Triple(it.role, it.content, it.images) }
         val systemPrompt = conversation?.systemPrompt?.takeIf { it.isNotBlank() }
+        var dropped = 0
+        var strippedImages = 0
+        val window = model.contextWindow
+        if (window != null && window > 0) {
+            // 预算取窗口的 90%，先扣除 systemPrompt 的份额
+            val systemTokens = systemPrompt?.let { estimateTextTokens(it) + 4 } ?: 0
+            val trimmed = trimToBudget(chatMessages, window * 9 / 10 - systemTokens)
+            chatMessages = trimmed.items
+            dropped = trimmed.droppedCount
+            strippedImages = trimmed.strippedImageCount
+        }
         val messagesJson = if (systemPrompt != null) {
             buildMessagesJson(listOf(Triple(Role.SYSTEM, systemPrompt, emptyList<String>())) + chatMessages)
         } else {
@@ -402,7 +452,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                 model.builtinImageGen,
             )
         }
-        return body
+        return BuiltBody(body, dropped, strippedImages)
     }
 
     private suspend fun streamSingle(convId: Long, picker: PickerModel) {
@@ -414,9 +464,10 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
 
         val conversation = conversationDao.byId(convId)
         val history = messageDao.forConversation(convId)
-        val body = buildRequestBody(picker.provider, picker.model, conversation, history)
+        val built = buildRequestBody(picker.provider, picker.model, conversation, history)
         val extraHeaders = parseCustomHeaders(picker.model.customHeaders)
 
+        _notice.value = trimNotice(built.droppedCount, built.strippedImageCount)
         _error.value = null
         _streaming.value = true
         _streamingText.value = ""
@@ -425,7 +476,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         sendJob = viewModelScope.launch {
             var failed: String? = null
             try {
-                client.chatDeltas(picker.provider.baseUrl, key.key, body, extraHeaders).collect { ev ->
+                client.chatDeltas(picker.provider.baseUrl, key.key, built.body, extraHeaders).collect { ev ->
                     when (ev) {
                         is ChatEvent.Delta -> publisher.delta(ev.text)
                         is ChatEvent.ReasoningDelta -> publisher.reasoning(ev.text)
@@ -456,6 +507,9 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
             hasImageAttachment = history.any { it.images.isNotEmpty() },
             thinkingDepth = conversation?.thinkingDepth,
         )
+        // 各候选按各自窗口裁剪上下文，取最坏情况作提示
+        var maxDropped = 0
+        var maxStripped = 0
         val prepared = routes.mapNotNull { route ->
             val resolved = router.resolveById(route.providerId, route.modelName) ?: return@mapNotNull null
             val key = resolved.apiKey ?: return@mapNotNull null
@@ -465,6 +519,9 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
             // 模型配置行可能已被删除，此时退回空配置继续路由
             val model = resolved.model
                 ?: ModelEntity(providerId = resolved.provider.id, name = route.modelName)
+            val built = buildRequestBody(resolved.provider, model, conversation, history)
+            if (built.droppedCount > maxDropped) maxDropped = built.droppedCount
+            if (built.strippedImageCount > maxStripped) maxStripped = built.strippedImageCount
             SmartCandidate(
                 label = "${resolved.provider.alias}/${model.alias?.takeIf { it.isNotBlank() } ?: model.name}",
                 providerId = resolved.provider.id,
@@ -472,9 +529,10 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                 baseUrl = resolved.provider.baseUrl,
                 apiKey = key.key,
                 extraHeaders = parseCustomHeaders(model.customHeaders),
-                body = buildRequestBody(resolved.provider, model, conversation, history),
+                body = built.body,
             ) to model
         }
+        _notice.value = trimNotice(maxDropped, maxStripped)
         // 健康桶整链取同一时刻：冷却/降权候选垫底，桶内按特征匹配排序
         val now = System.currentTimeMillis()
         val candidates = orderCandidates(

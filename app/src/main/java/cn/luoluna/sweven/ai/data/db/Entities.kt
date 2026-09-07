@@ -94,6 +94,8 @@ data class ModelEntity(
     val maxTokens: Int? = null,
     val presencePenalty: Double? = null,
     val frequencyPenalty: Double? = null,
+    /** 上下文窗口（tokens）：聊天页用量显示与超长自动截断的依据；null = 未知（不截断） */
+    val contextWindow: Int? = null,
     val remark: String? = null,
     /** 手动拖拽排序权重，小者在前；同值按 name */
     val sortOrder: Int = 0,

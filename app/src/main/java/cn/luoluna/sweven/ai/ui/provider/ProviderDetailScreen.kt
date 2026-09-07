@@ -478,6 +478,7 @@ fun ProviderDetailScreen(id: Long, onBack: () -> Unit) {
                                 outputVideo = rm.outputVideo,
                                 capabilityTools = rm.tools,
                                 capabilityReasoning = rm.reasoning,
+                                contextWindow = rm.contextLength,
                                 sortOrder = base + i,
                             )
                         }

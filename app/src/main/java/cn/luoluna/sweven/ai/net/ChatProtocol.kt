@@ -372,6 +372,8 @@ data class RemoteModel(
     val outputVideo: Boolean = false,
     val tools: Boolean = false,
     val reasoning: Boolean = false,
+    /** 厂商声明的上下文窗口（tokens），无声明时为 null */
+    val contextLength: Int? = null,
 )
 
 private fun stringListOf(obj: JsonObject, vararg keys: String): List<String> {
@@ -461,6 +463,9 @@ fun extractModelInfos(bodyText: String): List<RemoteModel> {
         m = m.copy(
             tools = declaredTools || nameTools,
             reasoning = declaredReasoning || (!declaredReasoning && supported.isEmpty() && nameReasoning),
+            // 上下文窗口：OpenRouter 顶层 context_length，其他厂商可能挂在 top_provider 下
+            contextLength = obj.intAt("context_length")
+                ?: obj.intAt("top_provider", "context_length"),
         )
         m
     }

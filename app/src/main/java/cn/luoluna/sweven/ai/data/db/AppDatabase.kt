@@ -19,7 +19,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         FolderEntity::class,
         PresetEntity::class,
     ],
-    version = 8,
+    version = 9,
     exportSchema = false,
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -126,11 +126,27 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        /** v8 → v9：模型表增加上下文窗口字段；新增局域网请求日志表（实体与打点在后续版本启用） */
+        private val MIGRATION_8_9 = object : Migration(8, 9) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE `models` ADD COLUMN `contextWindow` INTEGER")
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `request_logs` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, " +
+                        "`at` INTEGER NOT NULL, `deviceId` TEXT NOT NULL, `ip` TEXT NOT NULL, " +
+                        "`model` TEXT NOT NULL, `via` TEXT, `stream` INTEGER NOT NULL, " +
+                        "`ttftMs` INTEGER, `totalMs` INTEGER, `ok` INTEGER NOT NULL, " +
+                        "`error` TEXT, `promptTokens` INTEGER, `completionTokens` INTEGER)"
+                )
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_request_logs_at` ON `request_logs` (`at`)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_request_logs_deviceId` ON `request_logs` (`deviceId`)")
+            }
+        }
+
         fun build(context: Context): AppDatabase =
             Room.databaseBuilder(context, AppDatabase::class.java, "phone_router.db")
                 .addMigrations(
                     MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7,
-                    MIGRATION_7_8,
+                    MIGRATION_7_8, MIGRATION_8_9,
                 )
                 .fallbackToDestructiveMigration()
                 .build()

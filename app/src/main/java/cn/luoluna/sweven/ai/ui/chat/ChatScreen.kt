@@ -151,6 +151,8 @@ fun ChatScreen(
     } ?: false
     val streaming by vm.streaming.collectAsStateWithLifecycle()
     val error by vm.error.collectAsStateWithLifecycle()
+    val notice by vm.notice.collectAsStateWithLifecycle()
+    val contextEstimate by vm.contextEstimate.collectAsStateWithLifecycle()
     val drawer by vm.drawerState.collectAsStateWithLifecycle()
     val thinkingDepth by vm.thinkingDepth.collectAsStateWithLifecycle()
     // 未设置(null) 视为自动挡；菜单勾选与图标状态都按生效档位判断
@@ -195,10 +197,11 @@ fun ChatScreen(
     }
 
     val listState = rememberLazyListState()
-    val extraItems = (if (streaming) 1 else 0) + (if (error != null) 1 else 0)
-    // 仅在新消息/错误出现时滚动一次；流式内容的跟随滚动在 StreamingItem 内部处理，
+    val extraItems = (if (streaming) 1 else 0) + (if (error != null) 1 else 0) +
+        (if (notice != null) 1 else 0)
+    // 仅在新消息/错误/提示出现时滚动一次；流式内容的跟随滚动在 StreamingItem 内部处理，
     // 避免流式文本每次变化都触发整个页面重组
-    LaunchedEffect(messages.size, streaming, error) {
+    LaunchedEffect(messages.size, streaming, error, notice) {
         val count = messages.size + extraItems
         if (count > 0) listState.scrollToItem(index = count - 1)
     }
@@ -554,12 +557,57 @@ fun ChatScreen(
                                     }
                                 }
                             }
+                            notice?.let { note ->
+                                item(key = "notice") {
+                                    Surface(
+                                        color = MaterialTheme.colorScheme.surfaceVariant,
+                                        shape = RoundedCornerShape(12.dp),
+                                        modifier = Modifier.fillMaxWidth(),
+                                    ) {
+                                        Row(
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            modifier = Modifier.padding(start = 12.dp),
+                                        ) {
+                                            Text(
+                                                note,
+                                                style = MaterialTheme.typography.bodySmall,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                modifier = Modifier.weight(1f),
+                                            )
+                                            IconButton(onClick = { vm.dismissNotice() }) {
+                                                Icon(Icons.Filled.Close, contentDescription = "关闭")
+                                            }
+                                        }
+                                    }
+                                }
+                            }
                         }
                         MessageQuickNav(
                             listState = listState,
                             modifier = Modifier
                                 .align(Alignment.CenterEnd)
                                 .padding(end = 6.dp),
+                        )
+                    }
+                }
+
+                // 上下文用量指示：接近/超出模型窗口时变色（窗口未知只显示估算值）
+                contextEstimate?.let { est ->
+                    if (est.usedTokens > 0) {
+                        val ratio = est.window?.let { w -> est.usedTokens.toFloat() / w }
+                        Text(
+                            text = est.window
+                                ?.let { w -> "上下文 ≈${formatTokens(est.usedTokens)} / ${formatTokens(w)}" }
+                                ?: "上下文 ≈${formatTokens(est.usedTokens)}",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = when {
+                                ratio != null && ratio >= 1f -> MaterialTheme.colorScheme.error
+                                ratio != null && ratio >= 0.8f -> MaterialTheme.colorScheme.tertiary
+                                else -> MaterialTheme.colorScheme.onSurfaceVariant
+                            },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 16.dp, vertical = 2.dp),
                         )
                     }
                 }
@@ -1257,6 +1305,14 @@ private fun DataUrlThumb(url: String, onRemove: () -> Unit) {
 private fun copyText(context: Context, text: String) {
     val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
     cm.setPrimaryClip(ClipData.newPlainText("phoneRouter", text))
+}
+
+/** token 数的紧凑显示：800 → "800"，12345 → "12.3k"，128000 → "128k" */
+private fun formatTokens(tokens: Int): String = when {
+    tokens >= 1_000_000 -> "%.1fM".format(java.util.Locale.ROOT, tokens / 1_000_000f)
+    tokens >= 10_000 -> "${tokens / 1000}k"
+    tokens >= 1000 -> "%.1fk".format(java.util.Locale.ROOT, tokens / 1000f)
+    else -> "$tokens"
 }
 
 /** 抽屉分组横向 tab 的胶囊按钮 */

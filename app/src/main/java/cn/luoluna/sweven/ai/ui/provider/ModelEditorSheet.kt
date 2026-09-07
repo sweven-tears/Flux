@@ -77,6 +77,7 @@ fun ModelEditorSheet(
     var maxTokens by remember { mutableStateOf(existing?.maxTokens?.toString() ?: "") }
     var presence by remember { mutableStateOf(existing?.presencePenalty?.toString() ?: "") }
     var frequency by remember { mutableStateOf(existing?.frequencyPenalty?.toString() ?: "") }
+    var contextWindow by remember { mutableStateOf(existing?.contextWindow?.toString() ?: "") }
     var customHeaders by remember { mutableStateOf(existing?.customHeaders.orEmpty()) }
     var customBody by remember { mutableStateOf(existing?.customBody.orEmpty()) }
 
@@ -101,6 +102,7 @@ fun ModelEditorSheet(
         val pres = parseNum(presence)
         val freq = parseNum(frequency)
         val maxTok = maxTokens.trim().takeIf { it.isNotEmpty() }?.toIntOrNull()
+        val ctxWin = contextWindow.trim().takeIf { it.isNotEmpty() }?.toIntOrNull()
         if ((temperature.isNotBlank() && temp == null) ||
             (topP.isNotBlank() && top == null) ||
             (presence.isNotBlank() && pres == null) ||
@@ -108,6 +110,11 @@ fun ModelEditorSheet(
             (maxTokens.isNotBlank() && maxTok == null)
         ) {
             error = "高级参数必须是数字（留空表示使用 API 默认值）"
+            tab = 1
+            return
+        }
+        if (contextWindow.isNotBlank() && (ctxWin == null || ctxWin <= 0)) {
+            error = "上下文窗口必须是正整数（tokens）"
             tab = 1
             return
         }
@@ -144,6 +151,7 @@ fun ModelEditorSheet(
                 maxTokens = maxTok,
                 presencePenalty = pres,
                 frequencyPenalty = freq,
+                contextWindow = ctxWin,
             )
         )
     }
@@ -207,6 +215,7 @@ fun ModelEditorSheet(
                         maxTokens, { maxTokens = it },
                         presence, { presence = it },
                         frequency, { frequency = it },
+                        contextWindow, { contextWindow = it },
                         customHeaders, { customHeaders = it },
                         customBody, { customBody = it },
                     )
@@ -297,6 +306,7 @@ private fun AdvancedTab(
     maxTokens: String, onMaxTokens: (String) -> Unit,
     presence: String, onPresence: (String) -> Unit,
     frequency: String, onFrequency: (String) -> Unit,
+    contextWindow: String, onContextWindow: (String) -> Unit,
     customHeaders: String, onCustomHeaders: (String) -> Unit,
     customBody: String, onCustomBody: (String) -> Unit,
 ) {
@@ -328,6 +338,15 @@ private fun AdvancedTab(
         value = frequency, onValueChange = onFrequency,
         label = { Text("frequency_penalty") }, singleLine = true,
         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+        modifier = Modifier.fillMaxWidth(),
+    )
+    OutlinedTextField(
+        value = contextWindow, onValueChange = onContextWindow,
+        label = { Text("上下文窗口（tokens，可选）") },
+        supportingText = { Text("用于聊天页用量显示与超长自动截断；拉取模型时若厂商提供会自动带入") },
+        placeholder = { Text("128000") },
+        singleLine = true,
+        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
         modifier = Modifier.fillMaxWidth(),
     )
     OutlinedTextField(

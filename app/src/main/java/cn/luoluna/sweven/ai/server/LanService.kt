@@ -4,6 +4,7 @@ import android.app.Service
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
+import android.net.wifi.WifiManager
 import android.os.Build
 import android.os.IBinder
 import androidx.core.app.ServiceCompat
@@ -61,6 +62,8 @@ object ServerRunner {
 
 class LanService : Service() {
 
+    private var wifiLock: WifiManager.WifiLock? = null
+
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onCreate() {
@@ -84,12 +87,42 @@ class LanService : Service() {
             if (Build.VERSION.SDK_INT >= 29) ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC else 0,
         )
         ServerRunner.start(applicationContext, port)
+        acquireWifiLock()
         return START_STICKY
     }
 
     override fun onDestroy() {
+        releaseWifiLock()
         ServerRunner.stop()
         super.onDestroy()
+    }
+
+    /**
+     * 熄屏后 Wi-Fi 会进省电模式，外部设备的请求入包延迟可达数秒。
+     * 前台服务只保进程不保射频，持 WifiLock 让局域网监听保持低延迟。
+     */
+    private fun acquireWifiLock() {
+        if (wifiLock != null) return
+        val wm = applicationContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager ?: return
+        val mode = if (Build.VERSION.SDK_INT >= 29) {
+            WifiManager.WIFI_MODE_FULL_LOW_LATENCY
+        } else {
+            @Suppress("DEPRECATION")
+            WifiManager.WIFI_MODE_FULL_HIGH_PERF
+        }
+        wifiLock = runCatching {
+            wm.createWifiLock(mode, "PhoneRouter:LanServer").apply {
+                setReferenceCounted(false)
+                acquire()
+            }
+        }.getOrNull()
+    }
+
+    private fun releaseWifiLock() {
+        wifiLock?.let { lock ->
+            runCatching { if (lock.isHeld) lock.release() }
+        }
+        wifiLock = null
     }
 
     companion object {

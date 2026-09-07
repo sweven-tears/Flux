@@ -4,7 +4,11 @@ import android.Manifest
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
+import android.content.Intent
+import android.net.Uri
 import android.os.Build
+import android.os.PowerManager
+import android.provider.Settings
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
@@ -29,6 +33,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -40,6 +45,9 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import cn.luoluna.sweven.ai.data.db.AuthDeviceEntity
@@ -73,6 +81,20 @@ fun LanScreen(
     val ips = remember { vm.lanIps() }
     var portDialog by remember { mutableStateOf(false) }
     var renameTarget by remember { mutableStateOf<AuthDeviceEntity?>(null) }
+
+    // 电池优化豁免：ON_RESUME 时刷新，从系统弹窗/设置页返回后立即更新
+    var batteryIgnored by remember { mutableStateOf(true) }
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val obs = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                val pm = context.getSystemService(Context.POWER_SERVICE) as? PowerManager
+                batteryIgnored = pm?.isIgnoringBatteryOptimizations(context.packageName) ?: true
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(obs)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(obs) }
+    }
 
     // Android 13+ 通知权限：开启服务时申请
     var pendingEnable by remember { mutableStateOf(false) }
@@ -166,6 +188,31 @@ fun LanScreen(
                         )
                     }
                     Switch(checked = smartAiEnabled, onCheckedChange = { vm.setSmartAiEnabled(it) })
+                }
+            }
+
+            // 后台稳定运行：退后台被电池策略限流是其他应用接入慢/超时的主因
+            if (!batteryIgnored) {
+                SectionCard(title = "后台稳定运行") {
+                    Text(
+                        "应用退到后台后，系统电池策略可能限制网络，导致网关响应慢、客户端超时。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    TextButton(onClick = {
+                        runCatching {
+                            context.startActivity(
+                                Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
+                                    data = Uri.parse("package:${context.packageName}")
+                                }
+                            )
+                        }
+                    }) { Text("申请忽略电池优化") }
+                    Text(
+                        "部分系统还需在系统设置中为本应用允许「自启动 / 后台联网 / 电池不限」，无统一入口需手动设置",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
                 }
             }
 

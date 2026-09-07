@@ -29,6 +29,7 @@ import io.ktor.server.application.ApplicationCall
 import io.ktor.server.application.call
 import io.ktor.server.engine.embeddedServer
 import io.ktor.server.netty.Netty
+import io.ktor.server.netty.NettyApplicationCall
 import io.ktor.server.plugins.origin
 import io.ktor.server.request.receiveText
 import io.ktor.server.response.respondBytesWriter
@@ -50,6 +51,7 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.put
+import java.net.InetSocketAddress
 import kotlin.coroutines.coroutineContext
 
 /**
@@ -76,7 +78,17 @@ class LanServer(
 
     fun start() {
         if (engine != null) return
-        engine = embeddedServer(Netty, port = port, host = "0.0.0.0") { module() }
+        engine = embeddedServer(
+            Netty,
+            port = port,
+            host = "0.0.0.0",
+            configure = {
+                // Netty 默认 10s 写超时会掐断慢客户端（省电模式/弱信号）的 SSE 长流，0 = 关闭
+                responseWriteTimeoutSeconds = 0
+                // 死连接靠 TCP keepalive 清理
+                tcpKeepAlive = true
+            },
+        ) { module() }
             .start(wait = false)
     }
 
@@ -117,8 +129,21 @@ class LanServer(
         )
     }.toString()
 
+    /**
+     * 对端 IP（数值形式）。request.origin.remoteHost 会走 InetSocketAddress.getHostName()
+     * 触发阻塞式反向 DNS——本机 127.0.0.1 立即命中 hosts，外部设备 IP 则要等 DNS 超时，
+     * 每请求一次、动辄数秒。改为直接读 Netty channel 上已解析的 InetAddress，不做任何域名反解。
+     */
+    private fun ApplicationCall.peerIp(): String {
+        val remote = (this as? NettyApplicationCall)
+            ?.context?.channel()?.remoteAddress() as? InetSocketAddress
+        return remote?.address?.hostAddress
+            ?: request.origin.remoteHost
+            ?: "unknown"
+    }
+
     private suspend fun ApplicationCall.authorize(): Boolean {
-        val ip = request.origin.remoteHost ?: "unknown"
+        val ip = peerIp()
         val deviceId = request.headers[DeviceAuthManager.HEADER_DEVICE_ID]
             ?.takeIf { it.isNotBlank() }
             ?: "ip-$ip"

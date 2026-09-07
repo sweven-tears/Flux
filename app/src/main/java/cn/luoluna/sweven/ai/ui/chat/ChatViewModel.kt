@@ -19,11 +19,15 @@ import cn.luoluna.sweven.ai.data.db.ProviderDao
 import cn.luoluna.sweven.ai.data.db.ProviderEntity
 import cn.luoluna.sweven.ai.data.db.Role
 import cn.luoluna.sweven.ai.data.db.SmartRouteDao
+import cn.luoluna.sweven.ai.data.repo.SmartAggregateCapability
 import cn.luoluna.sweven.ai.data.repo.SmartAi
 import cn.luoluna.sweven.ai.data.repo.SmartCandidate
 import cn.luoluna.sweven.ai.data.repo.SmartEvent
 import cn.luoluna.sweven.ai.data.repo.SmartRouteExecutor
+import cn.luoluna.sweven.ai.data.repo.aggregateCapability
+import cn.luoluna.sweven.ai.data.repo.featuresOfHistory
 import cn.luoluna.sweven.ai.data.repo.isSelfGatewayUrl
+import cn.luoluna.sweven.ai.data.repo.orderCandidates
 import cn.luoluna.sweven.ai.net.AdvancedParams
 import cn.luoluna.sweven.ai.net.ChatEvent
 import cn.luoluna.sweven.ai.net.ProviderClient
@@ -150,6 +154,16 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
     val smartAiAvailable: StateFlow<Boolean> =
         smartEnabledCount.map { it > 0 }
             .stateIn(viewModelScope, SharingStarted.Eagerly, false)
+
+    /** smartAi 聚合能力（启用候选的模态/能力并集）：SmartAi 目标下附件按钮与思考深度的显示依据 */
+    val smartAiCapability: StateFlow<SmartAggregateCapability> =
+        combine(smartRouteDao.observeAll(), modelDao.observeAll()) { routes, models ->
+            aggregateCapability(
+                routes.filter { it.enabled }.mapNotNull { route ->
+                    models.firstOrNull { it.providerId == route.providerId && it.name == route.modelName }
+                },
+            )
+        }.stateIn(viewModelScope, SharingStarted.Eagerly, aggregateCapability(emptyList()))
 
     /** 当前生效目标：优先会话自己选的，否则回退到上次使用的目标 */
     val currentTarget: StateFlow<ChatTarget?> =
@@ -387,7 +401,12 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         }
         val conversation = conversationDao.byId(convId)
         val history = messageDao.forConversation(convId)
-        val candidates = routes.mapNotNull { route ->
+        // 带图片附件优先视觉候选、开了思考深度优先推理候选，其余保持原顺序兜底
+        val features = featuresOfHistory(
+            hasImageAttachment = history.any { it.images.isNotEmpty() },
+            thinkingDepth = conversation?.thinkingDepth,
+        )
+        val prepared = routes.mapNotNull { route ->
             val resolved = router.resolveById(route.providerId, route.modelName) ?: return@mapNotNull null
             val key = resolved.apiKey ?: return@mapNotNull null
             if (key.key.isBlank()) return@mapNotNull null
@@ -402,8 +421,9 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                 apiKey = key.key,
                 extraHeaders = parseCustomHeaders(model.customHeaders),
                 body = buildRequestBody(resolved.provider, model, conversation, history),
-            )
+            ) to model
         }
+        val candidates = orderCandidates(prepared, features) { it.second }.map { it.first }
         if (candidates.isEmpty()) {
             _error.value = "smartAi 的候选模型均不可用（缺少 API Key 或已被删除）"
             return

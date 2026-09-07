@@ -244,7 +244,7 @@ fun SmartRouteScreen(onBack: () -> Unit) {
     }
 }
 
-/** 可加入智能路由的候选：启用中的 chat 模型，且尚未在列表里 */
+/** 可加入智能路由的候选：启用中的 chat 模型或具备图像输出能力的模型（如 Gemini 图像生成），且尚未在列表里 */
 private fun availableCandidates(
     providers: List<ProviderEntity>,
     models: List<ModelEntity>,
@@ -252,7 +252,7 @@ private fun availableCandidates(
 ): List<ModelEntity> {
     val existing = entries.map { it.providerId to it.modelName }.toSet()
     return models.filter { m ->
-        m.type == ModelType.CHAT && (m.providerId to m.name) !in existing
+        (m.type == ModelType.CHAT || m.outputImage) && (m.providerId to m.name) !in existing
     }
 }
 
@@ -424,7 +424,7 @@ private fun AddCandidatesDialog(
         text = {
             if (candidates.isEmpty()) {
                 Text(
-                    "没有可添加的模型：候选需为启用中的 chat 模型",
+                    "没有可添加的模型：候选需为启用中的 chat 或图像生成模型",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )

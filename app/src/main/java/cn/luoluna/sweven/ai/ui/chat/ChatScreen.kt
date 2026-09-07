@@ -130,6 +130,13 @@ fun ChatScreen(
     val currentTarget by vm.currentTarget.collectAsStateWithLifecycle()
     val smartAiAvailable by vm.smartAiAvailable.collectAsStateWithLifecycle()
     val currentPicker = (currentTarget as? ChatTarget.Single)?.picker
+    val smartAiCapability by vm.smartAiCapability.collectAsStateWithLifecycle()
+    // SmartAi 聚合目标没有单个模型可看，按钮可见性按启用候选的能力并集判断
+    val isSmartAi = currentTarget is ChatTarget.SmartAi
+    val showReasoning = currentPicker?.model?.capabilityReasoning == true ||
+        (isSmartAi && smartAiCapability.reasoning)
+    val showImageInput = currentPicker?.model?.inputImage == true ||
+        (isSmartAi && smartAiCapability.inputImage)
     // 会话记录的模型/目标已不可用、当前展示的是回退目标时为 true（顶栏提示）
     val modelFallback = current?.providerId?.let { pid ->
         val single = currentTarget as? ChatTarget.Single
@@ -506,8 +513,8 @@ fun ChatScreen(
                         .fillMaxWidth()
                         .padding(horizontal = 8.dp, vertical = 6.dp),
                 ) {
-                    // 思考深度：仅具备推理能力的模型显示（smartAi 聚合模型不显示）
-                    if (currentPicker?.model?.capabilityReasoning == true) {
+                    // 思考深度：仅具备推理能力的模型显示（smartAi 按候选并集判断）
+                    if (showReasoning) {
                         Box {
                             IconButton(onClick = { thinkMenuOpen = true }) {
                                 Icon(
@@ -545,7 +552,7 @@ fun ChatScreen(
                             }
                         }
                     }
-                    if (currentPicker?.model?.inputImage == true) {
+                    if (showImageInput) {
                         IconButton(onClick = {
                             pickImages.launch(
                                 PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
@@ -597,6 +604,7 @@ fun ChatScreen(
             onGoProviders = onGoProviders,
             smartAiAvailable = smartAiAvailable,
             smartAiSelected = currentTarget is ChatTarget.SmartAi,
+            smartAiCapability = smartAiCapability,
             onSelectSmartAi = {
                 vm.selectModel(SmartAi.PROVIDER_ID, SmartAi.MODEL_NAME)
                 pickerOpen = false

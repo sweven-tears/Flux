@@ -8,7 +8,11 @@ import cn.luoluna.sweven.ai.data.db.ProviderDao
 import cn.luoluna.sweven.ai.data.db.SmartRouteDao
 import cn.luoluna.sweven.ai.data.repo.ModelRouter
 import cn.luoluna.sweven.ai.data.repo.SmartAi
+import cn.luoluna.sweven.ai.data.repo.aggregateCapability
+import cn.luoluna.sweven.ai.data.repo.featuresOfRequestBody
 import cn.luoluna.sweven.ai.data.repo.isSelfGatewayUrl
+import cn.luoluna.sweven.ai.data.repo.orderCandidates
+import cn.luoluna.sweven.ai.net.AdvancedParams
 import cn.luoluna.sweven.ai.net.ChatJson
 import cn.luoluna.sweven.ai.net.ProviderClient
 import cn.luoluna.sweven.ai.net.applyBuiltinTools
@@ -154,6 +158,10 @@ class LanServer(
         // 开关开启且存在启用候选时，追加 smartAi 聚合模型
         val smartRoutes = if (settings.lanSmartAiEnabled.value) smartRouteDao.all().filter { it.enabled } else emptyList()
         if (smartRoutes.isNotEmpty()) {
+            // 聚合能力 = 启用候选的模态/能力并集（模型行已删除的候选按无能力参与并集）
+            val agg = aggregateCapability(
+                smartRoutes.mapNotNull { modelDao.find(it.providerId, it.modelName) },
+            )
             data.add(
                 buildJsonObject {
                     put("id", SmartAi.MODEL_NAME)
@@ -164,9 +172,9 @@ class LanServer(
                         buildJsonObject {
                             put("display", "smartAi（智能路由聚合）")
                             put("type", "chat")
-                            put("input", modalities(true, false, false))
-                            put("output", modalities(true, false, false))
-                            put("capabilities", modalities(false, false, false))
+                            put("input", modalities(agg.inputText, agg.inputImage, agg.inputVideo))
+                            put("output", modalities(agg.outputText, agg.outputImage, agg.outputVideo))
+                            put("capabilities", modalities(agg.tools, agg.reasoning, false))
                         }
                     )
                 }
@@ -303,36 +311,45 @@ class LanServer(
         val stream = streamFlagOf(rawBody)
         val timeoutMs = settings.smartFirstTokenTimeoutSeconds.value * 1000L
 
-        for (route in routes) {
-            val resolved = router.resolveById(route.providerId, route.modelName) ?: continue
-            val apiKey = resolved.apiKey ?: continue
-            if (apiKey.key.isBlank()) continue
-            // 指向本机网关自身的候选直接跳过，避免自连回环
-            if (isSelfGatewayUrl(resolved.provider.baseUrl, port)) continue
-            // 模型配置行可能已被删除，此时退回空配置继续路由
-            val model = resolved.model
-                ?: ModelEntity(providerId = resolved.provider.id, name = route.modelName)
+        // 先解析并校验全部候选，再按请求特征稳定排序：
+        // 带图/视频输入优先多模态候选，带 tools 优先支持工具的，其余保持原顺序兜底
+        val features = featuresOfRequestBody(rawBody, messages)
+        val prepared = orderCandidates(
+            routes.mapNotNull { route ->
+                val resolved = router.resolveById(route.providerId, route.modelName) ?: return@mapNotNull null
+                val apiKey = resolved.apiKey?.key?.takeIf { it.isNotBlank() } ?: return@mapNotNull null
+                // 指向本机网关自身的候选直接跳过，避免自连回环
+                if (isSelfGatewayUrl(resolved.provider.baseUrl, port)) return@mapNotNull null
+                // 模型配置行可能已被删除，此时退回空配置继续路由
+                val model = resolved.model
+                    ?: ModelEntity(providerId = resolved.provider.id, name = route.modelName)
+                SmartPrepared(resolved.provider, apiKey, model, resolved.advancedParams)
+            },
+            features,
+        ) { it.model }
+
+        for (candidate in prepared) {
             var payload = buildChatBody(
-                modelName = model.name,
+                modelName = candidate.model.name,
                 messages = messages,
                 stream = stream,
-                defaults = resolved.advancedParams,
+                defaults = candidate.advancedParams,
                 base = rawBody,
             )
-            payload = mergeCustomBody(payload, model.customBody)
-            if (resolved.provider.presetId == "gemini") {
+            payload = mergeCustomBody(payload, candidate.model.customBody)
+            if (candidate.provider.presetId == "gemini") {
                 payload = applyBuiltinTools(
                     payload,
-                    model.builtinGoogleSearch,
-                    model.builtinUrlContext,
-                    model.builtinImageGen,
+                    candidate.model.builtinGoogleSearch,
+                    candidate.model.builtinUrlContext,
+                    candidate.model.builtinImageGen,
                 )
             }
-            val extraHeaders = parseCustomHeaders(model.customHeaders)
+            val extraHeaders = parseCustomHeaders(candidate.model.customHeaders)
 
             if (!stream) {
                 // 非流式候选：带读超时的完整请求，成功即转发
-                val resp = client.chatOnce(resolved.provider.baseUrl, apiKey.key, payload, extraHeaders)
+                val resp = client.chatOnce(candidate.provider.baseUrl, candidate.apiKey, payload, extraHeaders)
                     .getOrNull() ?: continue
                 respondText(resp.toString(), ContentType.Application.Json)
                 return
@@ -340,7 +357,7 @@ class LanServer(
 
             // 流式候选：限时建立连接，超时或连接失败（拒绝/DNS/坏地址）均取消并尝试下一个
             val upstream = try {
-                val call = client.newStreamingCall(resolved.provider.baseUrl, apiKey.key, payload, extraHeaders)
+                val call = client.newStreamingCall(candidate.provider.baseUrl, candidate.apiKey, payload, extraHeaders)
                 withTimeoutOrNull(timeoutMs) {
                     withContext(Dispatchers.IO) { call.execute() }
                 }.also { if (it == null) call.cancel() }
@@ -386,3 +403,11 @@ class LanServer(
         respondText(body, ContentType.Application.Json, status)
     }
 }
+
+/** 已通过校验的 smartAi 候选（解析成功、有 Key、非自连），供排序后逐个尝试 */
+private data class SmartPrepared(
+    val provider: cn.luoluna.sweven.ai.data.db.ProviderEntity,
+    val apiKey: String,
+    val model: ModelEntity,
+    val advancedParams: AdvancedParams?,
+)

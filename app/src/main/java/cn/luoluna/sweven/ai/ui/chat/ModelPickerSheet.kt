@@ -31,6 +31,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import cn.luoluna.sweven.ai.data.db.ModelEntity
+import cn.luoluna.sweven.ai.data.repo.SmartAggregateCapability
 import cn.luoluna.sweven.ai.ui.common.ModelBadgesRow
 import cn.luoluna.sweven.ai.ui.common.paramsSummary
 
@@ -47,6 +48,23 @@ private enum class InputFilter(val label: String) {
 
 private data class PickerRow(val item: PickerModel, val showHeader: Boolean)
 
+/** smartAi 聚合能力摘要：「文图→文图 · 支持工具/推理」 */
+private fun smartAiCapabilitySummary(cap: SmartAggregateCapability?): String {
+    if (cap == null) return ""
+    fun mods(text: Boolean, image: Boolean, video: Boolean) = buildList {
+        if (text) add("文")
+        if (image) add("图")
+        if (video) add("视")
+    }.joinToString("").ifEmpty { "—" }
+    val base = "${mods(cap.inputText, cap.inputImage, cap.inputVideo)}→" +
+        mods(cap.outputText, cap.outputImage, cap.outputVideo)
+    val extras = buildList {
+        if (cap.tools) add("工具")
+        if (cap.reasoning) add("推理")
+    }
+    return if (extras.isEmpty()) base else "$base · 支持${extras.joinToString("/")}"
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ModelPickerSheet(
@@ -59,6 +77,7 @@ fun ModelPickerSheet(
     smartAiAvailable: Boolean = false,
     smartAiSelected: Boolean = false,
     onSelectSmartAi: () -> Unit = {},
+    smartAiCapability: SmartAggregateCapability? = null,
 ) {
     var filter by remember { mutableStateOf(InputFilter.ALL) }
     var providerFilter by remember { mutableStateOf<String?>(null) }
@@ -162,7 +181,13 @@ fun ModelPickerSheet(
                             Column(Modifier.weight(1f).padding(vertical = 6.dp)) {
                                 Text("smartAi", style = MaterialTheme.typography.bodyMedium)
                                 Text(
-                                    "智能路由 · 失败自动切换候选",
+                                    buildList {
+                                        add("智能路由")
+                                        smartAiCapabilitySummary(smartAiCapability)
+                                            .takeIf { it.isNotEmpty() }
+                                            ?.let { add(it) }
+                                        add("失败自动切换候选")
+                                    }.joinToString(" · "),
                                     style = MaterialTheme.typography.labelSmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 )

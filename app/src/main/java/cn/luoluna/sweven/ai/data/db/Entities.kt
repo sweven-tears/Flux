@@ -4,8 +4,10 @@ import androidx.room.Entity
 import androidx.room.ForeignKey
 import androidx.room.Index
 import androidx.room.PrimaryKey
+import kotlinx.serialization.Serializable
 
 @Entity(tableName = "providers")
+@Serializable
 data class ProviderEntity(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
     val alias: String,
@@ -36,6 +38,7 @@ data class ProviderEntity(
     ],
     indices = [Index("providerId")],
 )
+@Serializable
 data class ApiKeyEntity(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
     val providerId: Long,
@@ -62,6 +65,7 @@ object ModelType {
     ],
     indices = [Index("providerId")],
 )
+@Serializable
 data class ModelEntity(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
     val providerId: Long,
@@ -117,6 +121,7 @@ data class ModelEntity(
     ],
     indices = [Index("providerId")],
 )
+@Serializable
 data class SmartRouteEntity(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
     val providerId: Long,
@@ -141,6 +146,7 @@ data class ConversationEntity(
 )
 
 @Entity(tableName = "folders")
+@Serializable
 data class FolderEntity(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
     val name: String,
@@ -160,6 +166,7 @@ data class FolderEntity(
     ],
     indices = [Index("folderId")],
 )
+@Serializable
 data class PresetEntity(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
     val folderId: Long,
@@ -212,6 +219,7 @@ private object ImagesAdapter {
 }
 
 @Entity(tableName = "auth_devices")
+@Serializable
 data class AuthDeviceEntity(
     @PrimaryKey val deviceId: String,
     val label: String? = null,

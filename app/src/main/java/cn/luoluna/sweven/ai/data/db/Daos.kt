@@ -30,6 +30,12 @@ interface ProviderDao {
     @Insert
     suspend fun insert(p: ProviderEntity): Long
 
+    @Insert
+    suspend fun insertAll(list: List<ProviderEntity>)
+
+    @Query("DELETE FROM providers")
+    suspend fun clearAll()
+
     @Update
     suspend fun update(p: ProviderEntity)
 
@@ -54,11 +60,20 @@ interface ApiKeyDao {
     @Query("SELECT * FROM api_keys WHERE providerId = :providerId ORDER BY createdAt ASC")
     suspend fun forProvider(providerId: Long): List<ApiKeyEntity>
 
+    @Query("SELECT * FROM api_keys")
+    suspend fun all(): List<ApiKeyEntity>
+
     @Query("SELECT * FROM api_keys WHERE id = :id")
     suspend fun byId(id: Long): ApiKeyEntity?
 
     @Insert
     suspend fun insert(k: ApiKeyEntity): Long
+
+    @Insert
+    suspend fun insertAll(list: List<ApiKeyEntity>)
+
+    @Query("DELETE FROM api_keys")
+    suspend fun clearAll()
 
     @Update
     suspend fun update(k: ApiKeyEntity)
@@ -72,6 +87,9 @@ interface ModelDao {
     @Query("SELECT * FROM models ORDER BY sortOrder ASC, name COLLATE NOCASE ASC")
     fun observeAll(): Flow<List<ModelEntity>>
 
+    @Query("SELECT * FROM models")
+    suspend fun all(): List<ModelEntity>
+
     @Query("SELECT * FROM models WHERE providerId = :providerId ORDER BY sortOrder ASC, name COLLATE NOCASE ASC")
     fun observeForProvider(providerId: Long): Flow<List<ModelEntity>>
 
@@ -83,6 +101,9 @@ interface ModelDao {
 
     @Query("SELECT * FROM models WHERE providerId = :providerId AND name = :name LIMIT 1")
     suspend fun find(providerId: Long, name: String): ModelEntity?
+
+    @Query("DELETE FROM models")
+    suspend fun clearAll()
 
     @Insert
     suspend fun insert(m: ModelEntity): Long
@@ -113,6 +134,9 @@ interface SmartRouteDao {
 
     @Query("SELECT MAX(sortOrder) FROM smart_routes")
     suspend fun maxSortOrder(): Int?
+
+    @Query("DELETE FROM smart_routes")
+    suspend fun clearAll()
 
     @Insert
     suspend fun insert(e: SmartRouteEntity): Long
@@ -197,6 +221,10 @@ interface ConversationDao {
             "ORDER BY updatedAt DESC LIMIT 1"
     )
     suspend fun findEmptyByPreset(folderId: Long?, title: String, systemPrompt: String?): ConversationEntity?
+
+    /** 全部会话脱离文件夹（配置导入清空重建 folders 前调用，聊天记录不动） */
+    @Query("UPDATE conversations SET folderId = NULL")
+    suspend fun clearAllFolderRefs()
 }
 
 @Dao
@@ -204,11 +232,20 @@ interface FolderDao {
     @Query("SELECT * FROM folders ORDER BY createdAt ASC")
     fun observeAll(): Flow<List<FolderEntity>>
 
+    @Query("SELECT * FROM folders ORDER BY createdAt ASC")
+    suspend fun all(): List<FolderEntity>
+
     @Query("SELECT * FROM folders WHERE id = :id")
     suspend fun byId(id: Long): FolderEntity?
 
     @Insert
     suspend fun insert(f: FolderEntity): Long
+
+    @Insert
+    suspend fun insertAll(list: List<FolderEntity>)
+
+    @Query("DELETE FROM folders")
+    suspend fun clearAll()
 
     @Update
     suspend fun update(f: FolderEntity)
@@ -222,11 +259,20 @@ interface PresetDao {
     @Query("SELECT * FROM presets ORDER BY createdAt ASC")
     fun observeAll(): Flow<List<PresetEntity>>
 
+    @Query("SELECT * FROM presets ORDER BY createdAt ASC")
+    suspend fun all(): List<PresetEntity>
+
     @Query("SELECT * FROM presets WHERE folderId = :folderId ORDER BY createdAt ASC")
     suspend fun forFolder(folderId: Long): List<PresetEntity>
 
     @Insert
     suspend fun insert(p: PresetEntity): Long
+
+    @Insert
+    suspend fun insertAll(list: List<PresetEntity>)
+
+    @Query("DELETE FROM presets")
+    suspend fun clearAll()
 
     @Update
     suspend fun update(p: PresetEntity)
@@ -276,6 +322,9 @@ interface AuthDeviceDao {
     @Query("SELECT * FROM auth_devices ORDER BY lastSeenAt DESC")
     fun observeAll(): Flow<List<AuthDeviceEntity>>
 
+    @Query("SELECT * FROM auth_devices ORDER BY lastSeenAt DESC")
+    suspend fun all(): List<AuthDeviceEntity>
+
     @Query("SELECT * FROM auth_devices WHERE status = :status ORDER BY lastSeenAt DESC")
     fun observeByStatus(status: String): Flow<List<AuthDeviceEntity>>
 
@@ -284,6 +333,12 @@ interface AuthDeviceDao {
 
     @Insert(onConflict = androidx.room.OnConflictStrategy.REPLACE)
     suspend fun upsert(d: AuthDeviceEntity)
+
+    @Insert(onConflict = androidx.room.OnConflictStrategy.REPLACE)
+    suspend fun upsertAll(list: List<AuthDeviceEntity>)
+
+    @Query("DELETE FROM auth_devices")
+    suspend fun clearAll()
 
     @Query("UPDATE auth_devices SET label = :label WHERE deviceId = :deviceId")
     suspend fun setLabel(deviceId: String, label: String?)

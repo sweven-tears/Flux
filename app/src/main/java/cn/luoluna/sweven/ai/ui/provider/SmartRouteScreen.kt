@@ -2,6 +2,7 @@ package cn.luoluna.sweven.ai.ui.provider
 
 import androidx.compose.animation.core.Animatable
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -12,6 +13,7 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
@@ -19,20 +21,22 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Category
 import androidx.compose.material.icons.filled.DragIndicator
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -62,8 +66,10 @@ import cn.luoluna.sweven.ai.data.db.ModelEntity
 import cn.luoluna.sweven.ai.data.db.ModelType
 import cn.luoluna.sweven.ai.data.db.ProviderEntity
 import cn.luoluna.sweven.ai.data.db.SmartRouteEntity
+import cn.luoluna.sweven.ai.ui.common.ModelBadgesRow
 import cn.luoluna.sweven.ai.ui.common.ReorderState
 import cn.luoluna.sweven.ai.ui.common.TextFieldDialog
+import cn.luoluna.sweven.ai.ui.common.normalizeModelId
 import cn.luoluna.sweven.ai.ui.common.rememberReorderState
 import cn.luoluna.sweven.ai.ui.common.reorderDragged
 import cn.luoluna.sweven.ai.ui.common.reorderHandle
@@ -97,6 +103,7 @@ fun SmartRouteScreen(onBack: () -> Unit) {
     var showTimeoutEdit by remember { mutableStateOf(false) }
     var showRoundsEdit by remember { mutableStateOf(false) }
     var showAddModels by remember { mutableStateOf(false) }
+    var showCategoryView by remember { mutableStateOf(false) }
 
     // 拖拽换位后的本地顺序，落库完成前临时覆盖 Flow 数据
     var localOrder by remember { mutableStateOf<List<SmartRouteEntity>?>(null) }
@@ -125,6 +132,9 @@ fun SmartRouteScreen(onBack: () -> Unit) {
                     }
                 },
                 actions = {
+                    IconButton(onClick = { showCategoryView = true }) {
+                        Icon(Icons.Filled.Category, contentDescription = "分类查看")
+                    }
                     IconButton(onClick = { showAddModels = true }) {
                         Icon(Icons.Filled.Add, contentDescription = "添加候选模型")
                     }
@@ -248,8 +258,16 @@ fun SmartRouteScreen(onBack: () -> Unit) {
             },
         )
     }
+    if (showCategoryView) {
+        CategoryViewSheet(
+            entries = display,
+            providers = providers,
+            models = models,
+            onDismiss = { showCategoryView = false },
+        )
+    }
     if (showAddModels) {
-        AddCandidatesDialog(
+        AddCandidatesSheet(
             candidates = availableCandidates(providers, models, display),
             onDismiss = { showAddModels = false },
             onConfirm = { selected ->
@@ -276,11 +294,11 @@ private fun availableCandidates(
     providers: List<ProviderEntity>,
     models: List<ModelEntity>,
     entries: List<SmartRouteEntity>,
-): List<ModelEntity> {
+): List<Pair<ProviderEntity, ModelEntity>> {
     val existing = entries.map { it.providerId to it.modelName }.toSet()
     return models.filter { m ->
         (m.type == ModelType.CHAT || m.outputImage) && (m.providerId to m.name) !in existing
-    }
+    }.mapNotNull { m -> providers.firstOrNull { it.id == m.providerId }?.let { it to m } }
 }
 
 @Composable
@@ -427,57 +445,256 @@ private fun RowScope.SwipeActionButton(
     }
 }
 
+private data class CandidateRow(
+    val provider: ProviderEntity,
+    val model: ModelEntity,
+    val showHeader: Boolean,
+)
+
+/** 添加候选模型：搜索 + 厂商过滤 + 分组列表，多选后追加到回退链末尾 */
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun AddCandidatesDialog(
-    candidates: List<ModelEntity>,
+private fun AddCandidatesSheet(
+    candidates: List<Pair<ProviderEntity, ModelEntity>>,
     onDismiss: () -> Unit,
     onConfirm: (List<ModelEntity>) -> Unit,
 ) {
-    val checked = remember(candidates) {
-        mutableStateOf(candidates.associate { (it.providerId to it.name) to false })
+    var query by remember { mutableStateOf("") }
+    var providerFilter by remember { mutableStateOf<String?>(null) }
+    var checked by remember { mutableStateOf(emptySet<Pair<Long, String>>()) }
+
+    val providerAliases = remember(candidates) { candidates.map { it.first.alias }.distinct() }
+    val q = normalizeModelId(query)
+    val filtered = candidates.filter { (p, m) ->
+        (providerFilter == null || p.alias == providerFilter) &&
+            (q.isEmpty() || normalizeModelId("${m.name} ${m.alias.orEmpty()}").contains(q))
     }
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        confirmButton = {
-            TextButton(
-                onClick = {
-                    onConfirm(candidates.filter { checked.value[it.providerId to it.name] == true })
-                },
-                enabled = candidates.isNotEmpty(),
-            ) { Text("添加所选") }
-        },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } },
-        title = { Text("添加候选模型") },
-        text = {
-            if (candidates.isEmpty()) {
+    val rows = remember(filtered) {
+        buildList {
+            var lastAlias: String? = null
+            filtered.forEach { (p, m) ->
+                add(CandidateRow(p, m, p.alias != lastAlias))
+                lastAlias = p.alias
+            }
+        }
+    }
+
+    ModalBottomSheet(onDismissRequest = onDismiss) {
+        Column(Modifier.padding(horizontal = 16.dp)) {
+            Text("添加候选模型", style = MaterialTheme.typography.titleMedium)
+            OutlinedTextField(
+                value = query,
+                onValueChange = { query = it },
+                placeholder = { Text("搜索模型") },
+                singleLine = true,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 8.dp),
+            )
+            if (providerAliases.size > 1) {
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .horizontalScroll(rememberScrollState())
+                        .padding(bottom = 8.dp),
+                ) {
+                    FilterChip(
+                        selected = providerFilter == null,
+                        onClick = { providerFilter = null },
+                        label = { Text("全部厂商") },
+                    )
+                    providerAliases.forEach { alias ->
+                        FilterChip(
+                            selected = providerFilter == alias,
+                            onClick = { providerFilter = if (providerFilter == alias) null else alias },
+                            label = { Text(alias, maxLines = 1) },
+                        )
+                    }
+                }
+            }
+        }
+        if (rows.isEmpty()) {
+            Column(
+                Modifier.fillMaxWidth().padding(32.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+            ) {
                 Text(
-                    "没有可添加的模型：候选需为启用中的 chat 或图像生成模型",
+                    if (candidates.isEmpty()) "没有可添加的模型：候选需为启用中的 chat 或图像生成模型"
+                    else "没有匹配的模型",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
-            } else {
-                Column(
-                    Modifier
-                        .height(360.dp)
-                        .verticalScroll(rememberScrollState()),
-                ) {
-                    candidates.forEach { m ->
-                        val key = m.providerId to m.name
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Checkbox(
-                                checked = checked.value[key] == true,
-                                onCheckedChange = { v -> checked.value = checked.value + (key to v) },
+            }
+        } else {
+            LazyColumn(Modifier.fillMaxWidth().heightIn(max = 420.dp)) {
+                items(rows, key = { "${it.provider.id}_${it.model.name}" }) { row ->
+                    if (row.showHeader) {
+                        Text(
+                            row.provider.alias,
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.padding(start = 16.dp, top = 8.dp, bottom = 2.dp),
+                        )
+                    }
+                    val key = row.model.providerId to row.model.name
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp),
+                    ) {
+                        Checkbox(
+                            checked = key in checked,
+                            onCheckedChange = { v -> checked = if (v) checked + key else checked - key },
+                        )
+                        Column(Modifier.weight(1f).padding(vertical = 6.dp)) {
+                            Text(
+                                row.model.alias?.takeIf { it.isNotBlank() }
+                                    ?.let { "${it}（${row.model.name}）" } ?: row.model.name,
+                                style = MaterialTheme.typography.bodySmall,
+                                maxLines = 1,
                             )
-                            Column(Modifier.weight(1f)) {
-                                Text(
-                                    m.alias?.takeIf { it.isNotBlank() }?.let { "$it（${m.name}）" } ?: m.name,
-                                    style = MaterialTheme.typography.bodySmall,
-                                )
-                            }
+                            ModelBadgesRow(row.model, Modifier.padding(top = 2.dp))
+                        }
+                    }
+                }
+                item(key = "footer") { Spacer(Modifier.height(8.dp)) }
+            }
+        }
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 12.dp),
+            horizontalArrangement = Arrangement.End,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            TextButton(onClick = onDismiss) { Text("取消") }
+            Spacer(Modifier.width(8.dp))
+            Button(
+                onClick = {
+                    onConfirm(
+                        filtered.filter { (it.first.id to it.second.name) in checked }.map { it.second },
+                    )
+                },
+                enabled = checked.isNotEmpty(),
+            ) {
+                Text(if (checked.isEmpty()) "添加所选" else "添加所选（${checked.size}）")
+            }
+        }
+    }
+}
+
+private const val CAT_VISION = "视觉理解（文图→文）"
+private const val CAT_IMAGE_GEN = "图像生成（文→图）"
+private const val CAT_TEXT = "纯文本对话（文→文）"
+private const val CAT_OTHER = "其他 / 未标记"
+
+/** 候选按模态类别归类：视觉理解 > 图像生成 > 纯文本 > 其他（未标记或模型行已删除） */
+private fun categoryOf(m: ModelEntity?): String = when {
+    m == null -> CAT_OTHER
+    m.inputImage || m.inputVideo -> CAT_VISION
+    m.outputImage || m.outputVideo || m.type == ModelType.IMAGE -> CAT_IMAGE_GEN
+    m.inputText || m.outputText -> CAT_TEXT
+    else -> CAT_OTHER
+}
+
+private data class CategoryEntry(
+    /** 在回退列表中的序号（含禁用项，与主列表一致） */
+    val index: Int,
+    val entry: SmartRouteEntity,
+    val provider: ProviderEntity?,
+    val model: ModelEntity?,
+)
+
+/** 候选分类查看：按模态类别分组只读展示，不影响主列表拖拽排序 */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun CategoryViewSheet(
+    entries: List<SmartRouteEntity>,
+    providers: List<ProviderEntity>,
+    models: List<ModelEntity>,
+    onDismiss: () -> Unit,
+) {
+    val groups = remember(entries, providers, models) {
+        val all = entries.mapIndexed { i, e ->
+            CategoryEntry(
+                index = i,
+                entry = e,
+                provider = providers.firstOrNull { it.id == e.providerId },
+                model = models.firstOrNull { it.providerId == e.providerId && it.name == e.modelName },
+            )
+        }
+        listOf(CAT_VISION, CAT_IMAGE_GEN, CAT_TEXT, CAT_OTHER)
+            .map { cat -> cat to all.filter { categoryOf(it.model) == cat } }
+            .filter { it.second.isNotEmpty() }
+    }
+    ModalBottomSheet(onDismissRequest = onDismiss) {
+        Text(
+            "候选分类",
+            style = MaterialTheme.typography.titleMedium,
+            modifier = Modifier.padding(horizontal = 16.dp),
+        )
+        LazyColumn(Modifier.fillMaxWidth().padding(top = 4.dp, bottom = 24.dp)) {
+            groups.forEach { (title, list) ->
+                item(key = "header_$title") {
+                    Row(
+                        Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(
+                            title,
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.primary,
+                        )
+                        Spacer(Modifier.weight(1f))
+                        Text(
+                            "${list.size} 个",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+                items(list, key = { it.entry.id }) { e ->
+                    val displayName =
+                        e.model?.alias?.takeIf { it.isNotBlank() } ?: e.entry.modelName
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 4.dp),
+                    ) {
+                        Text(
+                            "${e.index + 1}",
+                            style = MaterialTheme.typography.labelSmall,
+                            fontFamily = FontFamily.Monospace,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.width(24.dp),
+                        )
+                        Column(Modifier.weight(1f)) {
+                            Text(
+                                "${e.provider?.alias ?: "?"} / $displayName",
+                                style = MaterialTheme.typography.bodySmall,
+                            )
+                            Text(
+                                e.entry.modelName,
+                                style = MaterialTheme.typography.labelSmall,
+                                fontFamily = FontFamily.Monospace,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1,
+                            )
+                            e.model?.let { ModelBadgesRow(it, Modifier.padding(top = 2.dp)) }
+                        }
+                        if (!e.entry.enabled) {
+                            Text(
+                                "已禁用",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
                         }
                     }
                 }
             }
-        },
-    )
+        }
+    }
 }

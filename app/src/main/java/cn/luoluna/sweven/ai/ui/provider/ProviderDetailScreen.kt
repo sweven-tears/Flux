@@ -60,6 +60,7 @@ import cn.luoluna.sweven.ai.ui.common.ReorderState
 import cn.luoluna.sweven.ai.ui.common.SectionCard
 import cn.luoluna.sweven.ai.ui.common.TextFieldDialog
 import cn.luoluna.sweven.ai.ui.common.maskKey
+import cn.luoluna.sweven.ai.ui.common.normalizeModelId
 import cn.luoluna.sweven.ai.ui.common.paramsSummary
 import cn.luoluna.sweven.ai.ui.common.rememberReorderState
 import cn.luoluna.sweven.ai.ui.common.reorderDragged
@@ -585,9 +586,6 @@ private fun AddKeyDialog(
         },
     )
 }
-
-private fun normalizeModelId(s: String): String =
-    s.lowercase().replace(Regex("[-_. ]"), "")
 
 @Composable
 private fun FetchModelsDialog(

@@ -118,4 +118,8 @@ fun maskKey(key: String): String = when {
     else -> key.take(6) + "****" + key.takeLast(4)
 }
 
+/** 模型搜索归一化：小写、去掉 -_. 分隔符，模糊匹配用 */
+fun normalizeModelId(s: String): String =
+    s.lowercase().replace(Regex("[-_. ]"), "")
+
 val MonoFont = FontFamily.Monospace

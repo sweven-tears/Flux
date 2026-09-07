@@ -50,6 +50,7 @@ import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import cn.luoluna.sweven.ai.data.SmartModes
 import cn.luoluna.sweven.ai.data.db.AuthDeviceEntity
 import cn.luoluna.sweven.ai.ui.common.MonoFont
 import cn.luoluna.sweven.ai.ui.common.SectionCard
@@ -81,6 +82,7 @@ fun LanScreen(
     val ips = remember { vm.lanIps() }
     var portDialog by remember { mutableStateOf(false) }
     var renameTarget by remember { mutableStateOf<AuthDeviceEntity?>(null) }
+    var modeTarget by remember { mutableStateOf<AuthDeviceEntity?>(null) }
 
     // 电池优化豁免：ON_RESUME 时刷新，从系统弹窗/设置页返回后立即更新
     var batteryIgnored by remember { mutableStateOf(true) }
@@ -241,6 +243,7 @@ fun LanScreen(
                             onRename = { renameTarget = d },
                             primaryAction = "撤销" to { vm.revoke(d.deviceId) },
                             secondaryAction = "拉黑" to { vm.blockAuthorized(d.deviceId) },
+                            onMode = { modeTarget = d },
                         )
                     }
                 }
@@ -270,7 +273,8 @@ fun LanScreen(
                         append("3. API Key 随意填写（如 sk-phone），真正的鉴权是设备授权\n")
                         append("4. 模型名称格式：厂商别名/模型名，完整列表见 GET /v1/models\n")
                         append("5. 新设备首次访问会产生「待授权申请」，在上方批准后即可使用\n")
-                        append("6. 客户端可携带请求头 X-Device-Id 自定义设备标识")
+                        append("6. 客户端可携带请求头 X-Device-Id 自定义设备标识\n")
+                        append("7. 已授权设备可单独设置响应模式（极速/聊天/随缘），smartAi 请求按设备生效")
                     },
                     style = MaterialTheme.typography.bodySmall,
                     fontFamily = FontFamily.SansSerif,
@@ -323,6 +327,18 @@ fun LanScreen(
             },
         )
     }
+
+    modeTarget?.let { device ->
+        cn.luoluna.sweven.ai.ui.common.ModeSelectDialog(
+            title = "响应模式（${device.label ?: device.deviceId}）",
+            current = device.responseMode,
+            onDismiss = { modeTarget = null },
+            onSelect = { mode ->
+                vm.setDeviceMode(device.deviceId, mode)
+                modeTarget = null
+            },
+        )
+    }
 }
 
 @Composable
@@ -331,6 +347,7 @@ private fun DeviceRow(
     onRename: () -> Unit,
     primaryAction: Pair<String, () -> Unit>,
     secondaryAction: Pair<String, (() -> Unit)>?,
+    onMode: (() -> Unit)? = null,
 ) {
     Row(verticalAlignment = Alignment.CenterVertically) {
         Column(Modifier.weight(1f)) {
@@ -341,7 +358,10 @@ private fun DeviceRow(
                 maxLines = 1,
             )
             Text(
-                "IP ${device.lastIp} · 首次 ${fmtTime(device.firstSeenAt)} · 最近 ${fmtTime(device.lastSeenAt)} · ${device.requestCount} 次",
+                buildString {
+                    append("IP ${device.lastIp} · 首次 ${fmtTime(device.firstSeenAt)} · 最近 ${fmtTime(device.lastSeenAt)} · ${device.requestCount} 次")
+                    if (onMode != null) append(" · 模式${SmartModes.labelOf(device.responseMode)}")
+                },
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -353,6 +373,11 @@ private fun DeviceRow(
         }
         TextButton(onClick = primaryAction.second) {
             Text(primaryAction.first, style = MaterialTheme.typography.labelMedium)
+        }
+        if (onMode != null) {
+            TextButton(onClick = onMode) {
+                Text("模式", style = MaterialTheme.typography.labelMedium)
+            }
         }
         TextButton(onClick = onRename) {
             Text("备注", style = MaterialTheme.typography.labelMedium)

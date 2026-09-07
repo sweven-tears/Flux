@@ -6,6 +6,7 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import cn.luoluna.sweven.ai.App
+import cn.luoluna.sweven.ai.data.SmartModes
 import cn.luoluna.sweven.ai.data.db.AuthDeviceEntity
 import cn.luoluna.sweven.ai.server.LanService
 import cn.luoluna.sweven.ai.server.NetUtil
@@ -100,5 +101,11 @@ class LanViewModel(app: Application) : AndroidViewModel(app) {
     /** 给任意出现过的设备设置备注名 */
     fun setDeviceLabel(deviceId: String, label: String) = viewModelScope.launch {
         authDao.setLabel(deviceId, label.trim().takeIf { it.isNotEmpty() })
+    }
+
+    /** 给设备设置响应模式（极速/聊天/随缘）：smartAi 请求按来源设备生效 */
+    fun setDeviceMode(deviceId: String, mode: String) = viewModelScope.launch {
+        if (!SmartModes.isKnown(mode)) return@launch
+        authDao.setResponseMode(deviceId, mode)
     }
 }

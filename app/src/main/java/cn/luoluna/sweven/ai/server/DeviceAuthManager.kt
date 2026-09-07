@@ -6,7 +6,8 @@ import cn.luoluna.sweven.ai.data.db.AuthDeviceEntity
 import cn.luoluna.sweven.ai.data.db.AppDatabase
 
 sealed interface AuthDecision {
-    data object Allowed : AuthDecision
+    /** 放行并携带设备实体（含响应模式等设备级配置） */
+    data class Allowed(val device: AuthDeviceEntity) : AuthDecision
     data class NeedsApproval(val isNew: Boolean) : AuthDecision
     data object Blocked : AuthDecision
 }
@@ -41,10 +42,9 @@ class DeviceAuthManager(
         }
         when (existing.status) {
             AuthDeviceEntity.STATUS_AUTHORIZED -> {
-                dao.upsert(
-                    existing.copy(requestCount = existing.requestCount + 1, lastSeenAt = now, lastIp = ip)
-                )
-                return AuthDecision.Allowed
+                val updated = existing.copy(requestCount = existing.requestCount + 1, lastSeenAt = now, lastIp = ip)
+                dao.upsert(updated)
+                return AuthDecision.Allowed(updated)
             }
             AuthDeviceEntity.STATUS_BLOCKED -> {
                 dao.upsert(existing.copy(requestCount = existing.requestCount + 1, lastSeenAt = now, lastIp = ip))

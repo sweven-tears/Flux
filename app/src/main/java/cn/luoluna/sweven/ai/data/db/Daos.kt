@@ -271,6 +271,9 @@ interface AuthDeviceDao {
     @Query("UPDATE auth_devices SET label = :label WHERE deviceId = :deviceId")
     suspend fun setLabel(deviceId: String, label: String?)
 
+    @Query("UPDATE auth_devices SET responseMode = :mode WHERE deviceId = :deviceId")
+    suspend fun setResponseMode(deviceId: String, mode: String)
+
     @Query("DELETE FROM auth_devices WHERE deviceId = :deviceId")
     suspend fun delete(deviceId: String)
 }

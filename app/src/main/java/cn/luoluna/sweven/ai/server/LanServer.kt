@@ -3,6 +3,7 @@ package cn.luoluna.sweven.ai.server
 import cn.luoluna.sweven.ai.data.AppSettings
 import cn.luoluna.sweven.ai.data.SmartModes
 import cn.luoluna.sweven.ai.data.db.AuthDeviceDao
+import cn.luoluna.sweven.ai.data.db.AuthDeviceEntity
 import cn.luoluna.sweven.ai.data.db.ModelDao
 import cn.luoluna.sweven.ai.data.db.ModelEntity
 import cn.luoluna.sweven.ai.data.db.ProviderDao
@@ -108,12 +109,12 @@ class LanServer(
                 call.respondText(infoJson(), ContentType.Application.Json)
             }
             get("/v1/models") {
-                if (!call.authorize()) return@get
+                if (call.authorize() == null) return@get
                 call.respondText(aggregateModelsJson(), ContentType.Application.Json)
             }
             post("/v1/chat/completions") {
-                if (!call.authorize()) return@post
-                call.handleChatCompletion(settings.smartResponseMode.value)
+                val device = call.authorize() ?: return@post
+                call.handleChatCompletion(device)
             }
         }
     }
@@ -147,16 +148,17 @@ class LanServer(
             ?: "unknown"
     }
 
-    private suspend fun ApplicationCall.authorize(): Boolean {
+    /** 设备鉴权：放行返回设备实体（响应模式等设备级配置来源）；拒绝时已响应 401/403，返回 null */
+    private suspend fun ApplicationCall.authorize(): AuthDeviceEntity? {
         val ip = peerIp()
         val deviceId = request.headers[DeviceAuthManager.HEADER_DEVICE_ID]
             ?.takeIf { it.isNotBlank() }
             ?: "ip-$ip"
         return when (val decision = auth.check(deviceId, ip)) {
-            AuthDecision.Allowed -> true
+            is AuthDecision.Allowed -> decision.device
             AuthDecision.Blocked -> {
                 respondOpenAiError(HttpStatusCode.Forbidden, "该设备已被禁止使用聚合模型")
-                false
+                null
             }
             is AuthDecision.NeedsApproval -> {
                 respondOpenAiError(
@@ -164,7 +166,7 @@ class LanServer(
                     "设备未授权：请在 PhoneRouter App 的「局域网」页面批准该设备 (ID: $deviceId)。" +
                         "Device not authorized. Approve it in the PhoneRouter app.",
                 )
-                false
+                null
             }
         }
     }
@@ -229,7 +231,7 @@ class LanServer(
         return JsonArray(list)
     }
 
-    private suspend fun ApplicationCall.handleChatCompletion(mode: String) {
+    private suspend fun ApplicationCall.handleChatCompletion(device: AuthDeviceEntity) {
         val raw = try {
             receiveText()
         } catch (e: Exception) {
@@ -248,7 +250,8 @@ class LanServer(
             return
         }
         if (aggregateId == SmartAi.MODEL_NAME) {
-            handleSmartCompletion(body, mode)
+            // 响应模式按请求设备区分：不同设备对首字延迟的需求不同
+            handleSmartCompletion(body, device.responseMode)
             return
         }
         val route = router.resolveByAggregateId(aggregateId)
@@ -324,7 +327,7 @@ class LanServer(
     /**
      * smartAi 聚合模型：按启用候选顺序回退。
      * 流式候选限时建立连接，成功后原样透传 SSE；非流式候选请求完整 JSON 后转发。
-     * 响应模式取自请求设备的 [SmartPolicy]（极速首轮只发实测达标候选，超时只记慢并放宽）；
+     * 响应模式按请求设备区分（device.responseMode），构造 [SmartPolicy]；
      * 每次尝试结果打点 [SmartHealth]，与 App 内聊天共享健康状态。
      */
     private suspend fun ApplicationCall.handleSmartCompletion(rawBody: JsonObject, mode: String) {

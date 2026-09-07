@@ -62,12 +62,14 @@ import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import cn.luoluna.sweven.ai.App
+import cn.luoluna.sweven.ai.data.SmartModes
 import cn.luoluna.sweven.ai.data.db.ModelEntity
 import cn.luoluna.sweven.ai.data.db.ModelType
 import cn.luoluna.sweven.ai.data.db.ProviderEntity
 import cn.luoluna.sweven.ai.data.db.SmartRouteEntity
 import cn.luoluna.sweven.ai.data.repo.SmartHealth
 import cn.luoluna.sweven.ai.ui.common.ModelBadgesRow
+import cn.luoluna.sweven.ai.ui.common.ModeSelectDialog
 import cn.luoluna.sweven.ai.ui.common.ReorderState
 import cn.luoluna.sweven.ai.ui.common.TextFieldDialog
 import cn.luoluna.sweven.ai.ui.common.normalizeModelId
@@ -104,11 +106,20 @@ fun SmartRouteScreen(onBack: () -> Unit) {
         .collectAsStateWithLifecycle(2)
     val cooldownSeconds by remember { app.settings.smartCooldownSeconds }
         .collectAsStateWithLifecycle(60)
+    val responseMode by remember { app.settings.smartResponseMode }
+        .collectAsStateWithLifecycle(SmartModes.CHAT)
+    val fastMs by remember { app.settings.smartFastFirstTokenMs }
+        .collectAsStateWithLifecycle(2000)
+    val leisureSeconds by remember { app.settings.smartLeisureFirstTokenSeconds }
+        .collectAsStateWithLifecycle(120)
 
     var showTimeoutEdit by remember { mutableStateOf(false) }
     var showRoundsEdit by remember { mutableStateOf(false) }
     var showCooldownThresholdEdit by remember { mutableStateOf(false) }
     var showCooldownSecondsEdit by remember { mutableStateOf(false) }
+    var showModeDialog by remember { mutableStateOf(false) }
+    var showFastEdit by remember { mutableStateOf(false) }
+    var showLeisureEdit by remember { mutableStateOf(false) }
     var showAddModels by remember { mutableStateOf(false) }
     var showCategoryView by remember { mutableStateOf(false) }
 
@@ -162,16 +173,49 @@ fun SmartRouteScreen(onBack: () -> Unit) {
                     Column(Modifier.fillMaxWidth().padding(16.dp)) {
                         Text("聚合模型 smartAi", style = MaterialTheme.typography.titleMedium)
                         Text(
-                            "把候选模型整合成一个 smartAi。聊天时按下方顺序依次尝试：某模型失败" +
-                                "或 ${timeoutSeconds}s 内无输出，自动切换下一个；已开始输出后失败则不再切换。" +
-                                "整条候选链轮巡 $maxRounds 轮仍全部失败，才提示全部候选不可用。",
+                            "把候选模型整合成一个 smartAi。按下方顺序依次尝试：某模型失败或超时无输出，" +
+                                "自动切换下一个；已开始输出后失败则不再切换。整条候选链轮巡 $maxRounds 轮仍全部失败，" +
+                                "才提示全部候选不可用。极速模式首轮只把请求发给实测速度达标的候选（超时候选只记「慢」），" +
+                                "一轮无成功再放宽到聊天档；连续失败的候选进入冷却垫底。",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             modifier = Modifier.padding(top = 4.dp),
                         )
                         HorizontalDivider(Modifier.padding(vertical = 10.dp))
                         Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text("首字超时", style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
+                            Column(Modifier.weight(1f)) {
+                                Text("响应模式（本机聊天）", style = MaterialTheme.typography.bodyMedium)
+                                Text(
+                                    "局域网设备的模式在「局域网」页按设备单独设置",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                            TextButton(onClick = { showModeDialog = true }) {
+                                Text("${SmartModes.labelOf(responseMode)}  修改")
+                            }
+                        }
+                        if (responseMode == SmartModes.FAST) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Column(Modifier.weight(1f)) {
+                                    Text("极速首字超时", style = MaterialTheme.typography.bodyMedium)
+                                    Text(
+                                        "首轮门槛，超时候选只记「慢」，下轮放宽后仍会尝试",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                }
+                                TextButton(onClick = { showFastEdit = true }) { Text("${fastMs}ms  修改") }
+                            }
+                        }
+                        if (responseMode == SmartModes.LEISURE) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text("随缘首字超时", style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
+                                TextButton(onClick = { showLeisureEdit = true }) { Text("$leisureSeconds 秒  修改") }
+                            }
+                        }
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text("聊天档超时", style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
                             TextButton(onClick = { showTimeoutEdit = true }) { Text("$timeoutSeconds 秒  修改") }
                         }
                         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -277,6 +321,55 @@ fun SmartRouteScreen(onBack: () -> Unit) {
             onConfirm = { v ->
                 v.trim().toIntOrNull()?.let { app.settings.setSmartRouteMaxRounds(it) }
                 showRoundsEdit = false
+            },
+        )
+    }
+    if (showModeDialog) {
+        ModeSelectDialog(
+            title = "响应模式（本机聊天）",
+            current = responseMode,
+            onDismiss = { showModeDialog = false },
+            onSelect = {
+                app.settings.setSmartResponseMode(it)
+                showModeDialog = false
+            },
+        )
+    }
+    if (showFastEdit) {
+        TextFieldDialog(
+            title = "极速首字超时（毫秒）",
+            initial = fastMs.toString(),
+            onDismiss = { showFastEdit = false },
+            onValidate = { v ->
+                val n = v.trim().toIntOrNull()
+                when {
+                    n == null -> "请输入数字"
+                    n < 500 || n > 5000 -> "范围 500 ~ 5000 毫秒"
+                    else -> null
+                }
+            },
+            onConfirm = { v ->
+                v.trim().toIntOrNull()?.let { app.settings.setSmartFastFirstToken(it) }
+                showFastEdit = false
+            },
+        )
+    }
+    if (showLeisureEdit) {
+        TextFieldDialog(
+            title = "随缘首字超时（秒）",
+            initial = leisureSeconds.toString(),
+            onDismiss = { showLeisureEdit = false },
+            onValidate = { v ->
+                val n = v.trim().toIntOrNull()
+                when {
+                    n == null -> "请输入数字"
+                    n < 30 || n > 600 -> "范围 30 ~ 600 秒"
+                    else -> null
+                }
+            },
+            onConfirm = { v ->
+                v.trim().toIntOrNull()?.let { app.settings.setSmartLeisureFirstToken(it) }
+                showLeisureEdit = false
             },
         )
     }

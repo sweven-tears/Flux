@@ -220,6 +220,8 @@ data class AuthDeviceEntity(
     val firstSeenAt: Long = System.currentTimeMillis(),
     val lastSeenAt: Long = System.currentTimeMillis(),
     val authorizedAt: Long? = null,
+    /** 响应模式（SmartModes）：不同设备对首字延迟的需求不同，默认聊天档 */
+    val responseMode: String = "chat",
 ) {
     companion object {
         const val STATUS_PENDING = "pending"

@@ -4,18 +4,23 @@ import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.exclude
+import androidx.compose.foundation.layout.ime
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.ModalNavigationDrawer
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.ScaffoldDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberDrawerState
@@ -133,6 +138,11 @@ fun ChatScreen(
     val chatPluginId by app.settings.chatPluginId.collectAsStateWithLifecycle()
     val plugin = ChatUiRegistry.resolve(chatPluginId ?: ChatUiRegistry.DEFAULT_ID)
 
+    // 用户资料（抽屉左上角头像/名字，消息气泡用户头像）
+    val userName by app.settings.userName.collectAsStateWithLifecycle()
+    val userAvatar by app.settings.userAvatar.collectAsStateWithLifecycle()
+    var userProfileOpen by remember { mutableStateOf(false) }
+
     // 切换会话时退出编辑态，避免把编辑内容发到别的会话
     LaunchedEffect(current?.id) {
         editingMessage = null
@@ -143,6 +153,18 @@ fun ChatScreen(
         ActivityResultContracts.PickMultipleVisualMedia(maxItems = 4)
     ) { uris ->
         if (uris.isNotEmpty()) attachments = uris
+    }
+
+    // 用户头像选择：选图后压缩为 data URL 持久化
+    var pendingAvatar by remember { mutableStateOf<String?>(null) }
+    val pickAvatar = rememberLauncherForActivityResult(
+        ActivityResultContracts.PickVisualMedia()
+    ) { uri ->
+        if (uri != null) {
+            scope.launch {
+                pendingAvatar = ChatImages.uriToDataUrl(context, uri, maxDim = 256, quality = 85)
+            }
+        }
     }
 
     val listState = rememberLazyListState()
@@ -191,6 +213,8 @@ fun ChatScreen(
         effectiveThinkingDepth = effectiveThinkingDepth,
         showReasoning = showReasoning,
         showImageInput = showImageInput,
+        userName = userName,
+        userAvatar = userAvatar,
         input = input,
         onInputChange = { input = it },
         attachments = attachments,
@@ -244,6 +268,7 @@ fun ChatScreen(
         deleteFolder = { deleteFolderTarget = it },
         editPreset = { folderId, existing -> presetDialog = folderId to existing },
         moveConversation = { moveTarget = it },
+        editUserProfile = { userProfileOpen = true },
         onGoProviders = onGoProviders,
         onOpenSettings = onOpenSettings,
     )
@@ -260,6 +285,9 @@ fun ChatScreen(
             topBar = {
                 (plugin.topBar ?: { ChatUiDefaults.TopBar(env) })(env)
             },
+            // 排除 ime：键盘 insets 由下方 imePadding() 单独处理，
+            // 否则 Scaffold 的 content padding 与 imePadding 叠加，键盘与输入框间多出一段空白
+            contentWindowInsets = ScaffoldDefaults.contentWindowInsets.exclude(WindowInsets.ime),
         ) { padding ->
             Column(
                 Modifier
@@ -447,6 +475,31 @@ fun ChatScreen(
             },
         )
     }
+
+    if (userProfileOpen) {
+        UserProfileDialog(
+            initialName = userName.orEmpty(),
+            currentAvatar = userAvatar,
+            pendingAvatar = pendingAvatar,
+            onPickAvatar = {
+                pickAvatar.launch(
+                    PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+                )
+            },
+            onClearAvatar = { pendingAvatar = "" },
+            onDismiss = {
+                userProfileOpen = false
+                pendingAvatar = null
+            },
+            onSave = { name ->
+                app.settings.setUserName(name.ifBlank { null })
+                // pendingAvatar：null=未改动；""=清除；否则为新 data URL
+                pendingAvatar?.let { app.settings.setUserAvatar(it.ifBlank { null }) }
+                userProfileOpen = false
+                pendingAvatar = null
+            },
+        )
+    }
 }
 
 @Composable
@@ -460,6 +513,64 @@ private fun MoveRadioRow(label: String, folderId: Long?, selected: Long?, onSele
         RadioButton(selected = selected == folderId, onClick = { onSelect(folderId) })
         Text(label, style = androidx.compose.material3.MaterialTheme.typography.bodyMedium)
     }
+}
+
+/** 用户资料编辑：头像（选图/清除）+ 显示名 */
+@Composable
+private fun UserProfileDialog(
+    initialName: String,
+    currentAvatar: String?,
+    pendingAvatar: String?,
+    onPickAvatar: () -> Unit,
+    onClearAvatar: () -> Unit,
+    onDismiss: () -> Unit,
+    onSave: (String) -> Unit,
+) {
+    var name by remember { mutableStateOf(initialName) }
+    // 展示头像：优先未保存的新选图，其次已持久化的，空串表示已清除
+    val displayAvatar = when {
+        pendingAvatar == "" -> null
+        pendingAvatar != null -> pendingAvatar
+        else -> currentAvatar
+    }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        confirmButton = {
+            TextButton(onClick = { onSave(name) }) { Text("保存") }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("取消") }
+        },
+        title = { Text("我的资料") },
+        text = {
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                UserAvatar(
+                    name = name.ifBlank { null },
+                    avatarDataUrl = displayAvatar,
+                    size = 72.dp,
+                )
+                Row(
+                    modifier = Modifier.padding(top = 8.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    TextButton(onClick = onPickAvatar) { Text("更换头像") }
+                    if (displayAvatar != null) {
+                        TextButton(onClick = onClearAvatar) { Text("清除") }
+                    }
+                }
+                OutlinedTextField(
+                    value = name,
+                    onValueChange = { name = it },
+                    label = { Text("显示名") },
+                    placeholder = { Text("未设置时显示「我」") },
+                    singleLine = true,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 8.dp),
+                )
+            }
+        },
+    )
 }
 
 /** 当前会话的系统提示词（人设）查看与编辑：怀疑预设没生效时可在此确认 */

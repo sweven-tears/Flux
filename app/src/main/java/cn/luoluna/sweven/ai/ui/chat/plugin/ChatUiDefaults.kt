@@ -114,6 +114,31 @@ object ChatUiDefaults {
     @Composable
     fun Drawer(env: ChatUiEnv) {
         ModalDrawerSheet {
+            // 用户资料区：头像 + 名字，点击编辑
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable(onClick = env.editUserProfile)
+                    .padding(start = 16.dp, end = 16.dp, top = 16.dp, bottom = 4.dp),
+            ) {
+                cn.luoluna.sweven.ai.ui.chat.UserAvatar(
+                    name = env.userName,
+                    avatarDataUrl = env.userAvatar,
+                    size = 40.dp,
+                )
+                Column(Modifier.padding(start = 12.dp)) {
+                    Text(
+                        env.userName?.ifBlank { null } ?: "我",
+                        style = MaterialTheme.typography.titleSmall,
+                    )
+                    Text(
+                        "点击编辑资料",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 modifier = Modifier.padding(start = 16.dp, end = 8.dp, top = 12.dp),
@@ -506,78 +531,101 @@ object ChatUiDefaults {
     @Composable
     fun MessageBubble(env: ChatUiEnv, message: MessageEntity) {
         if (message.role == Role.USER) {
-            Column(
-                horizontalAlignment = Alignment.End,
+            // 用户消息：右侧用户头像 + 气泡
+            Row(
+                horizontalArrangement = Arrangement.End,
+                verticalAlignment = Alignment.Top,
                 modifier = Modifier.fillMaxWidth(),
             ) {
-                if (message.images.isNotEmpty()) {
-                    Row(
-                        horizontalArrangement = Arrangement.spacedBy(6.dp),
-                        modifier = Modifier
-                            .widthIn(max = 300.dp)
-                            .padding(bottom = 4.dp),
-                    ) {
-                        message.images.forEach { url ->
-                            MessageImage(url = url, onClick = env.showImage)
+                Column(
+                    horizontalAlignment = Alignment.End,
+                    modifier = Modifier.weight(1f),
+                ) {
+                    if (message.images.isNotEmpty()) {
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            modifier = Modifier
+                                .widthIn(max = 300.dp)
+                                .padding(bottom = 4.dp),
+                        ) {
+                            message.images.forEach { url ->
+                                MessageImage(url = url, onClick = env.showImage)
+                            }
                         }
                     }
-                }
-                if (message.content.isNotBlank()) {
-                    Surface(
-                        color = MaterialTheme.colorScheme.primary,
-                        shape = RoundedCornerShape(16.dp, 4.dp, 16.dp, 16.dp),
-                        modifier = Modifier
-                            .widthIn(max = 300.dp)
-                            .combinedClickable(onClick = {}, onLongClick = { env.showDetail(message) }),
-                    ) {
-                        Text(
-                            message.content,
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onPrimary,
-                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
-                        )
+                    if (message.content.isNotBlank()) {
+                        Surface(
+                            color = MaterialTheme.colorScheme.primary,
+                            shape = RoundedCornerShape(16.dp, 4.dp, 16.dp, 16.dp),
+                            modifier = Modifier
+                                .widthIn(max = 300.dp)
+                                .combinedClickable(onClick = {}, onLongClick = { env.showDetail(message) }),
+                        ) {
+                            Text(
+                                message.content,
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onPrimary,
+                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                            )
+                        }
                     }
+                    MessageActionsRow(
+                        alignEnd = true,
+                        enabled = !env.streaming,
+                        onCopy = { env.copyMessage(message) },
+                        onRegenerate = { env.vm.regenerateFrom(message) },
+                        onMore = { env.showMessageActions(message) },
+                    )
                 }
-                MessageActionsRow(
-                    alignEnd = true,
-                    enabled = !env.streaming,
-                    onCopy = { env.copyMessage(message) },
-                    onRegenerate = { env.vm.regenerateFrom(message) },
-                    onMore = { env.showMessageActions(message) },
+                cn.luoluna.sweven.ai.ui.chat.UserAvatar(
+                    name = env.userName,
+                    avatarDataUrl = env.userAvatar,
+                    size = 32.dp,
+                    modifier = Modifier.padding(start = 8.dp, top = 2.dp),
                 )
             }
         } else {
-            Column(Modifier.fillMaxWidth()) {
-                Column(Modifier.widthIn(max = 320.dp)) {
-                    val isLong = remember(message.content) {
-                        message.content.lines().size > 12 || message.content.length > 600
-                    }
-                    var collapsed by rememberSaveable(message.id) { mutableStateOf(false) }
-                    Surface(
-                        color = MaterialTheme.colorScheme.surfaceVariant,
-                        shape = RoundedCornerShape(4.dp, 16.dp, 16.dp, 16.dp),
-                        modifier = Modifier.combinedClickable(
-                            onClick = { if (isLong) collapsed = !collapsed },
-                            onLongClick = { env.showDetail(message) },
-                        ),
-                    ) {
-                        Column(Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
-                            if (!message.reasoning.isNullOrBlank()) {
-                                ReasoningSection(message.reasoning, inProgress = false)
-                            }
-                            CollapsibleMessageBody(message.content, isLong, collapsed) {
-                                collapsed = !collapsed
+            // 助手消息：左侧助手头像 + 气泡
+            Row(
+                verticalAlignment = Alignment.Top,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                cn.luoluna.sweven.ai.ui.chat.AssistantAvatar(
+                    size = 32.dp,
+                    modifier = Modifier.padding(end = 8.dp, top = 2.dp),
+                )
+                Column(Modifier.weight(1f)) {
+                    Column(Modifier.widthIn(max = 320.dp)) {
+                        val isLong = remember(message.content) {
+                            message.content.lines().size > 12 || message.content.length > 600
+                        }
+                        var collapsed by rememberSaveable(message.id) { mutableStateOf(false) }
+                        Surface(
+                            color = MaterialTheme.colorScheme.surfaceVariant,
+                            shape = RoundedCornerShape(4.dp, 16.dp, 16.dp, 16.dp),
+                            modifier = Modifier.combinedClickable(
+                                onClick = { if (isLong) collapsed = !collapsed },
+                                onLongClick = { env.showDetail(message) },
+                            ),
+                        ) {
+                            Column(Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
+                                if (!message.reasoning.isNullOrBlank()) {
+                                    ReasoningSection(message.reasoning, inProgress = false)
+                                }
+                                CollapsibleMessageBody(message.content, isLong, collapsed) {
+                                    collapsed = !collapsed
+                                }
                             }
                         }
                     }
+                    MessageActionsRow(
+                        alignEnd = false,
+                        enabled = !env.streaming,
+                        onCopy = { env.copyMessage(message) },
+                        onRegenerate = { env.vm.regenerateFrom(message) },
+                        onMore = { env.showMessageActions(message) },
+                    )
                 }
-                MessageActionsRow(
-                    alignEnd = false,
-                    enabled = !env.streaming,
-                    onCopy = { env.copyMessage(message) },
-                    onRegenerate = { env.vm.regenerateFrom(message) },
-                    onMore = { env.showMessageActions(message) },
-                )
             }
         }
     }
@@ -606,7 +654,14 @@ object ChatUiDefaults {
 
     @Composable
     fun StreamingBubbleContent(reasoning: String, content: String) {
-        Row(Modifier.fillMaxWidth()) {
+        Row(
+            verticalAlignment = Alignment.Top,
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            cn.luoluna.sweven.ai.ui.chat.AssistantAvatar(
+                size = 32.dp,
+                modifier = Modifier.padding(end = 8.dp, top = 2.dp),
+            )
             Surface(
                 color = MaterialTheme.colorScheme.surfaceVariant,
                 shape = RoundedCornerShape(4.dp, 16.dp, 16.dp, 16.dp),

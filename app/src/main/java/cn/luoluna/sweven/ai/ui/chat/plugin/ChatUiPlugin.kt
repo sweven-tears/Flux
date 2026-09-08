@@ -92,6 +92,10 @@ class ChatUiEnv(
     val effectiveThinkingDepth: String,
     val showReasoning: Boolean,
     val showImageInput: Boolean,
+    /** 用户显示名（null 未设置） */
+    val userName: String?,
+    /** 用户头像 data URL（null 用首字合成） */
+    val userAvatar: String?,
 
     // ---- 宿主持有的 UI 状态（插件读写） ----
     val input: String,
@@ -132,6 +136,8 @@ class ChatUiEnv(
     val deleteFolder: (FolderEntity) -> Unit,
     val editPreset: (folderId: Long, existing: PresetEntity?) -> Unit,
     val moveConversation: (ConversationEntity) -> Unit,
+    /** 打开用户资料编辑（抽屉左上角头像/名字） */
+    val editUserProfile: () -> Unit,
 
     // ---- 导航 ----
     val onGoProviders: () -> Unit,

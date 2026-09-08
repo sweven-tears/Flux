@@ -143,6 +143,23 @@ class AppSettings(context: Context) {
         _chatPluginId.value = id
     }
 
+    private val _userName = MutableStateFlow(prefs.getString(KEY_USER_NAME, null))
+    val userName: StateFlow<String?> = _userName
+
+    /** 用户头像：图片内容的 data URL（压缩后），null 用首字合成 */
+    private val _userAvatar = MutableStateFlow(prefs.getString(KEY_USER_AVATAR, null))
+    val userAvatar: StateFlow<String?> = _userAvatar
+
+    fun setUserName(name: String?) {
+        prefs.edit().putString(KEY_USER_NAME, name).apply()
+        _userName.value = name
+    }
+
+    fun setUserAvatar(dataUrl: String?) {
+        prefs.edit().putString(KEY_USER_AVATAR, dataUrl).apply()
+        _userAvatar.value = dataUrl
+    }
+
     companion object {
         const val DEFAULT_PORT = 8787
         const val DEFAULT_SMART_FIRST_TOKEN_TIMEOUT = 30
@@ -165,5 +182,7 @@ class AppSettings(context: Context) {
         private const val KEY_SMART_COOLDOWN_SECONDS = "smart_cooldown_seconds"
         private const val KEY_LOG_REQUESTS = "log_requests_enabled"
         private const val KEY_CHAT_PLUGIN = "chat_ui_plugin"
+        private const val KEY_USER_NAME = "user_name"
+        private const val KEY_USER_AVATAR = "user_avatar"
     }
 }

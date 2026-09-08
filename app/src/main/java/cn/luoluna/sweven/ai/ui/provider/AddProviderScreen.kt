@@ -107,7 +107,6 @@ fun AddProviderScreen(
             Modifier
                 .fillMaxSize()
                 .padding(padding)
-                .imePadding()
                 .pointerInput(Unit) {
                     detectTapGestures(onTap = {
                         keyboard?.hide()

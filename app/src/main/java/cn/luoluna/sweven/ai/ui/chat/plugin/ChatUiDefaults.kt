@@ -860,29 +860,29 @@ object ChatUiDefaults {
                     // IconButton(onClick = { env.scope.launch { env.drawerState.open() } }) {
                     //     Icon(Icons.Filled.Search, contentDescription = "搜索", tint = onPanel)
                     // }
-                    // 思考模式：蓝色灯泡，启用思考（非关闭挡）时右上角加点亮小圆点
-                    Box {
-                        var thinkMenuOpen by remember { mutableStateOf(false) }
-                        val thinkingOn = env.showReasoning && env.effectiveThinkingDepth != ThinkingDepth.OFF
-                        IconButton(onClick = { if (env.showReasoning) thinkMenuOpen = true }) {
-                            Box(Modifier.size(26.dp)) {
-                                Icon(
-                                    Icons.Filled.Lightbulb,
-                                    contentDescription = "思考模式",
-                                    tint = MaterialTheme.colorScheme.primary,
-                                    modifier = Modifier.size(24.dp),
-                                )
-                                if (thinkingOn) {
-                                    Box(
-                                        Modifier
-                                            .size(7.dp)
-                                            .background(MaterialTheme.colorScheme.primary, CircleShape)
-                                            .align(Alignment.TopEnd),
+                    // 思考模式：仅具备推理能力的模型显示（smartAi 按候选并集判断）
+                    if (env.showReasoning) {
+                        Box {
+                            var thinkMenuOpen by remember { mutableStateOf(false) }
+                            val thinkingOn = env.effectiveThinkingDepth != ThinkingDepth.OFF
+                            IconButton(onClick = { thinkMenuOpen = true }) {
+                                Box(Modifier.size(26.dp)) {
+                                    Icon(
+                                        Icons.Filled.Lightbulb,
+                                        contentDescription = "思考模式",
+                                        tint = MaterialTheme.colorScheme.primary,
+                                        modifier = Modifier.size(24.dp),
                                     )
+                                    if (thinkingOn) {
+                                        Box(
+                                            Modifier
+                                                .size(7.dp)
+                                                .background(MaterialTheme.colorScheme.primary, CircleShape)
+                                                .align(Alignment.TopEnd),
+                                        )
+                                    }
                                 }
                             }
-                        }
-                        if (env.showReasoning) {
                             DropdownMenu(
                                 expanded = thinkMenuOpen,
                                 onDismissRequest = { thinkMenuOpen = false },
@@ -913,9 +913,11 @@ object ChatUiDefaults {
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(4.dp),
                 ) {
-                    // 加号：添加图片等
-                    IconButton(onClick = env.pickImages) {
-                        Icon(Icons.Filled.Add, contentDescription = "添加图片", tint = onPanel)
+                    // 加号（添加图片等）：仅支持图片输入的模型显示（smartAi 按候选并集判断）
+                    if (env.showImageInput) {
+                        IconButton(onClick = env.pickImages) {
+                            Icon(Icons.Filled.Add, contentDescription = "添加图片", tint = onPanel)
+                        }
                     }
                     if (env.streaming) {
                         // 流式中变为停止按钮（保留原停止能力）

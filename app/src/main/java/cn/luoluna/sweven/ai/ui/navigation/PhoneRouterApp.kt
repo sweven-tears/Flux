@@ -1,7 +1,9 @@
 package cn.luoluna.sweven.ai.ui.navigation
 
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.union
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Build
 import androidx.compose.material.icons.filled.Face
@@ -69,8 +71,10 @@ fun PhoneRouterApp(openLanTick: Int) {
     }
 
     Scaffold(
-        // 顶栏 insets 由各页面自己的 Scaffold/TopAppBar 处理，外层不再叠加，避免顶部双重空白
-        contentWindowInsets = WindowInsets(0, 0, 0, 0),
+        // 顶栏 insets 由各页面自己的 Scaffold/TopAppBar 处理，外层不再叠加，避免顶部双重空白；
+        // 底部 union ime：内容底 padding = max(bottomBar 高度, 键盘高度)，
+        // 键盘弹出时内容精确贴键盘顶（否则 bottomBar 垫高 + 内层 ime 叠加出空白）
+        contentWindowInsets = WindowInsets(0, 0, 0, 0).union(WindowInsets.ime),
         bottomBar = {
             if (currentRoute in TOP_ROUTES) {
                 NavigationBar {

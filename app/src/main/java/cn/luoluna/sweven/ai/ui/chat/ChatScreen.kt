@@ -8,19 +8,15 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.layout.WindowInsets
-import androidx.compose.foundation.layout.ime
-import androidx.compose.foundation.layout.union
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.ModalNavigationDrawer
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.ScaffoldDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberDrawerState
@@ -291,9 +287,9 @@ fun ChatScreen(
             topBar = {
                 (plugin.topBar ?: { ChatUiDefaults.TopBar(env) })(env)
             },
-            // 内容底部 insets 取 max(导航栏, 键盘)：键盘弹出时由 ime 精确接管，
-            // 避免「导航栏 padding + imePadding(含导航栏区域)」叠加出键盘上方空白
-            contentWindowInsets = ScaffoldDefaults.contentWindowInsets.union(WindowInsets.ime),
+            // ime 由应用层 Scaffold 统一处理（内容底 = max(bottomBar, 键盘)），
+            // 内层不再叠加，否则键盘上方多出 bottomBar 高度的空白
+            contentWindowInsets = WindowInsets(0, 0, 0, 0),
         ) { padding ->
             Column(
                 Modifier

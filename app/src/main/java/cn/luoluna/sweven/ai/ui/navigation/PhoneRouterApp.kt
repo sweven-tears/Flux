@@ -1,6 +1,7 @@
 package cn.luoluna.sweven.ai.ui.navigation
 
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.union
@@ -72,8 +73,7 @@ fun PhoneRouterApp(openLanTick: Int) {
 
     Scaffold(
         // 顶栏 insets 由各页面自己的 Scaffold/TopAppBar 处理，外层不再叠加，避免顶部双重空白；
-        // 底部 union ime：内容底 padding = max(bottomBar 高度, 键盘高度)，
-        // 键盘弹出时内容精确贴键盘顶（否则 bottomBar 垫高 + 内层 ime 叠加出空白）
+        // bottom union ime 覆盖无 bottomBar 的路由（设置/添加厂商等）键盘弹出时内容贴键盘顶
         contentWindowInsets = WindowInsets(0, 0, 0, 0).union(WindowInsets.ime),
         bottomBar = {
             if (currentRoute in TOP_ROUTES) {
@@ -103,7 +103,11 @@ fun PhoneRouterApp(openLanTick: Int) {
         NavHost(
             navController = navController,
             startDestination = Routes.CHAT,
-            modifier = Modifier.padding(padding),
+            // padding 后消费已用掉的 insets：下游 imePadding 自动扣除 bottomBar 部分，
+            // 键盘弹出时输入面板精确贴键盘顶（否则 bottomBar 高度成为键盘上方空白）
+            modifier = Modifier
+                .padding(padding)
+                .consumeWindowInsets(padding),
         ) {
             composable(Routes.CHAT) {
                 ChatScreen(

@@ -6,8 +6,10 @@ import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.layout.WindowInsets
@@ -294,7 +296,9 @@ fun ChatScreen(
             Column(
                 Modifier
                     .fillMaxSize()
-                    .padding(padding),
+                    .padding(padding)
+                    .consumeWindowInsets(padding)
+                    .imePadding(),
             ) {
                 if (messages.isEmpty() && !streaming) {
                     Column(Modifier.weight(1f).fillMaxWidth()) {

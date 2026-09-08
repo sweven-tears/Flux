@@ -483,12 +483,16 @@ private val REASONING_HINTS = listOf(
 
 /**
  * 将模型的自定义 body（JSON 对象文本）合入请求体：非法 JSON 忽略，自定义键覆盖默认值。
+ * messages / model / stream 由组装层根据会话与目标模型生成，自定义 body 中的同名键一律忽略，
+ * 避免整体覆盖聊天历史或把请求改向别的模型。
  */
+private val CUSTOM_BODY_RESERVED_KEYS = setOf("messages", "model", "stream")
+
 fun mergeCustomBody(body: JsonObject, customBody: String?): JsonObject {
     if (customBody.isNullOrBlank()) return body
     return try {
         val extra = ChatJson.json.parseToJsonElement(customBody).jsonObject
-        JsonObject(body + extra)
+        JsonObject(body + extra.filterKeys { it !in CUSTOM_BODY_RESERVED_KEYS })
     } catch (_: Exception) {
         body
     }

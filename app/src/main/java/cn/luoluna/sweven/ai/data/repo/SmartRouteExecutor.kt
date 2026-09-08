@@ -228,10 +228,34 @@ class SmartRouteExecutor(private val client: ProviderClient) {
     private fun timeoutLabel(ms: Long) = "${ms / 1000}s"
 }
 
-/** baseUrl 是否指向本机 LAN 网关自身（回环地址 + 相同端口）：智能路由候选需跳过，避免自连回环 */
+/** baseUrl 是否指向本机 LAN 网关自身（回环地址/本机任意接口地址 + 相同端口）：智能路由候选需跳过，避免自连回环 */
 fun isSelfGatewayUrl(baseUrl: String, lanPort: Int): Boolean {
     val url = baseUrl.toHttpUrlOrNull() ?: return false
     if (url.port != lanPort) return false
     val host = url.host.removePrefix("[").removeSuffix("]")
-    return host == "localhost" || host == "127.0.0.1" || host == "::1"
+    if (host == "localhost" || host == "127.0.0.1" || host == "::1") return true
+    return host in localInterfaceAddresses()
+}
+
+/** 本机全部网络接口的数值地址（含 IPv4/IPv6），缓存 60s：接口变化（切 Wi-Fi/热点）后短暂窗口内仍按旧地址判断，可接受 */
+private const val LOCAL_ADDR_TTL_MS = 60_000L
+
+private val localAddressesCache = object {
+    @Volatile var addresses: Set<String> = emptySet()
+    @Volatile var loadedAt: Long = 0L
+}
+
+private fun localInterfaceAddresses(): Set<String> {
+    val now = System.currentTimeMillis()
+    if (now - localAddressesCache.loadedAt < LOCAL_ADDR_TTL_MS) return localAddressesCache.addresses
+    val result = runCatching {
+        java.net.NetworkInterface.getNetworkInterfaces()?.toList().orEmpty()
+            .flatMap { it.inetAddresses.toList() }
+            .map { it.hostAddress?.substringBefore('%') ?: "" }
+            .filter { it.isNotEmpty() }
+            .toSet()
+    }.getOrDefault(emptySet())
+    localAddressesCache.addresses = result
+    localAddressesCache.loadedAt = now
+    return result
 }

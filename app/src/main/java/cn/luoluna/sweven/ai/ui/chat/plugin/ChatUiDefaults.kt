@@ -8,6 +8,7 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.animateScrollBy
@@ -28,16 +29,20 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Chat
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ArrowDropDown
+import androidx.compose.material.icons.filled.ArrowUpward
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.CloseFullscreen
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.Edit
@@ -52,6 +57,7 @@ import androidx.compose.material.icons.filled.Psychology
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material3.Button
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -62,12 +68,16 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.ModalDrawerSheet
 import androidx.compose.material3.NavigationDrawerItem
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.TextField
+import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -80,6 +90,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -88,6 +99,7 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import cn.luoluna.sweven.ai.data.db.ConversationEntity
 import cn.luoluna.sweven.ai.data.db.MessageEntity
@@ -106,7 +118,7 @@ import kotlinx.coroutines.launch
  * 默认槽位实现：现有 ChatScreen 各区域原样抽出的公共实现。
  * default 插件全部使用这里；其他插件覆写个别槽位时，未覆写区域也回落到这里。
  */
-@OptIn(ExperimentalFoundationApi::class)
+@OptIn(ExperimentalFoundationApi::class, ExperimentalMaterial3Api::class)
 object ChatUiDefaults {
 
     // ---------------- 抽屉 ----------------
@@ -362,14 +374,33 @@ object ChatUiDefaults {
                         .fillMaxWidth()
                         .combinedClickable(onClick = env.openModelPicker),
                 ) {
+                    // 两行标题：第一行会话标题（大、深色），第二行模型 id（厂商名字）（小、浅色）
+                    Text(
+                        env.current?.title ?: "新对话",
+                        style = MaterialTheme.typography.titleMedium,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text(
-                            if (env.isSmartAi) "smartAi"
-                            else env.currentPicker?.displayId ?: "选择模型",
-                            style = MaterialTheme.typography.titleMedium,
+                            when {
+                                env.isSmartAi -> "smartAi"
+                                env.currentPicker != null -> env.currentPicker.displayId
+                                else -> "选择模型"
+                            },
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
                             maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f, fill = false),
                         )
-                        Icon(Icons.Filled.ArrowDropDown, contentDescription = "切换模型")
+                        Icon(
+                            Icons.Filled.ArrowDropDown,
+                            contentDescription = "切换模型",
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.size(18.dp),
+                        )
                     }
                     if (env.modelFallback) {
                         Text(
@@ -531,101 +562,109 @@ object ChatUiDefaults {
     @Composable
     fun MessageBubble(env: ChatUiEnv, message: MessageEntity) {
         if (message.role == Role.USER) {
-            // 用户消息：右侧用户头像 + 气泡
-            Row(
-                horizontalArrangement = Arrangement.End,
-                verticalAlignment = Alignment.Top,
+            Column(
+                horizontalAlignment = Alignment.End,
                 modifier = Modifier.fillMaxWidth(),
             ) {
-                Column(
-                    horizontalAlignment = Alignment.End,
-                    modifier = Modifier.weight(1f),
+                // 头像在上方：用户 = 名字 + 头像（右对齐）
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.padding(bottom = 4.dp),
                 ) {
-                    if (message.images.isNotEmpty()) {
-                        Row(
-                            horizontalArrangement = Arrangement.spacedBy(6.dp),
-                            modifier = Modifier
-                                .widthIn(max = 300.dp)
-                                .padding(bottom = 4.dp),
-                        ) {
-                            message.images.forEach { url ->
-                                MessageImage(url = url, onClick = env.showImage)
-                            }
-                        }
-                    }
-                    if (message.content.isNotBlank()) {
-                        Surface(
-                            color = MaterialTheme.colorScheme.primary,
-                            shape = RoundedCornerShape(16.dp, 4.dp, 16.dp, 16.dp),
-                            modifier = Modifier
-                                .widthIn(max = 300.dp)
-                                .combinedClickable(onClick = {}, onLongClick = { env.showDetail(message) }),
-                        ) {
-                            Text(
-                                message.content,
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = MaterialTheme.colorScheme.onPrimary,
-                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
-                            )
-                        }
-                    }
-                    MessageActionsRow(
-                        alignEnd = true,
-                        enabled = !env.streaming,
-                        onCopy = { env.copyMessage(message) },
-                        onRegenerate = { env.vm.regenerateFrom(message) },
-                        onMore = { env.showMessageActions(message) },
+                    Text(
+                        env.userName?.ifBlank { null } ?: "我",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    cn.luoluna.sweven.ai.ui.chat.UserAvatar(
+                        name = env.userName,
+                        avatarDataUrl = env.userAvatar,
+                        size = 24.dp,
+                        modifier = Modifier.padding(start = 6.dp),
                     )
                 }
-                cn.luoluna.sweven.ai.ui.chat.UserAvatar(
-                    name = env.userName,
-                    avatarDataUrl = env.userAvatar,
-                    size = 32.dp,
-                    modifier = Modifier.padding(start = 8.dp, top = 2.dp),
+                if (message.images.isNotEmpty()) {
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        modifier = Modifier
+                            .widthIn(max = 300.dp)
+                            .padding(bottom = 4.dp),
+                    ) {
+                        message.images.forEach { url ->
+                            MessageImage(url = url, onClick = env.showImage)
+                        }
+                    }
+                }
+                if (message.content.isNotBlank()) {
+                    Surface(
+                        color = MaterialTheme.colorScheme.primary,
+                        shape = RoundedCornerShape(16.dp, 4.dp, 16.dp, 16.dp),
+                        modifier = Modifier
+                            .widthIn(max = 300.dp)
+                            .combinedClickable(onClick = {}, onLongClick = { env.showDetail(message) }),
+                    ) {
+                        Text(
+                            message.content,
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onPrimary,
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                        )
+                    }
+                }
+                MessageActionsRow(
+                    alignEnd = true,
+                    enabled = !env.streaming,
+                    onCopy = { env.copyMessage(message) },
+                    onRegenerate = { env.vm.regenerateFrom(message) },
+                    onMore = { env.showMessageActions(message) },
                 )
             }
         } else {
-            // 助手消息：左侧助手头像 + 气泡
-            Row(
-                verticalAlignment = Alignment.Top,
-                modifier = Modifier.fillMaxWidth(),
-            ) {
-                cn.luoluna.sweven.ai.ui.chat.AssistantAvatar(
-                    size = 32.dp,
-                    modifier = Modifier.padding(end = 8.dp, top = 2.dp),
-                )
-                Column(Modifier.weight(1f)) {
-                    Column(Modifier.widthIn(max = 320.dp)) {
-                        val isLong = remember(message.content) {
-                            message.content.lines().size > 12 || message.content.length > 600
-                        }
-                        var collapsed by rememberSaveable(message.id) { mutableStateOf(false) }
-                        Surface(
-                            color = MaterialTheme.colorScheme.surfaceVariant,
-                            shape = RoundedCornerShape(4.dp, 16.dp, 16.dp, 16.dp),
-                            modifier = Modifier.combinedClickable(
-                                onClick = { if (isLong) collapsed = !collapsed },
-                                onLongClick = { env.showDetail(message) },
-                            ),
-                        ) {
-                            Column(Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
-                                if (!message.reasoning.isNullOrBlank()) {
-                                    ReasoningSection(message.reasoning, inProgress = false)
-                                }
-                                CollapsibleMessageBody(message.content, isLong, collapsed) {
-                                    collapsed = !collapsed
-                                }
+            Column(Modifier.fillMaxWidth()) {
+                // 头像在上方：助手 = 头像 + 名字
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.padding(bottom = 4.dp),
+                ) {
+                    cn.luoluna.sweven.ai.ui.chat.AssistantAvatar(size = 24.dp)
+                    Text(
+                        env.currentPicker?.displayName
+                            ?: (if (env.isSmartAi) "smartAi" else "助手"),
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(start = 6.dp),
+                    )
+                }
+                Column(Modifier.widthIn(max = 320.dp)) {
+                    val isLong = remember(message.content) {
+                        message.content.lines().size > 12 || message.content.length > 600
+                    }
+                    var collapsed by rememberSaveable(message.id) { mutableStateOf(false) }
+                    Surface(
+                        color = MaterialTheme.colorScheme.surfaceVariant,
+                        shape = RoundedCornerShape(4.dp, 16.dp, 16.dp, 16.dp),
+                        modifier = Modifier.combinedClickable(
+                            onClick = { if (isLong) collapsed = !collapsed },
+                            onLongClick = { env.showDetail(message) },
+                        ),
+                    ) {
+                        Column(Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
+                            if (!message.reasoning.isNullOrBlank()) {
+                                ReasoningSection(message.reasoning, inProgress = false)
+                            }
+                            CollapsibleMessageBody(message.content, isLong, collapsed) {
+                                collapsed = !collapsed
                             }
                         }
                     }
-                    MessageActionsRow(
-                        alignEnd = false,
-                        enabled = !env.streaming,
-                        onCopy = { env.copyMessage(message) },
-                        onRegenerate = { env.vm.regenerateFrom(message) },
-                        onMore = { env.showMessageActions(message) },
-                    )
                 }
+                MessageActionsRow(
+                    alignEnd = false,
+                    enabled = !env.streaming,
+                    onCopy = { env.copyMessage(message) },
+                    onRegenerate = { env.vm.regenerateFrom(message) },
+                    onMore = { env.showMessageActions(message) },
+                )
             }
         }
     }
@@ -654,14 +693,20 @@ object ChatUiDefaults {
 
     @Composable
     fun StreamingBubbleContent(reasoning: String, content: String) {
-        Row(
-            verticalAlignment = Alignment.Top,
-            modifier = Modifier.fillMaxWidth(),
-        ) {
-            cn.luoluna.sweven.ai.ui.chat.AssistantAvatar(
-                size = 32.dp,
-                modifier = Modifier.padding(end = 8.dp, top = 2.dp),
-            )
+        Column(Modifier.fillMaxWidth()) {
+            // 头像在上方：助手 = 头像 + 名字
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.padding(bottom = 4.dp),
+            ) {
+                cn.luoluna.sweven.ai.ui.chat.AssistantAvatar(size = 24.dp)
+                Text(
+                    "回复中",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(start = 6.dp),
+                )
+            }
             Surface(
                 color = MaterialTheme.colorScheme.surfaceVariant,
                 shape = RoundedCornerShape(4.dp, 16.dp, 16.dp, 16.dp),
@@ -702,12 +747,28 @@ object ChatUiDefaults {
         }
     }
 
-    // ---------------- 输入栏 ----------------
+    // ---------------- 输入栏（底部输入面板） ----------------
+
+    private val PANEL_BG = Color(0xFFEEF0F5)
+    private val CHIP_BG = Color(0xFFE5E7EB)
+    private val CHIP_TEXT = Color(0xFF4A5568)
+    private val SEND_ENABLED_BG = Color(0xFF6B46C1)
+    private val SEND_DISABLED_BG = Color(0xFFD1D5DB)
+    private val THINK_ACTIVE = Color(0xFF3B82F6)
+
+    private val QUICK_PROMPTS = listOf("效果", "补充画面背景光线层次", "突出梵高笔触的纹理感")
 
     @Composable
     fun InputBar(env: ChatUiEnv) {
-        Column(Modifier.fillMaxWidth()) {
-            // 上下文用量指示：接近/超出模型窗口时变色（窗口未知只显示估算值）
+        var expandOpen by remember { mutableStateOf(false) }
+
+        Column(
+            Modifier
+                .fillMaxWidth()
+                .background(PANEL_BG, RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp))
+                .padding(top = 4.dp),
+        ) {
+            // 瞬态行：上下文用量 / 编辑提示 / 待发送附件
             env.contextEstimateText?.let { text ->
                 Text(
                     text = text,
@@ -715,15 +776,13 @@ object ChatUiDefaults {
                     color = when (env.contextEstimateLevel) {
                         2 -> MaterialTheme.colorScheme.error
                         1 -> MaterialTheme.colorScheme.tertiary
-                        else -> MaterialTheme.colorScheme.onSurfaceVariant
+                        else -> CHIP_TEXT
                     },
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(horizontal = 16.dp, vertical = 2.dp),
                 )
             }
-
-            // 编辑态提示条：发送后将替换原消息并重发
             if (env.editingMessage != null) {
                 Surface(
                     color = MaterialTheme.colorScheme.secondaryContainer,
@@ -748,81 +807,211 @@ object ChatUiDefaults {
                     }
                 }
             }
-
             env.renderAttachmentRow()
 
-            Row(
-                verticalAlignment = Alignment.Bottom,
+            // 快捷提示词区：横向滚动胶囊
+            LazyRow(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                contentPadding = PaddingValues(horizontal = 16.dp),
+                modifier = Modifier.padding(vertical = 6.dp),
+            ) {
+                items(QUICK_PROMPTS) { prompt ->
+                    Surface(
+                        color = CHIP_BG,
+                        shape = RoundedCornerShape(16.dp),
+                        modifier = Modifier.clickable { env.onInputChange(prompt) },
+                    ) {
+                        Text(
+                            prompt,
+                            fontSize = 13.sp,
+                            color = CHIP_TEXT,
+                            maxLines = 1,
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                        )
+                    }
+                }
+            }
+
+            // 主输入框：白色圆角 Surface 包无边框 TextField
+            Surface(
+                color = Color.White,
+                shape = RoundedCornerShape(16.dp),
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 8.dp, vertical = 6.dp),
+                    .padding(horizontal = 16.dp),
             ) {
-                // 思考深度：仅具备推理能力的模型显示（smartAi 按候选并集判断）
-                if (env.showReasoning) {
-                    Box {
-                        var thinkMenuOpen by remember { mutableStateOf(false) }
-                        IconButton(onClick = { thinkMenuOpen = true }) {
+                TextField(
+                    value = env.input,
+                    onValueChange = env.onInputChange,
+                    modifier = Modifier.fillMaxWidth(),
+                    placeholder = { Text("输入消息与AI聊天", color = CHIP_TEXT) },
+                    colors = TextFieldDefaults.colors(
+                        focusedContainerColor = Color.Transparent,
+                        unfocusedContainerColor = Color.Transparent,
+                        disabledContainerColor = Color.Transparent,
+                        focusedIndicatorColor = Color.Transparent,
+                        unfocusedIndicatorColor = Color.Transparent,
+                        disabledIndicatorColor = Color.Transparent,
+                    ),
+                    maxLines = 5,
+                    trailingIcon = {
+                        IconButton(onClick = { expandOpen = true }) {
                             Icon(
-                                Icons.Filled.Psychology,
-                                contentDescription = "思考深度",
-                                tint = if (env.effectiveThinkingDepth != ThinkingDepth.OFF) {
-                                    MaterialTheme.colorScheme.primary
-                                } else {
-                                    MaterialTheme.colorScheme.onSurfaceVariant
-                                },
+                                Icons.Filled.CloseFullscreen,
+                                contentDescription = "展开输入",
+                                tint = CHIP_TEXT,
                             )
                         }
-                        DropdownMenu(
-                            expanded = thinkMenuOpen,
-                            onDismissRequest = { thinkMenuOpen = false },
-                        ) {
-                            ThinkingDepth.LABELS.forEach { (value, label) ->
-                                DropdownMenuItem(
-                                    text = { Text(label) },
-                                    leadingIcon = {
-                                        if (env.effectiveThinkingDepth == value) {
-                                            Icon(
-                                                Icons.Filled.Check,
-                                                contentDescription = null,
-                                                modifier = Modifier.size(16.dp),
-                                            )
-                                        }
-                                    },
-                                    onClick = {
-                                        env.vm.setThinkingDepth(value)
-                                        thinkMenuOpen = false
-                                    },
+                    },
+                )
+            }
+
+            // 底部工具栏：左（模型头像/搜索/思考）右（加号/发送）
+            Row(
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(48.dp)
+                    .padding(horizontal = 8.dp),
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                ) {
+                    // 模型切换按钮（模型头像占位）
+                    IconButton(onClick = env.openModelPicker) {
+                        cn.luoluna.sweven.ai.ui.chat.AssistantAvatar(size = 26.dp)
+                    }
+                    // 搜索：会话抽屉（搜索框在抽屉顶部）
+                    IconButton(onClick = { env.scope.launch { env.drawerState.open() } }) {
+                        Icon(Icons.Filled.Search, contentDescription = "搜索", tint = CHIP_TEXT)
+                    }
+                    // 思考模式
+                    Box {
+                        var thinkMenuOpen by remember { mutableStateOf(false) }
+                        IconButton(onClick = { if (env.showReasoning) thinkMenuOpen = true }) {
+                            Icon(
+                                Icons.Filled.Psychology,
+                                contentDescription = "思考模式",
+                                tint = THINK_ACTIVE,
+                            )
+                        }
+                        if (env.showReasoning) {
+                            DropdownMenu(
+                                expanded = thinkMenuOpen,
+                                onDismissRequest = { thinkMenuOpen = false },
+                            ) {
+                                ThinkingDepth.LABELS.forEach { (value, label) ->
+                                    DropdownMenuItem(
+                                        text = { Text(label) },
+                                        leadingIcon = {
+                                            if (env.effectiveThinkingDepth == value) {
+                                                Icon(
+                                                    Icons.Filled.Check,
+                                                    contentDescription = null,
+                                                    modifier = Modifier.size(16.dp),
+                                                )
+                                            }
+                                        },
+                                        onClick = {
+                                            env.vm.setThinkingDepth(value)
+                                            thinkMenuOpen = false
+                                        },
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                ) {
+                    // 加号：添加图片等
+                    IconButton(onClick = env.pickImages) {
+                        Icon(Icons.Filled.Add, contentDescription = "添加图片", tint = CHIP_TEXT)
+                    }
+                    if (env.streaming) {
+                        // 流式中变为停止按钮（保留原停止能力）
+                        IconButton(onClick = { env.vm.stopStreaming() }) {
+                            Box(
+                                Modifier
+                                    .size(36.dp)
+                                    .background(MaterialTheme.colorScheme.error, CircleShape),
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                Icon(
+                                    Icons.Filled.Close,
+                                    contentDescription = "停止",
+                                    tint = Color.White,
+                                    modifier = Modifier.size(20.dp),
+                                )
+                            }
+                        }
+                    } else {
+                        val canSend = env.input.isNotBlank() || env.attachments.isNotEmpty() ||
+                            env.editAttachments.isNotEmpty()
+                        IconButton(onClick = env.send, enabled = canSend) {
+                            Box(
+                                Modifier
+                                    .size(36.dp)
+                                    .background(
+                                        if (canSend) SEND_ENABLED_BG else SEND_DISABLED_BG,
+                                        CircleShape,
+                                    ),
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                Icon(
+                                    Icons.Filled.ArrowUpward,
+                                    contentDescription = "发送",
+                                    tint = if (canSend) Color.White else CHIP_TEXT,
+                                    modifier = Modifier.size(20.dp),
                                 )
                             }
                         }
                     }
                 }
-                if (env.showImageInput) {
-                    IconButton(onClick = env.pickImages) {
-                        Icon(Icons.Filled.Add, contentDescription = "添加图片")
+            }
+        }
+
+        // 上拉展开的大输入框
+        if (expandOpen) {
+            ModalBottomSheet(
+                onDismissRequest = { expandOpen = false },
+                sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
+            ) {
+                Column(
+                    Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp),
+                ) {
+                    OutlinedTextField(
+                        value = env.input,
+                        onValueChange = env.onInputChange,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(220.dp),
+                        placeholder = { Text("输入消息与AI聊天") },
+                    )
+                    Row(
+                        horizontalArrangement = Arrangement.End,
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 8.dp),
+                    ) {
+                        TextButton(onClick = { expandOpen = false }) { Text("收起") }
+                        Spacer(Modifier.width(8.dp))
+                        Button(
+                            onClick = {
+                                expandOpen = false
+                                env.send()
+                            },
+                            enabled = env.input.isNotBlank() || env.attachments.isNotEmpty() ||
+                                env.editAttachments.isNotEmpty(),
+                        ) { Text("发送") }
                     }
-                }
-                OutlinedTextField(
-                    value = env.input,
-                    onValueChange = env.onInputChange,
-                    modifier = Modifier.weight(1f),
-                    placeholder = { Text("输入消息…") },
-                    maxLines = 5,
-                )
-                Spacer(Modifier.width(6.dp))
-                if (env.streaming) {
-                    FilledIconButton(
-                        onClick = { env.vm.stopStreaming() },
-                        colors = IconButtonDefaults.filledIconButtonColors(
-                            containerColor = MaterialTheme.colorScheme.errorContainer,
-                        ),
-                    ) { Icon(Icons.Filled.Close, contentDescription = "停止") }
-                } else {
-                    FilledIconButton(
-                        onClick = env.send,
-                        enabled = env.input.isNotBlank() || env.attachments.isNotEmpty() ||
-                            env.editAttachments.isNotEmpty(),
-                    ) { Icon(Icons.AutoMirrored.Filled.Send, contentDescription = "发送") }
                 }
             }
         }

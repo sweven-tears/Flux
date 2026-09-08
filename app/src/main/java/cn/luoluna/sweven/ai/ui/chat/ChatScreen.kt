@@ -12,8 +12,8 @@ import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.layout.WindowInsets
-import androidx.compose.foundation.layout.exclude
 import androidx.compose.foundation.layout.ime
+import androidx.compose.foundation.layout.union
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.ModalNavigationDrawer
@@ -34,6 +34,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.unit.dp
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Row
@@ -73,6 +74,7 @@ fun ChatScreen(
     val app = context.applicationContext as App
     val drawerState = rememberDrawerState(DrawerValue.Closed)
     val scope = rememberCoroutineScope()
+    val focusManager = LocalFocusManager.current
 
     val current by vm.current.collectAsStateWithLifecycle()
     val messages by vm.messages.collectAsStateWithLifecycle()
@@ -232,6 +234,7 @@ fun ChatScreen(
             )
         },
         send = {
+            focusManager.clearFocus()
             val editing = editingMessage
             val text = input
             val newUris = attachments
@@ -285,15 +288,14 @@ fun ChatScreen(
             topBar = {
                 (plugin.topBar ?: { ChatUiDefaults.TopBar(env) })(env)
             },
-            // 排除 ime：键盘 insets 由下方 imePadding() 单独处理，
-            // 否则 Scaffold 的 content padding 与 imePadding 叠加，键盘与输入框间多出一段空白
-            contentWindowInsets = ScaffoldDefaults.contentWindowInsets.exclude(WindowInsets.ime),
+            // 内容底部 insets 取 max(导航栏, 键盘)：键盘弹出时由 ime 精确接管，
+            // 避免「导航栏 padding + imePadding(含导航栏区域)」叠加出键盘上方空白
+            contentWindowInsets = ScaffoldDefaults.contentWindowInsets.union(WindowInsets.ime),
         ) { padding ->
             Column(
                 Modifier
                     .fillMaxSize()
-                    .padding(padding)
-                    .imePadding(),
+                    .padding(padding),
             ) {
                 if (messages.isEmpty() && !streaming) {
                     Column(Modifier.weight(1f).fillMaxWidth()) {

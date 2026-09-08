@@ -121,6 +121,8 @@ fun ChatScreen(
     var deleteFolderTarget by remember { mutableStateOf<FolderEntity?>(null) }
     var presetDialog by remember { mutableStateOf<Pair<Long, PresetEntity?>?>(null) }
     var moveTarget by remember { mutableStateOf<ConversationEntity?>(null) }
+    // 顶栏点击标题 → 重命名当前会话
+    var renameConversationOpen by remember { mutableStateOf(false) }
     // 抽屉当前选中的分组 tab：null = 「聊天」（默认分组）
     var selectedFolderTab by remember { mutableStateOf<Long?>(null) }
     // 消息「更多」相关弹层
@@ -266,6 +268,7 @@ fun ChatScreen(
             ChatUiDefaults.copyText(context, msg.content)
             Toast.makeText(context, "已复制", Toast.LENGTH_SHORT).show()
         },
+        editConversationTitle = { renameConversationOpen = true },
         showNewFolder = { showNewFolder = true },
         renameFolder = { renameFolderTarget = it },
         deleteFolder = { deleteFolderTarget = it },
@@ -340,6 +343,20 @@ fun ChatScreen(
             onSelect = { app.settings.setChatPluginId(it) },
             onDismiss = { pluginPickerOpen = false },
         )
+    }
+
+    if (renameConversationOpen) {
+        current?.let { conv ->
+            TextFieldDialog(
+                title = "重命名对话",
+                initial = conv.title,
+                onDismiss = { renameConversationOpen = false },
+                onConfirm = { name ->
+                    vm.renameConversation(conv.id, name)
+                    renameConversationOpen = false
+                },
+            )
+        }
     }
 
     detailMessage?.let { msg ->

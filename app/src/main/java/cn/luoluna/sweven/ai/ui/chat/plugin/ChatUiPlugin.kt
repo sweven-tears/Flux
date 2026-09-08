@@ -129,6 +129,8 @@ class ChatUiEnv(
     val openPluginPicker: () -> Unit,
     val showMessageActions: (MessageEntity) -> Unit,
     val copyMessage: (MessageEntity) -> Unit,
+    /** 编辑当前会话标题（顶栏标题点击） */
+    val editConversationTitle: () -> Unit,
 
     // ---- 抽屉动作 ----
     val showNewFolder: () -> Unit,

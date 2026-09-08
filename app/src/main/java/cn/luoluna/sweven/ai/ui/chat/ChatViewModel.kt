@@ -317,6 +317,12 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         conversationDao.setFolder(id, folderId)
     }
 
+    /** 重命名会话标题（顶栏点击标题触发） */
+    fun renameConversation(id: Long, title: String) = viewModelScope.launch {
+        val trimmed = title.replace('\n', ' ').trim()
+        if (trimmed.isNotEmpty()) conversationDao.rename(id, trimmed)
+    }
+
     /** 复用分组内的空会话（没有则新建），供无当前会话时的隐式创建路径共用 */
     private suspend fun reuseOrCreateEmpty(folderId: Long?): Long =
         conversationDao.findEmptyConversation(folderId)?.let { existing ->

@@ -29,7 +29,6 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
-import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
@@ -46,7 +45,6 @@ import androidx.compose.material.icons.filled.CloseFullscreen
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.Edit
-import androidx.compose.material.icons.filled.Emergency
 import androidx.compose.material.icons.filled.Face
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.KeyboardArrowDown
@@ -101,7 +99,6 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import cn.luoluna.sweven.ai.data.db.ConversationEntity
 import cn.luoluna.sweven.ai.data.db.MessageEntity
@@ -371,20 +368,21 @@ object ChatUiDefaults {
                 }
             },
             title = {
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .combinedClickable(onClick = env.openModelPicker),
-                ) {
-                    // 两行标题：第一行会话标题（大、深色），第二行模型 id（厂商名字）（小、浅色）
+                Column(modifier = Modifier.fillMaxWidth()) {
+                    // 第一行：会话标题（大、深色），点击重命名会话
                     Text(
                         env.current?.title ?: "新对话",
                         style = MaterialTheme.typography.titleMedium,
                         color = MaterialTheme.colorScheme.onSurface,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.combinedClickable(onClick = env.editConversationTitle),
                     )
-                    Row(verticalAlignment = Alignment.CenterVertically) {
+                    // 第二行：模型 id（厂商名字）（小、浅色），点击切换模型
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.combinedClickable(onClick = env.openModelPicker),
+                    ) {
                         Text(
                             when {
                                 env.isSmartAi -> "smartAi"
@@ -751,16 +749,11 @@ object ChatUiDefaults {
 
     // ---------------- 输入栏（底部输入面板） ----------------
 
-    private val QUICK_PROMPTS = listOf("效果", "补充画面背景光线层次", "突出梵高笔触的纹理感")
-
     @Composable
     fun InputBar(env: ChatUiEnv) {
         var expandOpen by remember { mutableStateOf(false) }
         val panelBg = MaterialTheme.colorScheme.surfaceContainerLow
-        val chipBg = MaterialTheme.colorScheme.surfaceContainerHigh
         val onPanel = MaterialTheme.colorScheme.onSurfaceVariant
-        // 模型按钮的星形图标色（品牌色，明暗主题一致）
-        val modelIconTint = Color(0xFFFF7043)
 
         Column(
             Modifier
@@ -809,32 +802,8 @@ object ChatUiDefaults {
             }
             env.renderAttachmentRow()
 
-            // 快捷提示词区：横向滚动胶囊，随列表内容动态出现
-            // TODO 快捷提示词功能未开发：当前为占位示例数据，后续接入动态来源（按模型/场景生成），
-            //  列表为空时整行自动隐藏
-            if (QUICK_PROMPTS.isNotEmpty()) {
-                LazyRow(
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    contentPadding = PaddingValues(horizontal = 16.dp),
-                    modifier = Modifier.padding(vertical = 6.dp),
-                ) {
-                    items(QUICK_PROMPTS) { prompt ->
-                        Surface(
-                            color = chipBg,
-                            shape = RoundedCornerShape(16.dp),
-                            modifier = Modifier.clickable { env.onInputChange(prompt) },
-                        ) {
-                            Text(
-                                prompt,
-                                fontSize = 13.sp,
-                                color = onPanel,
-                                maxLines = 1,
-                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
-                            )
-                        }
-                    }
-                }
-            }
+            // TODO 快捷提示词功能未开发：后续根据当前对话内容动态生成建议提示词，
+            //  在此渲染横向胶囊列表（LazyRow），为空时整行隐藏
 
             // 主输入框：面板色上的圆角 Surface 包无边框 TextField
             Surface(
@@ -883,14 +852,9 @@ object ChatUiDefaults {
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(4.dp),
                 ) {
-                    // 模型切换按钮（星形占位图标，后续换模型真实头像）
+                    // 模型切换按钮（模型头像占位，后续按模型 id 匹配真实 logo）
                     IconButton(onClick = env.openModelPicker) {
-                        Icon(
-                            Icons.Filled.Emergency,
-                            contentDescription = "切换模型",
-                            tint = modelIconTint,
-                            modifier = Modifier.size(24.dp),
-                        )
+                        cn.luoluna.sweven.ai.ui.chat.AssistantAvatar(size = 26.dp)
                     }
                     // TODO 搜索功能未开发，先隐藏（原跳转抽屉搜索框，等独立搜索功能做好再放出）
                     // IconButton(onClick = { env.scope.launch { env.drawerState.open() } }) {

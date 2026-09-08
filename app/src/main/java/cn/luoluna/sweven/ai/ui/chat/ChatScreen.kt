@@ -1,83 +1,23 @@
 package cn.luoluna.sweven.ai.ui.chat
 
-import android.content.ClipData
-import android.content.ClipboardManager
-import android.content.Context
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
-import androidx.compose.foundation.ExperimentalFoundationApi
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.gestures.animateScrollBy
-import androidx.compose.foundation.gestures.scrollBy
-import androidx.compose.foundation.combinedClickable
-import androidx.compose.foundation.horizontalScroll
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.widthIn
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.LazyListState
-import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.Chat
-import androidx.compose.material.icons.automirrored.filled.Send
-import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.ArrowDropDown
-import androidx.compose.material.icons.filled.Check
-import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.ContentCopy
-import androidx.compose.material.icons.filled.Description
-import androidx.compose.material.icons.filled.Edit
-import androidx.compose.material.icons.filled.Face
-import androidx.compose.material.icons.filled.Folder
-import androidx.compose.material.icons.filled.KeyboardArrowDown
-import androidx.compose.material.icons.filled.KeyboardArrowRight
-import androidx.compose.material.icons.filled.KeyboardArrowUp
-import androidx.compose.material.icons.filled.Menu
-import androidx.compose.material.icons.filled.MoreVert
-import androidx.compose.material.icons.filled.PlayArrow
-import androidx.compose.material.icons.filled.Psychology
-import androidx.compose.material.icons.filled.Refresh
-import androidx.compose.material.icons.filled.Search
-import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
-import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FilledIconButton
-import androidx.compose.material3.FilledTonalIconButton
-import androidx.compose.material3.HorizontalDivider
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
-import androidx.compose.material3.IconButtonDefaults
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.ModalDrawerSheet
+import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.ModalNavigationDrawer
-import androidx.compose.material3.NavigationDrawerItem
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.rememberDrawerState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -85,21 +25,16 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.semantics.contentDescription
-import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Row
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import cn.luoluna.sweven.ai.App
 import cn.luoluna.sweven.ai.data.db.ConversationEntity
 import cn.luoluna.sweven.ai.data.db.FolderEntity
 import cn.luoluna.sweven.ai.data.db.MessageEntity
@@ -107,14 +42,22 @@ import cn.luoluna.sweven.ai.data.db.PresetEntity
 import cn.luoluna.sweven.ai.data.db.Role
 import cn.luoluna.sweven.ai.data.repo.SmartAi
 import cn.luoluna.sweven.ai.net.ThinkingDepth
+import cn.luoluna.sweven.ai.ui.chat.plugin.ChatUiDefaults
+import cn.luoluna.sweven.ai.ui.chat.plugin.ChatUiEnv
+import cn.luoluna.sweven.ai.ui.chat.plugin.ChatUiRegistry
+import cn.luoluna.sweven.ai.ui.chat.plugin.PluginPickerDialog
+import cn.luoluna.sweven.ai.ui.chat.plugin.activePlugin
 import cn.luoluna.sweven.ai.ui.common.ConfirmDialog
 import cn.luoluna.sweven.ai.ui.common.InAppBrowser
 import cn.luoluna.sweven.ai.ui.common.TextFieldDialog
 import cn.luoluna.sweven.ai.ui.common.formatTokens
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
-@OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
+/**
+ * 聊天页宿主骨架：统一持有状态、发送逻辑与全部对话框；
+ * 渲染点按激活插件的槽位（未覆写回落 [ChatUiDefaults]）。
+ * 插件只负责绘制，发送/停止/流式逻辑在任何插件下零风险。
+ */
 @Composable
 fun ChatScreen(
     onGoProviders: () -> Unit,
@@ -122,7 +65,8 @@ fun ChatScreen(
     vm: ChatViewModel = viewModel(),
 ) {
     val context = LocalContext.current
-    val drawerState = rememberDrawerState(androidx.compose.material3.DrawerValue.Closed)
+    val app = context.applicationContext as App
+    val drawerState = rememberDrawerState(DrawerValue.Closed)
     val scope = rememberCoroutineScope()
 
     val current by vm.current.collectAsStateWithLifecycle()
@@ -160,6 +104,7 @@ fun ChatScreen(
     val effectiveThinkingDepth = thinkingDepth ?: ThinkingDepth.AUTO
 
     var pickerOpen by remember { mutableStateOf(false) }
+    var pluginPickerOpen by remember { mutableStateOf(false) }
     var attachments by remember { mutableStateOf(listOf<android.net.Uri>()) }
     var input by remember { mutableStateOf("") }
     var detailMessage by remember { mutableStateOf<MessageEntity?>(null) }
@@ -176,7 +121,6 @@ fun ChatScreen(
     var freeCopyMessage by remember { mutableStateOf<MessageEntity?>(null) }
     var webRenderMessage by remember { mutableStateOf<MessageEntity?>(null) }
     var deleteMessageTarget by remember { mutableStateOf<MessageEntity?>(null) }
-    var thinkMenuOpen by remember { mutableStateOf(false) }
     var systemPromptOpen by remember { mutableStateOf(false) }
     // 消息编辑态：正在编辑的原消息 + 保留的原图（已是 data URL，不再压缩）
     var editingMessage by remember { mutableStateOf<MessageEntity?>(null) }
@@ -184,6 +128,10 @@ fun ChatScreen(
 
     val searchQuery by vm.searchQuery.collectAsStateWithLifecycle()
     val searchResults by vm.searchResults.collectAsStateWithLifecycle()
+
+    // 界面风格插件：选择持久化在 AppSettings，未注册（外部插件被移除）回退默认
+    val chatPluginId by app.settings.chatPluginId.collectAsStateWithLifecycle()
+    val plugin = ChatUiRegistry.resolve(chatPluginId ?: ChatUiRegistry.DEFAULT_ID)
 
     // 切换会话时退出编辑态，避免把编辑内容发到别的会话
     LaunchedEffect(current?.id) {
@@ -200,275 +148,117 @@ fun ChatScreen(
     val listState = rememberLazyListState()
     val extraItems = (if (streaming) 1 else 0) + (if (error != null) 1 else 0) +
         (if (notice != null) 1 else 0)
-    // 仅在新消息/错误/提示出现时滚动一次；流式内容的跟随滚动在 StreamingItem 内部处理，
+    // 仅在新消息/错误/提示出现时滚动一次；流式内容的跟随滚动在流式气泡内部处理，
     // 避免流式文本每次变化都触发整个页面重组
     LaunchedEffect(messages.size, streaming, error, notice) {
         val count = messages.size + extraItems
         if (count > 0) listState.scrollToItem(index = count - 1)
     }
 
+    // 上下文用量指示文本与级别（0 正常 / 1 接近 / 2 超出）
+    val contextEstimateText = contextEstimate?.let { est ->
+        if (est.usedTokens > 0) {
+            est.window?.let { w ->
+                "上下文 ≈${formatTokens(est.usedTokens.toLong())} / ${formatTokens(w.toLong())}"
+            } ?: "上下文 ≈${formatTokens(est.usedTokens.toLong())}"
+        } else null
+    }
+    val contextEstimateLevel = contextEstimate?.let { est ->
+        val ratio = est.window?.let { w -> est.usedTokens.toFloat() / w }
+        when {
+            ratio != null && ratio >= 1f -> 2
+            ratio != null && ratio >= 0.8f -> 1
+            else -> 0
+        }
+    } ?: -1
+
+    val env = ChatUiEnv(
+        current = current,
+        messages = messages,
+        currentTarget = currentTarget,
+        currentPicker = currentPicker,
+        isSmartAi = isSmartAi,
+        smartAiCapability = smartAiCapability,
+        modelFallback = modelFallback,
+        streaming = streaming,
+        error = error,
+        notice = notice,
+        contextEstimateText = contextEstimateText,
+        contextEstimateLevel = contextEstimateLevel,
+        drawer = drawer,
+        searchQuery = searchQuery,
+        searchResults = searchResults,
+        effectiveThinkingDepth = effectiveThinkingDepth,
+        showReasoning = showReasoning,
+        showImageInput = showImageInput,
+        input = input,
+        onInputChange = { input = it },
+        attachments = attachments,
+        editAttachments = editAttachments,
+        editingMessage = editingMessage,
+        selectedFolderTab = selectedFolderTab,
+        onSelectFolderTab = { selectedFolderTab = it },
+        vm = vm,
+        drawerState = drawerState,
+        scope = scope,
+        listState = listState,
+        pickImages = {
+            pickImages.launch(
+                PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+            )
+        },
+        send = {
+            val editing = editingMessage
+            val text = input
+            val newUris = attachments
+            input = ""
+            attachments = emptyList()
+            if (editing != null) {
+                val keepImages = editAttachments
+                editAttachments = emptyList()
+                editingMessage = null
+                vm.editAndResend(editing, text, keepImages, newUris)
+            } else {
+                vm.send(text, newUris)
+            }
+        },
+        removeAttachment = { attachments = attachments - it },
+        removeEditAttachment = { editAttachments = editAttachments - it },
+        cancelEditing = {
+            editingMessage = null
+            editAttachments = emptyList()
+            input = ""
+        },
+        showDetail = { detailMessage = it },
+        showImage = { fullImage = it },
+        openModelPicker = { pickerOpen = true },
+        openSystemPrompt = { systemPromptOpen = true },
+        openPluginPicker = { pluginPickerOpen = true },
+        showMessageActions = { actionMessage = it },
+        copyMessage = { msg ->
+            ChatUiDefaults.copyText(context, msg.content)
+            Toast.makeText(context, "已复制", Toast.LENGTH_SHORT).show()
+        },
+        showNewFolder = { showNewFolder = true },
+        renameFolder = { renameFolderTarget = it },
+        deleteFolder = { deleteFolderTarget = it },
+        editPreset = { folderId, existing -> presetDialog = folderId to existing },
+        moveConversation = { moveTarget = it },
+        onGoProviders = onGoProviders,
+        onOpenSettings = onOpenSettings,
+    )
+    // 供默认槽位内部互调时回落到插件覆写（messageList 里的气泡、inputBar 里的附件行）
+    env.activePlugin = plugin
+
     ModalNavigationDrawer(
         drawerState = drawerState,
         drawerContent = {
-            ModalDrawerSheet {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier.padding(start = 16.dp, end = 8.dp, top = 12.dp),
-                ) {
-                    Text("对话", style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
-                    TextButton(onClick = { showNewFolder = true }) {
-                        Text("新建文件夹", style = MaterialTheme.typography.labelMedium)
-                    }
-                    IconButton(onClick = {
-                        vm.newConversation(selectedFolderTab)
-                        scope.launch { drawerState.close() }
-                    }) { Icon(Icons.Filled.Add, contentDescription = "新建对话") }
-                }
-                OutlinedTextField(
-                    value = searchQuery,
-                    onValueChange = { vm.setSearchQuery(it) },
-                    placeholder = {
-                        Text("搜索对话与消息…", style = MaterialTheme.typography.bodySmall)
-                    },
-                    leadingIcon = {
-                        Icon(
-                            Icons.Filled.Search,
-                            contentDescription = null,
-                            modifier = Modifier.size(18.dp),
-                        )
-                    },
-                    trailingIcon = {
-                        if (searchQuery.isNotEmpty()) {
-                            IconButton(onClick = { vm.setSearchQuery("") }) {
-                                Icon(
-                                    Icons.Filled.Close,
-                                    contentDescription = "清空搜索",
-                                    modifier = Modifier.size(18.dp),
-                                )
-                            }
-                        }
-                    },
-                    singleLine = true,
-                    shape = RoundedCornerShape(24.dp),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 12.dp, vertical = 4.dp),
-                )
-                // 分组横向 tab：「聊天」（默认分组）+ 各文件夹
-                LaunchedEffect(drawer.folders, selectedFolderTab) {
-                    if (selectedFolderTab != null && drawer.folders.none { it.id == selectedFolderTab }) {
-                        selectedFolderTab = null
-                    }
-                }
-                if (searchQuery.isBlank()) {
-                Row(
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .horizontalScroll(rememberScrollState())
-                        .padding(horizontal = 12.dp, vertical = 8.dp),
-                ) {
-                    val defaultConvs = drawer.conversationsByFolder[null].orEmpty()
-                    FolderTab(
-                        label = "聊天",
-                        icon = Icons.AutoMirrored.Filled.Chat,
-                        count = defaultConvs.size,
-                        selected = selectedFolderTab == null,
-                        onClick = { selectedFolderTab = null },
-                    )
-                    drawer.folders.forEach { folder ->
-                        FolderTab(
-                            label = folder.name,
-                            icon = Icons.Filled.Folder,
-                            count = drawer.conversationsByFolder[folder.id].orEmpty().size +
-                                drawer.presetsByFolder[folder.id].orEmpty().size,
-                            selected = selectedFolderTab == folder.id,
-                            onClick = { selectedFolderTab = folder.id },
-                        )
-                    }
-                }
-                HorizontalDivider()
-                // 当前分组内容：文件夹 tab 先列预设对话，再列普通会话
-                var folderMenuOpen by remember { mutableStateOf(false) }
-                selectedFolderTab?.let { folderId ->
-                    drawer.folders.firstOrNull { it.id == folderId }?.let { folder ->
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            modifier = Modifier.padding(start = 16.dp, end = 8.dp, top = 4.dp),
-                        ) {
-                            Text(
-                                folder.name,
-                                style = MaterialTheme.typography.titleSmall,
-                                modifier = Modifier.weight(1f),
-                                maxLines = 1,
-                            )
-                            TextButton(onClick = { presetDialog = folder.id to null }) {
-                                Text("新建预设", style = MaterialTheme.typography.labelMedium)
-                            }
-                            Box {
-                                IconButton(onClick = { folderMenuOpen = true }) {
-                                    Icon(
-                                        Icons.Filled.MoreVert,
-                                        contentDescription = "文件夹菜单",
-                                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                                        modifier = Modifier.size(18.dp),
-                                    )
-                                }
-                                DropdownMenu(
-                                    expanded = folderMenuOpen,
-                                    onDismissRequest = { folderMenuOpen = false },
-                                ) {
-                                    DropdownMenuItem(
-                                        text = { Text("重命名文件夹") },
-                                        onClick = {
-                                            folderMenuOpen = false
-                                            renameFolderTarget = folder
-                                        },
-                                    )
-                                    DropdownMenuItem(
-                                        text = { Text("删除文件夹") },
-                                        onClick = {
-                                            folderMenuOpen = false
-                                            deleteFolderTarget = folder
-                                        },
-                                    )
-                                }
-                            }
-                        }
-                    }
-                }
-                LazyColumn(Modifier.fillMaxWidth().weight(1f)) {
-                    val tabId = selectedFolderTab
-                    val tabConvs = drawer.conversationsByFolder[tabId].orEmpty()
-                    if (tabId != null) {
-                        items(drawer.presetsByFolder[tabId].orEmpty(), key = { "preset-${it.id}" }) { preset ->
-                            PresetDrawerItem(
-                                preset = preset,
-                                onUse = {
-                                    vm.startFromPreset(preset)
-                                    scope.launch { drawerState.close() }
-                                },
-                                onEdit = { presetDialog = tabId to preset },
-                            )
-                        }
-                    }
-                    items(tabConvs, key = { it.id }) { conv ->
-                        ConversationDrawerItem(
-                            conv = conv,
-                            selected = conv.id == current?.id,
-                            onSelect = {
-                                vm.selectConversation(conv.id)
-                                scope.launch { drawerState.close() }
-                            },
-                            onMove = { moveTarget = conv },
-                            onDelete = { vm.deleteConversation(conv.id) },
-                        )
-                    }
-                    if (tabConvs.isEmpty() && selectedFolderTab == null) {
-                        item(key = "empty-hint") {
-                            Text(
-                                "暂无会话，点击右上角 + 新建",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
-                            )
-                        }
-                    }
-                    item(key = "bottom-space") { Spacer(Modifier.height(24.dp)) }
-                }
-                } else {
-                    // 搜索模式：全局命中结果（标题或消息内容），忽略文件夹分组
-                    LazyColumn(Modifier.fillMaxWidth().weight(1f)) {
-                        items(searchResults, key = { it.conversation.id }) { hit ->
-                            SearchHitItem(
-                                hit = hit,
-                                folderName = drawer.folders
-                                    .firstOrNull { it.id == hit.conversation.folderId }?.name,
-                                selected = hit.conversation.id == current?.id,
-                                onClick = {
-                                    vm.selectConversation(hit.conversation.id)
-                                    scope.launch { drawerState.close() }
-                                },
-                            )
-                        }
-                        if (searchResults.isEmpty()) {
-                            item(key = "no-result") {
-                                Text(
-                                    "没有匹配的对话",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
-                                )
-                            }
-                        }
-                        item(key = "search-bottom-space") { Spacer(Modifier.height(24.dp)) }
-                    }
-                }
-                HorizontalDivider()
-                NavigationDrawerItem(
-                    icon = { Icon(Icons.Filled.Settings, contentDescription = null) },
-                    label = { Text("设置") },
-                    selected = false,
-                    onClick = {
-                        scope.launch { drawerState.close() }
-                        onOpenSettings()
-                    },
-                )
-            }
+            (plugin.drawer ?: { ChatUiDefaults.Drawer(env) })(env)
         },
     ) {
         Scaffold(
             topBar = {
-                TopAppBar(
-                    navigationIcon = {
-                        IconButton(onClick = { scope.launch { drawerState.open() } }) {
-                            Icon(Icons.Filled.Menu, contentDescription = "会话列表")
-                        }
-                    },
-                    title = {
-                        Column(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .combinedClickable(onClick = { pickerOpen = true }),
-                        ) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Text(
-                                    if (currentTarget is ChatTarget.SmartAi) "smartAi"
-                                    else currentPicker?.displayId ?: "选择模型",
-                                    style = MaterialTheme.typography.titleMedium,
-                                    maxLines = 1,
-                                )
-                                Icon(Icons.Filled.ArrowDropDown, contentDescription = "切换模型")
-                            }
-                            if (modelFallback) {
-                                Text(
-                                    "会话原模型不可用，已回退",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.error,
-                                    maxLines = 1,
-                                )
-                            }
-                        }
-                    },
-                    actions = {
-                        if (current != null) {
-                            IconButton(onClick = { systemPromptOpen = true }) {
-                                Icon(
-                                    Icons.Filled.Description,
-                                    contentDescription = "系统提示词",
-                                    tint = if (current?.systemPrompt != null) {
-                                        MaterialTheme.colorScheme.primary
-                                    } else {
-                                        MaterialTheme.colorScheme.onSurfaceVariant
-                                    },
-                                )
-                            }
-                        }
-                        IconButton(onClick = { vm.newConversation(selectedFolderTab) }) {
-                            Icon(Icons.Filled.Add, contentDescription = "新对话")
-                        }
-                    },
-                )
+                (plugin.topBar ?: { ChatUiDefaults.TopBar(env) })(env)
             },
         ) { padding ->
             Column(
@@ -478,280 +268,17 @@ fun ChatScreen(
                     .imePadding(),
             ) {
                 if (messages.isEmpty() && !streaming) {
-                    Column(
-                        Modifier
-                            .weight(1f)
-                            .fillMaxWidth()
-                            .padding(32.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.Center,
-                    ) {
-                        Icon(
-                            Icons.Filled.Face,
-                            contentDescription = null,
-                            modifier = Modifier.size(56.dp),
-                            tint = MaterialTheme.colorScheme.primary,
-                        )
-                        Text(
-                            "开始与模型对话",
-                            style = MaterialTheme.typography.titleMedium,
-                            modifier = Modifier.padding(top = 12.dp),
-                        )
-                        Text(
-                            "先在「厂商」页添加 AI 厂商并选择模型，\n然后点击顶部模型名进行选择",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.padding(top = 6.dp, bottom = 16.dp),
-                        )
-                        TextButton(onClick = onGoProviders) { Text("去添加厂商") }
+                    Column(Modifier.weight(1f).fillMaxWidth()) {
+                        (plugin.emptyState ?: { ChatUiDefaults.EmptyState(env) })(env)
                     }
                 } else {
-                    Box(Modifier.weight(1f).fillMaxWidth()) {
-                        LazyColumn(
-                            state = listState,
-                            modifier = Modifier.fillMaxSize(),
-                            contentPadding = androidx.compose.foundation.layout.PaddingValues(
-                                horizontal = 12.dp, vertical = 8.dp,
-                            ),
-                            verticalArrangement = Arrangement.spacedBy(8.dp),
-                        ) {
-                            items(messages, key = { it.id }) { msg ->
-                                MessageBubble(
-                                    message = msg,
-                                    actionsEnabled = !streaming,
-                                    onLongPress = { detailMessage = msg },
-                                    onImageClick = { fullImage = it },
-                                    onCopy = {
-                                        copyText(context, msg.content)
-                                        Toast.makeText(context, "已复制", Toast.LENGTH_SHORT).show()
-                                    },
-                                    onRegenerate = { vm.regenerateFrom(msg) },
-                                    onMore = { actionMessage = msg },
-                                )
-                            }
-                            if (streaming) {
-                                item(key = "streaming") {
-                                    StreamingItem(vm, listState)
-                                }
-                            }
-                            error?.let { err ->
-                                item(key = "error") {
-                                    Surface(
-                                        color = MaterialTheme.colorScheme.errorContainer,
-                                        shape = RoundedCornerShape(12.dp),
-                                        modifier = Modifier.fillMaxWidth(),
-                                    ) {
-                                        Row(
-                                            verticalAlignment = Alignment.CenterVertically,
-                                            modifier = Modifier.padding(start = 12.dp),
-                                        ) {
-                                            Text(
-                                                err,
-                                                style = MaterialTheme.typography.bodySmall,
-                                                color = MaterialTheme.colorScheme.onErrorContainer,
-                                                modifier = Modifier.weight(1f),
-                                            )
-                                            IconButton(onClick = { vm.dismissError() }) {
-                                                Icon(Icons.Filled.Close, contentDescription = "关闭")
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                            notice?.let { note ->
-                                item(key = "notice") {
-                                    Surface(
-                                        color = MaterialTheme.colorScheme.surfaceVariant,
-                                        shape = RoundedCornerShape(12.dp),
-                                        modifier = Modifier.fillMaxWidth(),
-                                    ) {
-                                        Row(
-                                            verticalAlignment = Alignment.CenterVertically,
-                                            modifier = Modifier.padding(start = 12.dp),
-                                        ) {
-                                            Text(
-                                                note,
-                                                style = MaterialTheme.typography.bodySmall,
-                                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                                modifier = Modifier.weight(1f),
-                                            )
-                                            IconButton(onClick = { vm.dismissNotice() }) {
-                                                Icon(Icons.Filled.Close, contentDescription = "关闭")
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                        MessageQuickNav(
-                            listState = listState,
-                            modifier = Modifier
-                                .align(Alignment.CenterEnd)
-                                .padding(end = 6.dp),
+                    Column(Modifier.weight(1f).fillMaxWidth()) {
+                        (plugin.messageList ?: { e, _ -> ChatUiDefaults.MessageList(e, padding) })(
+                            env, padding,
                         )
                     }
                 }
-
-                // 上下文用量指示：接近/超出模型窗口时变色（窗口未知只显示估算值）
-                contextEstimate?.let { est ->
-                    if (est.usedTokens > 0) {
-                        val ratio = est.window?.let { w -> est.usedTokens.toFloat() / w }
-                        Text(
-                            text = est.window
-                                ?.let { w -> "上下文 ≈${formatTokens(est.usedTokens.toLong())} / ${formatTokens(w.toLong())}" }
-                                ?: "上下文 ≈${formatTokens(est.usedTokens.toLong())}",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = when {
-                                ratio != null && ratio >= 1f -> MaterialTheme.colorScheme.error
-                                ratio != null && ratio >= 0.8f -> MaterialTheme.colorScheme.tertiary
-                                else -> MaterialTheme.colorScheme.onSurfaceVariant
-                            },
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(horizontal = 16.dp, vertical = 2.dp),
-                        )
-                    }
-                }
-
-                // 编辑态提示条：发送后将替换原消息并重发
-                if (editingMessage != null) {
-                    Surface(
-                        color = MaterialTheme.colorScheme.secondaryContainer,
-                        shape = RoundedCornerShape(10.dp),
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 12.dp, vertical = 4.dp),
-                    ) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            modifier = Modifier.padding(start = 12.dp),
-                        ) {
-                            Text(
-                                "正在编辑消息，发送后将替换原消息并重发",
-                                style = MaterialTheme.typography.labelMedium,
-                                color = MaterialTheme.colorScheme.onSecondaryContainer,
-                                modifier = Modifier.weight(1f),
-                            )
-                            IconButton(onClick = {
-                                editingMessage = null
-                                editAttachments = emptyList()
-                                input = ""
-                            }) { Icon(Icons.Filled.Close, contentDescription = "取消编辑") }
-                        }
-                    }
-                }
-
-                // 待发送附件（编辑态先列保留的原图，再列新选图片）
-                if (editAttachments.isNotEmpty() || attachments.isNotEmpty()) {
-                    Row(
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 12.dp, vertical = 4.dp),
-                    ) {
-                        editAttachments.forEach { url ->
-                            DataUrlThumb(url = url, onRemove = {
-                                editAttachments = editAttachments - url
-                            })
-                        }
-                        attachments.forEach { uri ->
-                            AttachmentThumb(uri = uri, onRemove = {
-                                attachments = attachments - uri
-                            })
-                        }
-                    }
-                }
-
-                // 输入栏
-                Row(
-                    verticalAlignment = Alignment.Bottom,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 8.dp, vertical = 6.dp),
-                ) {
-                    // 思考深度：仅具备推理能力的模型显示（smartAi 按候选并集判断）
-                    if (showReasoning) {
-                        Box {
-                            IconButton(onClick = { thinkMenuOpen = true }) {
-                                Icon(
-                                    Icons.Filled.Psychology,
-                                    contentDescription = "思考深度",
-                                    tint = if (effectiveThinkingDepth != ThinkingDepth.OFF) {
-                                        MaterialTheme.colorScheme.primary
-                                    } else {
-                                        MaterialTheme.colorScheme.onSurfaceVariant
-                                    },
-                                )
-                            }
-                            DropdownMenu(
-                                expanded = thinkMenuOpen,
-                                onDismissRequest = { thinkMenuOpen = false },
-                            ) {
-                                ThinkingDepth.LABELS.forEach { (value, label) ->
-                                    DropdownMenuItem(
-                                        text = { Text(label) },
-                                        leadingIcon = {
-                                            if (effectiveThinkingDepth == value) {
-                                                Icon(
-                                                    Icons.Filled.Check,
-                                                    contentDescription = null,
-                                                    modifier = Modifier.size(16.dp),
-                                                )
-                                            }
-                                        },
-                                        onClick = {
-                                            vm.setThinkingDepth(value)
-                                            thinkMenuOpen = false
-                                        },
-                                    )
-                                }
-                            }
-                        }
-                    }
-                    if (showImageInput) {
-                        IconButton(onClick = {
-                            pickImages.launch(
-                                PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
-                            )
-                        }) { Icon(Icons.Filled.Add, contentDescription = "添加图片") }
-                    }
-                    OutlinedTextField(
-                        value = input,
-                        onValueChange = { input = it },
-                        modifier = Modifier.weight(1f),
-                        placeholder = { Text("输入消息…") },
-                        maxLines = 5,
-                    )
-                    Spacer(Modifier.width(6.dp))
-                    if (streaming) {
-                        FilledIconButton(
-                            onClick = { vm.stopStreaming() },
-                            colors = IconButtonDefaults.filledIconButtonColors(
-                                containerColor = MaterialTheme.colorScheme.errorContainer,
-                            ),
-                        ) { Icon(Icons.Filled.Close, contentDescription = "停止") }
-                    } else {
-                        FilledIconButton(
-                            onClick = {
-                                val editing = editingMessage
-                                val text = input
-                                val newUris = attachments
-                                input = ""
-                                attachments = emptyList()
-                                if (editing != null) {
-                                    val keepImages = editAttachments
-                                    editAttachments = emptyList()
-                                    editingMessage = null
-                                    vm.editAndResend(editing, text, keepImages, newUris)
-                                } else {
-                                    vm.send(text, newUris)
-                                }
-                            },
-                            enabled = input.isNotBlank() || attachments.isNotEmpty() ||
-                                editAttachments.isNotEmpty(),
-                        ) { Icon(Icons.AutoMirrored.Filled.Send, contentDescription = "发送") }
-                    }
-                }
+                (plugin.inputBar ?: { ChatUiDefaults.InputBar(env) })(env)
             }
         }
     }
@@ -777,12 +304,20 @@ fun ChatScreen(
         )
     }
 
+    if (pluginPickerOpen) {
+        PluginPickerDialog(
+            currentId = plugin.id,
+            onSelect = { app.settings.setChatPluginId(it) },
+            onDismiss = { pluginPickerOpen = false },
+        )
+    }
+
     detailMessage?.let { msg ->
         AlertDialog(
             onDismissRequest = { detailMessage = null },
             confirmButton = {
                 TextButton(onClick = {
-                    copyText(context, msg.content)
+                    ChatUiDefaults.copyText(context, msg.content)
                     detailMessage = null
                 }) { Text("复制全文") }
             },
@@ -914,577 +449,6 @@ fun ChatScreen(
     }
 }
 
-@OptIn(ExperimentalFoundationApi::class)
-@Composable
-private fun MessageBubble(
-    message: MessageEntity,
-    actionsEnabled: Boolean,
-    onLongPress: () -> Unit,
-    onImageClick: (androidx.compose.ui.graphics.ImageBitmap) -> Unit,
-    onCopy: () -> Unit,
-    onRegenerate: () -> Unit,
-    onMore: () -> Unit,
-) {
-    if (message.role == Role.USER) {
-        Column(
-            horizontalAlignment = Alignment.End,
-            modifier = Modifier.fillMaxWidth(),
-        ) {
-            if (message.images.isNotEmpty()) {
-                Row(
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                    modifier = Modifier
-                        .widthIn(max = 300.dp)
-                        .padding(bottom = 4.dp),
-                ) {
-                    message.images.forEach { url ->
-                        MessageImage(url = url, onClick = onImageClick)
-                    }
-                }
-            }
-            if (message.content.isNotBlank()) {
-                Surface(
-                    color = MaterialTheme.colorScheme.primary,
-                    shape = RoundedCornerShape(16.dp, 4.dp, 16.dp, 16.dp),
-                    modifier = Modifier
-                        .widthIn(max = 300.dp)
-                        .combinedClickable(onClick = {}, onLongClick = onLongPress),
-                ) {
-                    Text(
-                        message.content,
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onPrimary,
-                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
-                    )
-                }
-            }
-            MessageActionsRow(
-                alignEnd = true,
-                enabled = actionsEnabled,
-                onCopy = onCopy,
-                onRegenerate = onRegenerate,
-                onMore = onMore,
-            )
-        }
-    } else {
-        Column(Modifier.fillMaxWidth()) {
-            Column(Modifier.widthIn(max = 320.dp)) {
-                val isLong = remember(message.content) {
-                    message.content.lines().size > 12 || message.content.length > 600
-                }
-                var collapsed by rememberSaveable(message.id) { mutableStateOf(false) }
-                Surface(
-                    color = MaterialTheme.colorScheme.surfaceVariant,
-                    shape = RoundedCornerShape(4.dp, 16.dp, 16.dp, 16.dp),
-                    modifier = Modifier.combinedClickable(
-                        onClick = { if (isLong) collapsed = !collapsed },
-                        onLongClick = onLongPress,
-                    ),
-                ) {
-                    Column(Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
-                        if (!message.reasoning.isNullOrBlank()) {
-                            ReasoningSection(message.reasoning, inProgress = false)
-                        }
-                        CollapsibleMessageBody(message.content, isLong, collapsed) {
-                            collapsed = !collapsed
-                        }
-                    }
-                }
-            }
-            MessageActionsRow(
-                alignEnd = false,
-                enabled = actionsEnabled,
-                onCopy = onCopy,
-                onRegenerate = onRegenerate,
-                onMore = onMore,
-            )
-        }
-    }
-}
-
-/** 气泡下方操作行：复制 / 重新生成 / 更多 */
-@Composable
-private fun MessageActionsRow(
-    alignEnd: Boolean,
-    enabled: Boolean,
-    onCopy: () -> Unit,
-    onRegenerate: () -> Unit,
-    onMore: () -> Unit,
-) {
-    Row(
-        horizontalArrangement = if (alignEnd) Arrangement.End else Arrangement.Start,
-        verticalAlignment = Alignment.CenterVertically,
-        modifier = Modifier.fillMaxWidth(),
-    ) {
-        SmallMessageAction(Icons.Filled.ContentCopy, "复制", enabled, onCopy)
-        SmallMessageAction(Icons.Filled.Refresh, "重新生成", enabled, onRegenerate)
-        SmallMessageAction(Icons.Filled.MoreVert, "更多", enabled, onMore)
-    }
-}
-
-@Composable
-private fun SmallMessageAction(
-    icon: ImageVector,
-    description: String,
-    enabled: Boolean,
-    onClick: () -> Unit,
-) {
-    IconButton(onClick = onClick, enabled = enabled, modifier = Modifier.size(28.dp)) {
-        Icon(
-            icon,
-            contentDescription = description,
-            tint = if (enabled) {
-                MaterialTheme.colorScheme.onSurfaceVariant
-            } else {
-                MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.38f)
-            },
-            modifier = Modifier.size(16.dp),
-        )
-    }
-}
-
-/**
- * 助手消息正文：长消息支持整体折叠，减少长回复刷屏。
- * 点击气泡任意位置或「收起」折叠；折叠后仅保留首行摘要，点击摘要或气泡展开。
- */
-@Composable
-private fun CollapsibleMessageBody(
-    content: String,
-    isLong: Boolean,
-    collapsed: Boolean,
-    onToggleCollapse: () -> Unit,
-) {
-    if (collapsed) {
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            modifier = Modifier
-                .fillMaxWidth()
-                .clip(RoundedCornerShape(6.dp))
-                .clickable(onClick = onToggleCollapse)
-                .padding(vertical = 2.dp),
-        ) {
-            Text(
-                content.lineSequence().firstOrNull { it.isNotBlank() }.orEmpty(),
-                style = MaterialTheme.typography.bodyMedium,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.weight(1f),
-            )
-            Text(
-                "展开",
-                style = MaterialTheme.typography.labelMedium,
-                color = MaterialTheme.colorScheme.primary,
-            )
-            Icon(
-                Icons.Filled.KeyboardArrowDown,
-                contentDescription = "展开消息",
-                tint = MaterialTheme.colorScheme.primary,
-                modifier = Modifier.size(16.dp),
-            )
-        }
-    } else {
-        MarkdownText(content)
-        if (isLong) {
-            Row(
-                horizontalArrangement = Arrangement.End,
-                verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(6.dp))
-                    .clickable(onClick = onToggleCollapse)
-                    .padding(vertical = 2.dp),
-            ) {
-                Text(
-                    "收起",
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                Icon(
-                    Icons.Filled.KeyboardArrowUp,
-                    contentDescription = "收起消息",
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier
-                        .padding(start = 2.dp)
-                        .size(16.dp),
-                )
-            }
-        }
-    }
-}
-
-/**
- * 消息区右侧快速导航（垂直居中，从上到下）：
- * 顶 = 回到列表顶部；上 = 当前消息顶部（已在其顶部则跳上一条消息）；
- * 下 = 露出当前消息最下面（底部已可见则跳到下一条消息）；底 = 回到底部（已在底部则不响应）。
- * 「当前消息」取视口顶部可见的消息。滑动列表或按钮触发滚动时显示，停止滚动 3 秒后淡出隐藏。
- */
-@Composable
-private fun MessageQuickNav(listState: LazyListState, modifier: Modifier = Modifier) {
-    val scope = rememberCoroutineScope()
-    // 判定"已贴着当前消息顶部/底部"的容差
-    val tolerancePx = with(LocalDensity.current) { 16.dp.toPx() }
-
-    val scrolling = listState.isScrollInProgress
-    var visible by remember { mutableStateOf(false) }
-    LaunchedEffect(scrolling) {
-        if (scrolling) {
-            visible = true
-        } else {
-            delay(3000)
-            visible = false
-        }
-    }
-
-    AnimatedVisibility(
-        visible = visible,
-        enter = fadeIn(),
-        exit = fadeOut(),
-        modifier = modifier,
-    ) {
-        Column(
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(6.dp),
-        ) {
-            QuickNavButton("顶", "回到顶部", filled = true) {
-                scope.launch { listState.animateScrollToItem(0) }
-            }
-            QuickNavButton("上", "跳到当前消息顶部，已在顶部则跳上一条消息", filled = false) {
-                scope.launch {
-                    val first = listState.layoutInfo.visibleItemsInfo.firstOrNull()
-                        ?: return@launch
-                    val target = if (first.offset >= -tolerancePx) first.index - 1 else first.index
-                    if (target >= 0) listState.animateScrollToItem(target)
-                }
-            }
-            QuickNavButton("下", "跳到当前消息最下面，底部已可见则跳下一条消息", filled = false) {
-                scope.launch {
-                    val layout = listState.layoutInfo
-                    val first = layout.visibleItemsInfo.firstOrNull() ?: return@launch
-                    // 当前消息底边与视口底边的距离；还有距离则只滚到消息末尾
-                    val distance = first.offset + first.size - layout.viewportEndOffset
-                    if (distance > tolerancePx) {
-                        listState.animateScrollBy(distance.toFloat())
-                    } else if (first.index < layout.totalItemsCount - 1) {
-                        listState.animateScrollToItem(first.index + 1)
-                    }
-                }
-            }
-            QuickNavButton("底", "回到底部", filled = true) {
-                scope.launch {
-                    // 已在底部则不响应
-                    if (!listState.canScrollForward) return@launch
-                    listState.animateScrollToItem(listState.layoutInfo.totalItemsCount - 1)
-                    // 最后一条消息可能高于视口；大步长滚动，LazyList 会在真正的底部停下
-                    listState.animateScrollBy(1_000_000f)
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun QuickNavButton(label: String, desc: String, filled: Boolean, onClick: () -> Unit) {
-    val buttonModifier = Modifier
-        .size(38.dp)
-        .semantics { contentDescription = desc }
-    if (filled) {
-        FilledIconButton(onClick = onClick, modifier = buttonModifier) {
-            Text(label, style = MaterialTheme.typography.labelLarge)
-        }
-    } else {
-        FilledTonalIconButton(onClick = onClick, modifier = buttonModifier) {
-            Text(label, style = MaterialTheme.typography.labelLarge)
-        }
-    }
-}
-
-/**
- * 流式气泡容器：在列表项内部收集流式文本，
- * 使状态变化只重组这一个列表项，而不是整个 ChatScreen。
- */
-@Composable
-private fun StreamingItem(vm: ChatViewModel, listState: LazyListState) {
-    val reasoning by vm.streamingReasoning.collectAsStateWithLifecycle()
-    val content by vm.streamingText.collectAsStateWithLifecycle()
-
-    // 跟随滚动：视口已接近底部时才自动下滚到最新内容，避免打断用户上翻
-    LaunchedEffect(content, reasoning) {
-        val info = listState.layoutInfo
-        val last = info.totalItemsCount - 1
-        val lastVisible = info.visibleItemsInfo.lastOrNull()?.index ?: return@LaunchedEffect
-        if (lastVisible >= last - 1) listState.scrollBy(1_000_000f)
-    }
-
-    StreamingBubble(reasoning = reasoning, content = content)
-}
-
-@Composable
-private fun StreamingBubble(reasoning: String, content: String) {
-    Row(Modifier.fillMaxWidth()) {
-        Surface(
-            color = MaterialTheme.colorScheme.surfaceVariant,
-            shape = RoundedCornerShape(4.dp, 16.dp, 16.dp, 16.dp),
-        ) {
-            Column(
-                Modifier
-                    .widthIn(max = 320.dp)
-                    .padding(horizontal = 12.dp, vertical = 8.dp)
-            ) {
-                if (reasoning.isNotBlank()) {
-                    ReasoningSection(reasoning, inProgress = content.isEmpty())
-                }
-                if (content.isNotEmpty()) {
-                    Text(content + " ▍", style = MaterialTheme.typography.bodyMedium)
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun MessageImage(url: String, onClick: (androidx.compose.ui.graphics.ImageBitmap) -> Unit) {
-    val bitmap = rememberDataUrlBitmap(url).value
-    Surface(shape = RoundedCornerShape(10.dp)) {
-        if (bitmap != null) {
-            androidx.compose.foundation.Image(
-                bitmap = bitmap,
-                contentDescription = null,
-                contentScale = ContentScale.Crop,
-                modifier = Modifier
-                    .size(140.dp)
-                    .clip(RoundedCornerShape(10.dp))
-                    .clickable { onClick(bitmap) },
-            )
-        } else {
-            Surface(color = MaterialTheme.colorScheme.surfaceVariant, modifier = Modifier.size(140.dp)) {}
-        }
-    }
-}
-
-@Composable
-private fun AttachmentThumb(uri: android.net.Uri, onRemove: () -> Unit) {
-    val context = LocalContext.current
-    val bitmap = produceUriBitmap(context, uri).value
-    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-        Surface(shape = RoundedCornerShape(8.dp)) {
-            if (bitmap != null) {
-                androidx.compose.foundation.Image(
-                    bitmap = bitmap,
-                    contentDescription = null,
-                    contentScale = ContentScale.Crop,
-                    modifier = Modifier.size(72.dp),
-                )
-            } else {
-                Surface(color = MaterialTheme.colorScheme.surfaceVariant, modifier = Modifier.size(72.dp)) {}
-            }
-        }
-        TextButton(onClick = onRemove) { Text("移除", style = MaterialTheme.typography.labelSmall) }
-    }
-}
-
-/** 编辑态保留的原图附件（已是压缩过的 data URL，直接解码展示） */
-@Composable
-private fun DataUrlThumb(url: String, onRemove: () -> Unit) {
-    val bitmap = rememberDataUrlBitmap(url).value
-    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-        Surface(shape = RoundedCornerShape(8.dp)) {
-            if (bitmap != null) {
-                androidx.compose.foundation.Image(
-                    bitmap = bitmap,
-                    contentDescription = null,
-                    contentScale = ContentScale.Crop,
-                    modifier = Modifier.size(72.dp),
-                )
-            } else {
-                Surface(color = MaterialTheme.colorScheme.surfaceVariant, modifier = Modifier.size(72.dp)) {}
-            }
-        }
-        TextButton(onClick = onRemove) { Text("移除", style = MaterialTheme.typography.labelSmall) }
-    }
-}
-
-private fun copyText(context: Context, text: String) {
-    val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-    cm.setPrimaryClip(ClipData.newPlainText("phoneRouter", text))
-}
-
-/** 抽屉分组横向 tab 的胶囊按钮 */
-@Composable
-private fun FolderTab(
-    label: String,
-    icon: ImageVector,
-    count: Int,
-    selected: Boolean,
-    onClick: () -> Unit,
-) {
-    Surface(
-        shape = RoundedCornerShape(20.dp),
-        color = if (selected) {
-            MaterialTheme.colorScheme.secondaryContainer
-        } else {
-            MaterialTheme.colorScheme.surfaceVariant
-        },
-        modifier = Modifier
-            .clip(RoundedCornerShape(20.dp))
-            .clickable(onClick = onClick),
-    ) {
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            modifier = Modifier.padding(start = 12.dp, end = 10.dp, top = 8.dp, bottom = 8.dp),
-        ) {
-            Icon(
-                icon,
-                contentDescription = null,
-                tint = if (selected) {
-                    MaterialTheme.colorScheme.onSecondaryContainer
-                } else {
-                    MaterialTheme.colorScheme.onSurfaceVariant
-                },
-                modifier = Modifier.size(16.dp),
-            )
-            Text(
-                label,
-                style = MaterialTheme.typography.labelLarge,
-                color = if (selected) {
-                    MaterialTheme.colorScheme.onSecondaryContainer
-                } else {
-                    MaterialTheme.colorScheme.onSurface
-                },
-                maxLines = 1,
-                modifier = Modifier.padding(start = 6.dp),
-            )
-            Text(
-                "$count",
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(start = 4.dp),
-            )
-        }
-    }
-}
-
-@Composable
-private fun PresetDrawerItem(
-    preset: PresetEntity,
-    onUse: () -> Unit,
-    onEdit: () -> Unit,
-) {
-    Row(
-        verticalAlignment = Alignment.CenterVertically,
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable(onClick = onUse)
-            .padding(start = 24.dp, end = 8.dp),
-    ) {
-        Icon(
-            Icons.Filled.PlayArrow,
-            contentDescription = null,
-            tint = MaterialTheme.colorScheme.primary,
-            modifier = Modifier.size(18.dp),
-        )
-        Column(Modifier.weight(1f).padding(start = 10.dp, top = 8.dp, bottom = 8.dp)) {
-            Text(preset.name, style = MaterialTheme.typography.bodyMedium, maxLines = 1)
-            Text(
-                if (preset.systemPrompt != null) "预设 · 含系统提示词" else "预设",
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
-        IconButton(onClick = onEdit) {
-            Icon(
-                Icons.Filled.Edit,
-                contentDescription = "编辑预设",
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.size(16.dp),
-            )
-        }
-    }
-}
-
-/** 搜索结果项：会话标题 + 命中片段/所在文件夹 */
-@Composable
-private fun SearchHitItem(
-    hit: ConversationHit,
-    folderName: String?,
-    selected: Boolean,
-    onClick: () -> Unit,
-) {
-    val snippet = hit.snippet
-    val subtitle = when {
-        snippet != null -> snippet.replace('\n', ' ').take(60) +
-            (folderName?.let { "  ·  $it" } ?: "")
-        folderName != null -> "「$folderName」中的对话"
-        else -> "标题命中"
-    }
-    Surface(
-        color = if (selected) {
-            MaterialTheme.colorScheme.secondaryContainer
-        } else {
-            androidx.compose.ui.graphics.Color.Transparent
-        },
-        shape = RoundedCornerShape(12.dp),
-        modifier = Modifier
-            .padding(horizontal = 8.dp)
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(12.dp))
-            .clickable(onClick = onClick),
-    ) {
-        Column(Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
-            Text(
-                hit.conversation.title,
-                style = MaterialTheme.typography.bodyMedium,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-            Text(
-                subtitle,
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-        }
-    }
-}
-
-@Composable
-private fun ConversationDrawerItem(
-    conv: ConversationEntity,
-    selected: Boolean,
-    onSelect: () -> Unit,
-    onMove: () -> Unit,
-    onDelete: () -> Unit,
-) {
-    var menuOpen by remember { mutableStateOf(false) }
-    NavigationDrawerItem(
-        label = { Text(conv.title, maxLines = 1) },
-        selected = selected,
-        onClick = onSelect,
-        badge = {
-            Box {
-                IconButton(onClick = { menuOpen = true }) {
-                    Icon(
-                        Icons.Filled.MoreVert,
-                        contentDescription = "会话菜单",
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.size(18.dp),
-                    )
-                }
-                DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
-                    DropdownMenuItem(
-                        text = { Text("移动到文件夹…") },
-                        onClick = { menuOpen = false; onMove() },
-                    )
-                    DropdownMenuItem(
-                        text = { Text("删除对话") },
-                        onClick = { menuOpen = false; onDelete() },
-                    )
-                }
-            }
-        },
-    )
-}
-
 @Composable
 private fun MoveRadioRow(label: String, folderId: Long?, selected: Long?, onSelect: (Long?) -> Unit) {
     Row(
@@ -1494,7 +458,7 @@ private fun MoveRadioRow(label: String, folderId: Long?, selected: Long?, onSele
             .clickable { onSelect(folderId) },
     ) {
         RadioButton(selected = selected == folderId, onClick = { onSelect(folderId) })
-        Text(label, style = MaterialTheme.typography.bodyMedium)
+        Text(label, style = androidx.compose.material3.MaterialTheme.typography.bodyMedium)
     }
 }
 
@@ -1527,8 +491,8 @@ private fun SystemPromptDialog(
                 )
                 Text(
                     "怀疑预设没生效时，在此确认当前会话是否真的带了人设",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    style = androidx.compose.material3.MaterialTheme.typography.labelSmall,
+                    color = androidx.compose.material3.MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(top = 6.dp),
                 )
             }

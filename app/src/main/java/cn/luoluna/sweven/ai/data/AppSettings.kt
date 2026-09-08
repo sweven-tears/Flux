@@ -135,6 +135,14 @@ class AppSettings(context: Context) {
         _logRequestsEnabled.value = enabled
     }
 
+    private val _chatPluginId = MutableStateFlow(prefs.getString(KEY_CHAT_PLUGIN, null))
+    val chatPluginId: StateFlow<String?> = _chatPluginId
+
+    fun setChatPluginId(id: String) {
+        prefs.edit().putString(KEY_CHAT_PLUGIN, id).apply()
+        _chatPluginId.value = id
+    }
+
     companion object {
         const val DEFAULT_PORT = 8787
         const val DEFAULT_SMART_FIRST_TOKEN_TIMEOUT = 30
@@ -156,5 +164,6 @@ class AppSettings(context: Context) {
         private const val KEY_SMART_COOLDOWN_THRESHOLD = "smart_cooldown_threshold"
         private const val KEY_SMART_COOLDOWN_SECONDS = "smart_cooldown_seconds"
         private const val KEY_LOG_REQUESTS = "log_requests_enabled"
+        private const val KEY_CHAT_PLUGIN = "chat_ui_plugin"
     }
 }

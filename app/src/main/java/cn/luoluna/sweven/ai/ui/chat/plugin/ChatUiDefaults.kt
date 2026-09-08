@@ -46,10 +46,12 @@ import androidx.compose.material.icons.filled.CloseFullscreen
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.Emergency
 import androidx.compose.material.icons.filled.Face
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
+import androidx.compose.material.icons.filled.Lightbulb
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.PlayArrow
@@ -749,23 +751,21 @@ object ChatUiDefaults {
 
     // ---------------- 输入栏（底部输入面板） ----------------
 
-    private val PANEL_BG = Color(0xFFEEF0F5)
-    private val CHIP_BG = Color(0xFFE5E7EB)
-    private val CHIP_TEXT = Color(0xFF4A5568)
-    private val SEND_ENABLED_BG = Color(0xFF6B46C1)
-    private val SEND_DISABLED_BG = Color(0xFFD1D5DB)
-    private val THINK_ACTIVE = Color(0xFF3B82F6)
-
     private val QUICK_PROMPTS = listOf("效果", "补充画面背景光线层次", "突出梵高笔触的纹理感")
 
     @Composable
     fun InputBar(env: ChatUiEnv) {
         var expandOpen by remember { mutableStateOf(false) }
+        val panelBg = MaterialTheme.colorScheme.surfaceContainerLow
+        val chipBg = MaterialTheme.colorScheme.surfaceContainerHigh
+        val onPanel = MaterialTheme.colorScheme.onSurfaceVariant
+        // 模型按钮的星形图标色（品牌色，明暗主题一致）
+        val modelIconTint = Color(0xFFFF7043)
 
         Column(
             Modifier
                 .fillMaxWidth()
-                .background(PANEL_BG, RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp))
+                .background(panelBg, RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp))
                 .padding(top = 4.dp),
         ) {
             // 瞬态行：上下文用量 / 编辑提示 / 待发送附件
@@ -776,7 +776,7 @@ object ChatUiDefaults {
                     color = when (env.contextEstimateLevel) {
                         2 -> MaterialTheme.colorScheme.error
                         1 -> MaterialTheme.colorScheme.tertiary
-                        else -> CHIP_TEXT
+                        else -> onPanel
                     },
                     modifier = Modifier
                         .fillMaxWidth()
@@ -809,32 +809,36 @@ object ChatUiDefaults {
             }
             env.renderAttachmentRow()
 
-            // 快捷提示词区：横向滚动胶囊
-            LazyRow(
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                contentPadding = PaddingValues(horizontal = 16.dp),
-                modifier = Modifier.padding(vertical = 6.dp),
-            ) {
-                items(QUICK_PROMPTS) { prompt ->
-                    Surface(
-                        color = CHIP_BG,
-                        shape = RoundedCornerShape(16.dp),
-                        modifier = Modifier.clickable { env.onInputChange(prompt) },
-                    ) {
-                        Text(
-                            prompt,
-                            fontSize = 13.sp,
-                            color = CHIP_TEXT,
-                            maxLines = 1,
-                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
-                        )
+            // 快捷提示词区：横向滚动胶囊，随列表内容动态出现
+            // TODO 快捷提示词功能未开发：当前为占位示例数据，后续接入动态来源（按模型/场景生成），
+            //  列表为空时整行自动隐藏
+            if (QUICK_PROMPTS.isNotEmpty()) {
+                LazyRow(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    contentPadding = PaddingValues(horizontal = 16.dp),
+                    modifier = Modifier.padding(vertical = 6.dp),
+                ) {
+                    items(QUICK_PROMPTS) { prompt ->
+                        Surface(
+                            color = chipBg,
+                            shape = RoundedCornerShape(16.dp),
+                            modifier = Modifier.clickable { env.onInputChange(prompt) },
+                        ) {
+                            Text(
+                                prompt,
+                                fontSize = 13.sp,
+                                color = onPanel,
+                                maxLines = 1,
+                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                            )
+                        }
                     }
                 }
             }
 
-            // 主输入框：白色圆角 Surface 包无边框 TextField
+            // 主输入框：面板色上的圆角 Surface 包无边框 TextField
             Surface(
-                color = Color.White,
+                color = MaterialTheme.colorScheme.surface,
                 shape = RoundedCornerShape(16.dp),
                 modifier = Modifier
                     .fillMaxWidth()
@@ -844,7 +848,7 @@ object ChatUiDefaults {
                     value = env.input,
                     onValueChange = env.onInputChange,
                     modifier = Modifier.fillMaxWidth(),
-                    placeholder = { Text("输入消息与AI聊天", color = CHIP_TEXT) },
+                    placeholder = { Text("输入消息与AI聊天", color = onPanel) },
                     colors = TextFieldDefaults.colors(
                         focusedContainerColor = Color.Transparent,
                         unfocusedContainerColor = Color.Transparent,
@@ -859,14 +863,14 @@ object ChatUiDefaults {
                             Icon(
                                 Icons.Filled.CloseFullscreen,
                                 contentDescription = "展开输入",
-                                tint = CHIP_TEXT,
+                                tint = onPanel,
                             )
                         }
                     },
                 )
             }
 
-            // 底部工具栏：左（模型头像/搜索/思考）右（加号/发送）
+            // 底部工具栏：左（模型/思考）右（加号/发送）
             Row(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically,
@@ -879,23 +883,40 @@ object ChatUiDefaults {
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(4.dp),
                 ) {
-                    // 模型切换按钮（模型头像占位）
+                    // 模型切换按钮（星形占位图标，后续换模型真实头像）
                     IconButton(onClick = env.openModelPicker) {
-                        cn.luoluna.sweven.ai.ui.chat.AssistantAvatar(size = 26.dp)
+                        Icon(
+                            Icons.Filled.Emergency,
+                            contentDescription = "切换模型",
+                            tint = modelIconTint,
+                            modifier = Modifier.size(24.dp),
+                        )
                     }
-                    // 搜索：会话抽屉（搜索框在抽屉顶部）
-                    IconButton(onClick = { env.scope.launch { env.drawerState.open() } }) {
-                        Icon(Icons.Filled.Search, contentDescription = "搜索", tint = CHIP_TEXT)
-                    }
-                    // 思考模式
+                    // TODO 搜索功能未开发，先隐藏（原跳转抽屉搜索框，等独立搜索功能做好再放出）
+                    // IconButton(onClick = { env.scope.launch { env.drawerState.open() } }) {
+                    //     Icon(Icons.Filled.Search, contentDescription = "搜索", tint = onPanel)
+                    // }
+                    // 思考模式：蓝色灯泡，启用思考（非关闭挡）时右上角加点亮小圆点
                     Box {
                         var thinkMenuOpen by remember { mutableStateOf(false) }
+                        val thinkingOn = env.showReasoning && env.effectiveThinkingDepth != ThinkingDepth.OFF
                         IconButton(onClick = { if (env.showReasoning) thinkMenuOpen = true }) {
-                            Icon(
-                                Icons.Filled.Psychology,
-                                contentDescription = "思考模式",
-                                tint = THINK_ACTIVE,
-                            )
+                            Box(Modifier.size(26.dp)) {
+                                Icon(
+                                    Icons.Filled.Lightbulb,
+                                    contentDescription = "思考模式",
+                                    tint = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.size(24.dp),
+                                )
+                                if (thinkingOn) {
+                                    Box(
+                                        Modifier
+                                            .size(7.dp)
+                                            .background(MaterialTheme.colorScheme.primary, CircleShape)
+                                            .align(Alignment.TopEnd),
+                                    )
+                                }
+                            }
                         }
                         if (env.showReasoning) {
                             DropdownMenu(
@@ -930,7 +951,7 @@ object ChatUiDefaults {
                 ) {
                     // 加号：添加图片等
                     IconButton(onClick = env.pickImages) {
-                        Icon(Icons.Filled.Add, contentDescription = "添加图片", tint = CHIP_TEXT)
+                        Icon(Icons.Filled.Add, contentDescription = "添加图片", tint = onPanel)
                     }
                     if (env.streaming) {
                         // 流式中变为停止按钮（保留原停止能力）
@@ -944,7 +965,7 @@ object ChatUiDefaults {
                                 Icon(
                                     Icons.Filled.Close,
                                     contentDescription = "停止",
-                                    tint = Color.White,
+                                    tint = MaterialTheme.colorScheme.onError,
                                     modifier = Modifier.size(20.dp),
                                 )
                             }
@@ -957,7 +978,11 @@ object ChatUiDefaults {
                                 Modifier
                                     .size(36.dp)
                                     .background(
-                                        if (canSend) SEND_ENABLED_BG else SEND_DISABLED_BG,
+                                        if (canSend) {
+                                            MaterialTheme.colorScheme.primary
+                                        } else {
+                                            MaterialTheme.colorScheme.surfaceContainerHighest
+                                        },
                                         CircleShape,
                                     ),
                                 contentAlignment = Alignment.Center,
@@ -965,7 +990,7 @@ object ChatUiDefaults {
                                 Icon(
                                     Icons.Filled.ArrowUpward,
                                     contentDescription = "发送",
-                                    tint = if (canSend) Color.White else CHIP_TEXT,
+                                    tint = MaterialTheme.colorScheme.onPrimary,
                                     modifier = Modifier.size(20.dp),
                                 )
                             }

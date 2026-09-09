@@ -76,6 +76,8 @@ class ChatUiEnv(
     val currentTarget: ChatTarget?,
     /** 当前单模型目标（SmartAi 时为 null） */
     val currentPicker: PickerModel?,
+    /** 消息模型解析表：providerId+modelName → PickerModel（含禁用模型），历史气泡按此显示当时回复的模型 */
+    val modelsByKey: Map<Pair<Long, String>, PickerModel>,
     val isSmartAi: Boolean,
     val smartAiCapability: SmartAggregateCapability,
     /** 会话原模型不可用、当前展示回退目标 */

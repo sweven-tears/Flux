@@ -198,6 +198,9 @@ data class MessageEntity(
     val imagesJson: String? = null,
     /** 模型思考过程（reasoning_content / <think>），仅助手消息 */
     val reasoning: String? = null,
+    /** 生成此助手消息的模型：厂商 id + 模型名；用户消息与旧数据为 null（显示回落"助手"） */
+    val providerId: Long? = null,
+    val modelName: String? = null,
     val createdAt: Long = System.currentTimeMillis(),
 ) {
     val images: List<String>

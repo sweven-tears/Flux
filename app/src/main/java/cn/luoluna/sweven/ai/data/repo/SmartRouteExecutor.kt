@@ -41,8 +41,13 @@ data class SmartPolicy(
 
 /** 智能路由执行事件 */
 sealed interface SmartEvent {
-    /** 即将尝试第 [index] 个候选 */
-    data class Trying(val index: Int, val label: String) : SmartEvent
+    /** 即将尝试第 [index] 个候选（附 providerId/modelName，消费方据此记录实际生成模型） */
+    data class Trying(
+        val index: Int,
+        val label: String,
+        val providerId: Long,
+        val modelName: String,
+    ) : SmartEvent
     data class Delta(val text: String) : SmartEvent
     data class ReasoningDelta(val text: String) : SmartEvent
     data object Done : SmartEvent
@@ -110,7 +115,7 @@ class SmartRouteExecutor(private val client: ProviderClient) {
             }
 
             candidateLoop@ for ((index, candidate) in roundCandidates.withIndex()) {
-                send(SmartEvent.Trying(index, candidate.label))
+                send(SmartEvent.Trying(index, candidate.label, candidate.providerId, candidate.modelName))
                 val timeoutMs = policy.timeoutMs(round)
                 val startedAt = System.currentTimeMillis()
 

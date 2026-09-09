@@ -81,6 +81,8 @@ fun ChatScreen(
     val currentTarget by vm.currentTarget.collectAsStateWithLifecycle()
     val smartAiAvailable by vm.smartAiAvailable.collectAsStateWithLifecycle()
     val currentPicker = (currentTarget as? ChatTarget.Single)?.picker
+    // 消息模型解析表（含禁用模型）：历史气泡按消息记录的 providerId+modelName 显示当时回复的模型
+    val modelsByKey = allPickerModels.associate { (it.provider.id to it.model.name) to it }
     val smartAiCapability by vm.smartAiCapability.collectAsStateWithLifecycle()
     // SmartAi 聚合目标没有单个模型可看，按钮可见性按启用候选的能力并集判断
     val isSmartAi = currentTarget is ChatTarget.SmartAi
@@ -201,6 +203,7 @@ fun ChatScreen(
         messages = messages,
         currentTarget = currentTarget,
         currentPicker = currentPicker,
+        modelsByKey = modelsByKey,
         isSmartAi = isSmartAi,
         smartAiCapability = smartAiCapability,
         modelFallback = modelFallback,

@@ -261,6 +261,13 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
 
     private var sendJob: Job? = null
 
+    /**
+     * 当前流式回复实际使用的模型（providerId to modelName）：助手消息落库时记录，
+     * 让历史气泡显示当时回复的模型而不是当前选中模型；非流式时为 null。
+     * smartAi 场景随 SmartEvent.Trying 更新为最新候选（出内容后不再变化，即胜出者）。
+     */
+    @Volatile private var activeStreamModel: Pair<Long, String>? = null
+
     init {
         viewModelScope.launch {
             val latest = conversationDao.observeAll().first().firstOrNull()
@@ -478,6 +485,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         _streaming.value = true
         _streamingText.value = ""
         _streamingReasoning.value = ""
+        activeStreamModel = picker.provider.id to picker.model.name
         val publisher = StreamPublisher()
         sendJob = viewModelScope.launch {
             var failed: String? = null
@@ -574,7 +582,9 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                         is SmartEvent.Delta -> publisher.delta(ev.text)
                         is SmartEvent.ReasoningDelta -> publisher.reasoning(ev.text)
                         is SmartEvent.Failed -> failed = ev.message
-                        is SmartEvent.Trying, SmartEvent.Done -> Unit
+                        // 出内容后不再有 Trying，首个内容出现时的最新候选即胜出者
+                        is SmartEvent.Trying -> activeStreamModel = ev.providerId to ev.modelName
+                        SmartEvent.Done -> Unit
                     }
                 }
             } catch (e: CancellationException) {
@@ -634,10 +644,13 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                     role = Role.ASSISTANT,
                     content = finalContent,
                     reasoning = finalReasoning,
+                    providerId = activeStreamModel?.first,
+                    modelName = activeStreamModel?.second,
                 )
             )
             conversationDao.touch(convId, System.currentTimeMillis())
         }
+        activeStreamModel = null
         failed?.let { _error.value = it }
     }
 
@@ -647,6 +660,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         _streaming.value = false
         _streamingText.value = ""
         _streamingReasoning.value = ""
+        activeStreamModel = null
     }
 
     /**
@@ -730,6 +744,8 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                     content = m.content,
                     imagesJson = m.imagesJson,
                     reasoning = m.reasoning,
+                    providerId = m.providerId,
+                    modelName = m.modelName,
                     createdAt = m.createdAt,
                 )
             )
@@ -763,6 +779,8 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
     fun stopStreaming() {
         val partial = _streamingText.value
         val partialReasoning = _streamingReasoning.value.trim().takeIf { it.isNotEmpty() }
+        val model = activeStreamModel
+        activeStreamModel = null
         sendJob?.cancel()
         _streaming.value = false
         _streamingText.value = ""
@@ -776,6 +794,8 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                         role = Role.ASSISTANT,
                         content = partial,
                         reasoning = partialReasoning,
+                        providerId = model?.first,
+                        modelName = model?.second,
                     )
                 )
                 conversationDao.touch(convId, System.currentTimeMillis())
@@ -786,6 +806,8 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
     private fun stopStreamingInternal() {
         val partial = _streamingText.value
         val partialReasoning = _streamingReasoning.value.trim().takeIf { it.isNotEmpty() }
+        val model = activeStreamModel
+        activeStreamModel = null
         sendJob?.cancel()
         _streaming.value = false
         _streamingText.value = ""
@@ -800,6 +822,8 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                             role = Role.ASSISTANT,
                             content = partial,
                             reasoning = partialReasoning,
+                            providerId = model?.first,
+                            modelName = model?.second,
                         )
                     )
                 }

@@ -20,7 +20,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         PresetEntity::class,
         RequestLogEntity::class,
     ],
-    version = 9,
+    version = 10,
     exportSchema = false,
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -144,11 +144,19 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        /** v9 → v10：消息表增加生成模型字段（记录每条助手消息实际由哪个模型生成） */
+        private val MIGRATION_9_10 = object : Migration(9, 10) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE `messages` ADD COLUMN `providerId` INTEGER")
+                db.execSQL("ALTER TABLE `messages` ADD COLUMN `modelName` TEXT")
+            }
+        }
+
         fun build(context: Context): AppDatabase =
             Room.databaseBuilder(context, AppDatabase::class.java, "phone_router.db")
                 .addMigrations(
                     MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7,
-                    MIGRATION_7_8, MIGRATION_8_9,
+                    MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10,
                 )
                 .fallbackToDestructiveMigration()
                 .build()

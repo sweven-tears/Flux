@@ -621,15 +621,30 @@ object ChatUiDefaults {
             }
         } else {
             Column(Modifier.fillMaxWidth()) {
-                // 头像在上方：助手 = 头像 + 名字
+                // 头像在上方：助手 = 头像 + 名字（按消息记录的模型显示当时回复者，而非当前选中模型）
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
                     modifier = Modifier.padding(bottom = 4.dp),
                 ) {
-                    cn.luoluna.sweven.ai.ui.chat.AssistantAvatar(size = 24.dp)
+                    val recorded = message.providerId?.let { pid ->
+                        message.modelName?.let { name -> env.modelsByKey[pid to name] }
+                    }
+                    if (recorded != null) {
+                        cn.luoluna.sweven.ai.ui.chat.InitialAvatar(
+                            name = recorded.displayName,
+                            size = 24.dp,
+                        )
+                    } else {
+                        cn.luoluna.sweven.ai.ui.chat.AssistantAvatar(size = 24.dp)
+                    }
                     Text(
-                        env.currentPicker?.displayName
-                            ?: (if (env.isSmartAi) "smartAi" else "助手"),
+                        when {
+                            recorded != null -> recorded.displayName
+                            // 模型已删除：保留原始模型名，头像无法匹配回落机器人
+                            message.modelName != null -> message.modelName
+                            // 旧数据未记录模型：诚实显示"助手"，不按会话当前模型猜测
+                            else -> "助手"
+                        },
                         style = MaterialTheme.typography.labelMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.padding(start = 6.dp),

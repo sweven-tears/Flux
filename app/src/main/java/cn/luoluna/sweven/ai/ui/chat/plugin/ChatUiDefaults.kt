@@ -1139,7 +1139,7 @@ object ChatUiDefaults {
      * 消息区右侧快速导航（垂直居中，从上到下）：
      * 顶 = 回到列表顶部；上 = 当前消息顶部（已在其顶部则跳上一条消息）；
      * 下 = 露出当前消息最下面（底部已可见则跳到下一条消息）；底 = 回到底部（已在底部则不响应）。
-     * 「当前消息」取视口顶部可见的消息。滑动列表或按钮触发滚动时显示，停止滚动 3 秒后淡出隐藏。
+     * 「当前消息」取视口顶部可见的消息。滑动列表时隐藏；停止滚动且不在顶部/底部时显示，3 秒后淡出隐藏，再次滑动立即隐藏。
      */
     @Composable
     fun MessageQuickNav(listState: LazyListState, modifier: Modifier = Modifier) {
@@ -1151,8 +1151,10 @@ object ChatUiDefaults {
         var visible by remember { mutableStateOf(false) }
         LaunchedEffect(scrolling) {
             if (scrolling) {
+                visible = false
+            } else if (listState.canScrollBackward && listState.canScrollForward) {
+                // 停止滚动且不在顶部/底部：显示，3 秒后淡出；期间再次滑动会走上面分支立即隐藏
                 visible = true
-            } else {
                 delay(3000)
                 visible = false
             }

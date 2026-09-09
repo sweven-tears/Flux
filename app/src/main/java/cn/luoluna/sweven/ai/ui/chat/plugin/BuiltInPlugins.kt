@@ -404,9 +404,9 @@ object MonoChatUiPlugin : ChatUiPlugin {
                     maxLines = 5,
                 )
                 Spacer(Modifier.width(6.dp))
-                if (env.streaming) {
-                    FilledIconButton(
-                        onClick = { env.vm.stopStreaming() },
+                    if (env.streaming) {
+                        FilledIconButton(
+                            onClick = { env.vm.onStopTap() },
                         colors = IconButtonDefaults.filledIconButtonColors(
                             containerColor = MaterialTheme.colorScheme.errorContainer,
                         ),

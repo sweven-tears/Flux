@@ -4,7 +4,11 @@ import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
@@ -13,12 +17,15 @@ import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DrawerValue
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalNavigationDrawer
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberDrawerState
@@ -104,6 +111,7 @@ fun ChatScreen(
     val streaming by vm.streaming.collectAsStateWithLifecycle()
     val error by vm.error.collectAsStateWithLifecycle()
     val notice by vm.notice.collectAsStateWithLifecycle()
+    val stopHint by vm.stopHint.collectAsStateWithLifecycle()
     val contextEstimate by vm.contextEstimate.collectAsStateWithLifecycle()
     val drawer by vm.drawerState.collectAsStateWithLifecycle()
     val thinkingDepth by vm.thinkingDepth.collectAsStateWithLifecycle()
@@ -303,16 +311,23 @@ fun ChatScreen(
                     .consumeWindowInsets(padding)
                     .imePadding(),
             ) {
-                if (messages.isEmpty() && !streaming) {
-                    Column(Modifier.weight(1f).fillMaxWidth()) {
-                        (plugin.emptyState ?: { ChatUiDefaults.EmptyState(env) })(env)
+                Box(Modifier.weight(1f).fillMaxWidth()) {
+                    if (messages.isEmpty() && !streaming) {
+                        Column(Modifier.fillMaxSize()) {
+                            (plugin.emptyState ?: { ChatUiDefaults.EmptyState(env) })(env)
+                        }
+                    } else {
+                        Column(Modifier.fillMaxSize()) {
+                            (plugin.messageList ?: { e, _ -> ChatUiDefaults.MessageList(e, padding) })(
+                                env, padding,
+                            )
+                        }
                     }
-                } else {
-                    Column(Modifier.weight(1f).fillMaxWidth()) {
-                        (plugin.messageList ?: { e, _ -> ChatUiDefaults.MessageList(e, padding) })(
-                            env, padding,
-                        )
-                    }
+                    // 停止按钮首次点击的居中提示，1.8 秒后自动消失（vm.stopHint 复位）
+                    StopHintOverlay(
+                        visible = stopHint,
+                        modifier = Modifier.align(Alignment.Center),
+                    )
                 }
                 (plugin.inputBar ?: { ChatUiDefaults.InputBar(env) })(env)
             }
@@ -521,6 +536,30 @@ fun ChatScreen(
                 pendingAvatar = null
             },
         )
+    }
+}
+
+/** 停止按钮首次点击的居中提示胶囊（独立函数以避开 Column 作用域的 AnimatedVisibility 重载） */
+@Composable
+private fun StopHintOverlay(visible: Boolean, modifier: Modifier = Modifier) {
+    AnimatedVisibility(
+        visible = visible,
+        enter = fadeIn(),
+        exit = fadeOut(),
+        modifier = modifier,
+    ) {
+        Surface(
+            shape = RoundedCornerShape(24.dp),
+            color = MaterialTheme.colorScheme.inverseSurface,
+            shadowElevation = 6.dp,
+        ) {
+            Text(
+                "再点一次停止输出",
+                Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.inverseOnSurface,
+            )
+        }
     }
 }
 

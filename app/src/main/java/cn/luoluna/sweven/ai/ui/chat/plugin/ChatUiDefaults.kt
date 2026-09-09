@@ -935,8 +935,8 @@ object ChatUiDefaults {
                         }
                     }
                     if (env.streaming) {
-                        // 流式中变为停止按钮（保留原停止能力）
-                        IconButton(onClick = { env.vm.stopStreaming() }) {
+                        // 流式中变为停止按钮；二次点击确认逻辑在 vm.onStopTap，首点居中提示
+                        IconButton(onClick = { env.vm.onStopTap() }) {
                             Box(
                                 Modifier
                                     .size(36.dp)

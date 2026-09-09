@@ -46,6 +46,7 @@ import cn.luoluna.sweven.ai.net.trimToBudget
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -803,6 +804,35 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    /** 首次点停止后的提示开关，界面居中短暂显示后自动复位 */
+    private val _stopHint = MutableStateFlow(false)
+    val stopHint: StateFlow<Boolean> = _stopHint
+
+    private var lastStopTapAt = 0L
+
+    /**
+     * 停止按钮点击入口：3 秒内第二次点击才真正中断输出，
+     * 第一次点击置 stopHint 提示「再点一次」。返回是否执行了停止。
+     * 时间戳窗口自动失效，无需在流式状态变化时清理残留。
+     */
+    fun onStopTap(): Boolean {
+        val now = System.currentTimeMillis()
+        return if (now - lastStopTapAt in 0..STOP_TAP_WINDOW_MS) {
+            lastStopTapAt = 0L
+            _stopHint.value = false
+            stopStreaming()
+            true
+        } else {
+            lastStopTapAt = now
+            _stopHint.value = true
+            viewModelScope.launch {
+                delay(STOP_HINT_VISIBLE_MS)
+                if (lastStopTapAt == now) _stopHint.value = false
+            }
+            false
+        }
+    }
+
     private fun stopStreamingInternal() {
         val partial = _streamingText.value
         val partialReasoning = _streamingReasoning.value.trim().takeIf { it.isNotEmpty() }
@@ -909,6 +939,12 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
     companion object {
         /** 流式文本的发布节流间隔：UI 最多以 ~10Hz 刷新，而不是每个 token 刷新 */
         private const val STREAM_PUBLISH_INTERVAL_MS = 100L
+
+        /** 停止按钮二次点击的判定窗口 */
+        private const val STOP_TAP_WINDOW_MS = 3000L
+
+        /** 「再点一次停止」居中提示的显示时长 */
+        private const val STOP_HINT_VISIBLE_MS = 1800L
 
         /** 厂商按用户拖拽顺序分组，厂商内按模型拖拽顺序 */
         private fun buildPickerModels(

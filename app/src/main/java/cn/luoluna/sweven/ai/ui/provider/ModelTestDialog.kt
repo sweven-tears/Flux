@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -307,6 +308,8 @@ fun ModelTestDialog(
                             )
                             Text("开始测试", Modifier.padding(start = 4.dp))
                         }
+                        Spacer(Modifier.width(8.dp))
+                        OutlinedButton(onClick = onDismiss) { Text("关闭") }
                     }
                 }
             }

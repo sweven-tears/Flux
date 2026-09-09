@@ -40,8 +40,11 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.unit.dp
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Row
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -80,6 +83,7 @@ fun ChatScreen(
     val drawerState = rememberDrawerState(DrawerValue.Closed)
     val scope = rememberCoroutineScope()
     val focusManager = LocalFocusManager.current
+    val keyboard = LocalSoftwareKeyboardController.current
 
     val current by vm.current.collectAsStateWithLifecycle()
     val messages by vm.messages.collectAsStateWithLifecycle()
@@ -311,7 +315,18 @@ fun ChatScreen(
                     .consumeWindowInsets(padding)
                     .imePadding(),
             ) {
-                Box(Modifier.weight(1f).fillMaxWidth()) {
+                Box(
+                    Modifier
+                        .weight(1f)
+                        .fillMaxWidth()
+                        // 双击空白处移除输入框焦点并收起键盘；气泡等子级已消费点击的区域不触发
+                        .pointerInput(Unit) {
+                            detectTapGestures(onDoubleTap = {
+                                keyboard?.hide()
+                                focusManager.clearFocus()
+                            })
+                        },
+                ) {
                     if (messages.isEmpty() && !streaming) {
                         Column(Modifier.fillMaxSize()) {
                             (plugin.emptyState ?: { ChatUiDefaults.EmptyState(env) })(env)

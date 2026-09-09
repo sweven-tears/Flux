@@ -4,14 +4,23 @@ import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.widget.Toast
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -40,6 +49,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -47,9 +57,13 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import cn.luoluna.sweven.ai.App
@@ -72,6 +86,7 @@ import cn.luoluna.sweven.ai.ui.common.rememberReorderState
 import cn.luoluna.sweven.ai.ui.common.reorderDragged
 import cn.luoluna.sweven.ai.ui.common.reorderHandle
 import cn.luoluna.sweven.ai.ui.common.typeLabel
+import kotlin.math.roundToInt
 import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -93,7 +108,6 @@ fun ProviderDetailScreen(id: Long, onBack: () -> Unit) {
     var showRemarkEdit by remember { mutableStateOf(false) }
     var showAddKey by remember { mutableStateOf(false) }
     var deleteKeyTarget by remember { mutableStateOf<ApiKeyEntity?>(null) }
-    var deleteModelTarget by remember { mutableStateOf<ModelEntity?>(null) }
     var editModel by remember { mutableStateOf<ModelEntity?>(null) }
     var showNewModel by remember { mutableStateOf(false) }
     var showDeleteProvider by remember { mutableStateOf(false) }
@@ -148,6 +162,11 @@ fun ProviderDetailScreen(id: Long, onBack: () -> Unit) {
                 app.database.modelDao().updateAll(reordered)
                 localModelOrder = null
             }
+        }
+        // 侧滑删除：同一时间至多一行滑开，滚动列表时收回
+        var openSwipeModelId by remember { mutableStateOf<Long?>(null) }
+        LaunchedEffect(listState.isScrollInProgress) {
+            if (listState.isScrollInProgress) openSwipeModelId = null
         }
         LazyColumn(
             Modifier
@@ -310,11 +329,13 @@ fun ProviderDetailScreen(id: Long, onBack: () -> Unit) {
                     model = m,
                     reorderState = reorderState,
                     modifier = Modifier.animateItem(),
+                    isOpen = openSwipeModelId == m.id,
+                    onOpenChange = { opened -> openSwipeModelId = if (opened) m.id else null },
                     onToggle = { nv ->
                         scope.launch { app.database.modelDao().update(m.copy(enabled = nv)) }
                     },
                     onEdit = { editModel = m },
-                    onDelete = { deleteModelTarget = m },
+                    onDelete = { scope.launch { app.database.modelDao().delete(m) } },
                 )
             }
         }
@@ -405,19 +426,6 @@ fun ProviderDetailScreen(id: Long, onBack: () -> Unit) {
                         app.database.providerDao().setActiveKey(p.id, null)
                     }
                     deleteKeyTarget = null
-                }
-            },
-        )
-    }
-    deleteModelTarget?.let { m ->
-        ConfirmDialog(
-            title = "删除模型",
-            text = "确定删除模型「${m.name}」？局域网聚合列表将不再提供该模型。",
-            onDismiss = { deleteModelTarget = null },
-            onConfirm = {
-                scope.launch {
-                    app.database.modelDao().delete(m)
-                    deleteModelTarget = null
                 }
             },
         )
@@ -513,53 +521,130 @@ private fun BackButton(onBack: () -> Unit) {
     }
 }
 
+/**
+ * 模型行卡片：向左滑动露出红色删除按钮，点按钮直接删除（无确认弹窗）。
+ * 滑过露出宽度一半松手即停住；点卡片空白处或滚动列表时收回；isOpen 供外部
+ * 保证同一时间至多一行滑开。
+ */
 @Composable
 private fun ModelRowCard(
     model: ModelEntity,
     reorderState: ReorderState,
     modifier: Modifier = Modifier,
+    isOpen: Boolean,
+    onOpenChange: (Boolean) -> Unit,
     onToggle: (Boolean) -> Unit,
     onEdit: () -> Unit,
     onDelete: () -> Unit,
 ) {
-    Card(
-        modifier = modifier.reorderDragged(reorderState, model.id),
-    ) {
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 12.dp, vertical = 8.dp),
+    val revealWidth = 84.dp
+    val revealPx = with(LocalDensity.current) { revealWidth.toPx() }
+    val scope = rememberCoroutineScope()
+    val offsetX = remember { Animatable(0f) }
+    var dragging by remember { mutableStateOf(false) }
+
+    LaunchedEffect(isOpen) {
+        if (!dragging) offsetX.animateTo(if (isOpen) -revealPx else 0f, tween(200))
+    }
+
+    Box(modifier.reorderDragged(reorderState, model.id)) {
+        // 背景：滑开后露出的删除按钮
+        Box(
+            Modifier
+                .matchParentSize()
+                .clip(MaterialTheme.shapes.medium)
+                .background(MaterialTheme.colorScheme.errorContainer)
+                .clickable { onDelete() },
+            contentAlignment = Alignment.CenterEnd,
         ) {
-            Column(Modifier.weight(1f)) {
-                Text(
-                    model.alias?.takeIf { it.isNotBlank() }?.let { alias -> "$alias（${model.name}）" }
-                        ?: model.name + if (!model.enabled) "（已停用）" else "",
-                    style = MaterialTheme.typography.bodyMedium,
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.Center,
+                modifier = Modifier.width(revealWidth),
+            ) {
+                Icon(
+                    Icons.Filled.Delete,
+                    contentDescription = "删除模型",
+                    tint = MaterialTheme.colorScheme.onErrorContainer,
                 )
-                ModelBadgesRow(model, Modifier.padding(top = 2.dp))
-                paramsSummary(model)?.let {
-                    Text(
-                        it,
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                Spacer(Modifier.width(4.dp))
+                Text(
+                    "删除",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onErrorContainer,
+                )
+            }
+        }
+        // 前景卡片：跟手横移
+        Card(
+            modifier = Modifier
+                .offset { IntOffset(offsetX.value.roundToInt(), 0) }
+                .clickable(
+                    interactionSource = remember { MutableInteractionSource() },
+                    indication = null,
+                    enabled = isOpen,
+                ) { onOpenChange(false) }
+                .pointerInput(revealPx) {
+                    detectHorizontalDragGestures(
+                        onDragStart = { dragging = true },
+                        onHorizontalDrag = { change, amount ->
+                            change.consume()
+                            scope.launch {
+                                offsetX.snapTo((offsetX.value + amount).coerceIn(-revealPx, 0f))
+                            }
+                        },
+                        onDragEnd = {
+                            dragging = false
+                            val open = offsetX.value <= -revealPx / 2f
+                            scope.launch {
+                                offsetX.animateTo(if (open) -revealPx else 0f, tween(200))
+                            }
+                            onOpenChange(open)
+                        },
+                        onDragCancel = {
+                            dragging = false
+                            val open = offsetX.value <= -revealPx / 2f
+                            scope.launch {
+                                offsetX.animateTo(if (open) -revealPx else 0f, tween(200))
+                            }
+                            onOpenChange(open)
+                        },
                     )
+                },
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 12.dp, vertical = 8.dp),
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        model.alias?.takeIf { it.isNotBlank() }?.let { alias -> "$alias（${model.name}）" }
+                            ?: model.name + if (!model.enabled) "（已停用）" else "",
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                    ModelBadgesRow(model, Modifier.padding(top = 2.dp))
+                    paramsSummary(model)?.let {
+                        Text(
+                            it,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
                 }
+                Switch(checked = model.enabled, onCheckedChange = onToggle)
+                IconButton(onClick = onEdit) {
+                    Icon(Icons.Filled.Edit, contentDescription = "编辑模型", tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                // 长按拖动排序手柄
+                Icon(
+                    Icons.Filled.DragIndicator,
+                    contentDescription = "长按拖动排序",
+                    tint = MaterialTheme.colorScheme.outlineVariant,
+                    modifier = Modifier.reorderHandle(reorderState, model.id),
+                )
             }
-            Switch(checked = model.enabled, onCheckedChange = onToggle)
-            IconButton(onClick = onEdit) {
-                Icon(Icons.Filled.Edit, contentDescription = "编辑模型", tint = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
-            IconButton(onClick = onDelete) {
-                Icon(Icons.Filled.Delete, contentDescription = "删除模型", tint = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
-            // 长按拖动排序手柄
-            Icon(
-                Icons.Filled.DragIndicator,
-                contentDescription = "长按拖动排序",
-                tint = MaterialTheme.colorScheme.outlineVariant,
-                modifier = Modifier.reorderHandle(reorderState, model.id),
-            )
         }
     }
 }

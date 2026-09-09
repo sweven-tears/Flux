@@ -1,5 +1,9 @@
 package cn.luoluna.sweven.ai.ui.provider
 
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
+import android.widget.Toast
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -13,6 +17,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.DragIndicator
 import androidx.compose.material.icons.filled.Edit
@@ -43,6 +48,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -71,7 +77,8 @@ import kotlinx.coroutines.launch
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ProviderDetailScreen(id: Long, onBack: () -> Unit) {
-    val app = androidx.compose.ui.platform.LocalContext.current.applicationContext as App
+    val context = LocalContext.current
+    val app = context.applicationContext as App
     val scope = rememberCoroutineScope()
 
     val provider by remember(id) { app.database.providerDao().observeById(id) }
@@ -247,6 +254,9 @@ fun ProviderDetailScreen(id: Long, onBack: () -> Unit) {
                                     fontFamily = MonoFont,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 )
+                            }
+                            IconButton(onClick = { copyApiKey(context, k.key) }) {
+                                Icon(Icons.Filled.ContentCopy, contentDescription = "复制 Key", tint = MaterialTheme.colorScheme.onSurfaceVariant)
                             }
                             IconButton(onClick = { deleteKeyTarget = k }) {
                                 Icon(Icons.Filled.Delete, contentDescription = "删除 Key", tint = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -488,6 +498,12 @@ fun ProviderDetailScreen(id: Long, onBack: () -> Unit) {
             },
         )
     }
+}
+
+private fun copyApiKey(context: Context, key: String) {
+    val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+    cm.setPrimaryClip(ClipData.newPlainText("Flux", key))
+    Toast.makeText(context, "已复制", Toast.LENGTH_SHORT).show()
 }
 
 @Composable

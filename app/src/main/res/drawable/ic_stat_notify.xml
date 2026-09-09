@@ -1,9 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Flux 通知小图标：三条渐短圆头流线向右收束（通知栏要求纯白单色） -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="24dp"
     android:height="24dp"
     android:viewportWidth="24"
     android:viewportHeight="24">
     <path
-        android:fillColor="#FFFFFFFF"
-        android:pathData="M5,4 h14 a2,2 0 0 1 2,2 v9 a2,2 0 0 1 -2,2 h-8 l-4,3.5 v-3.5 h-2 a2,2 0 0 1 -2,-2 v-9 a2,2 0 0 1 2,-2 z" />
+        android:strokeColor="#FFFFFFFF"
+        android:strokeWidth="2.4"
+        android:strokeLineCap="round"
+        android:pathData="M 5,7.2 L 14.5,8.6" />
+    <path
+        android:strokeColor="#FFFFFFFF"
+        android:strokeWidth="2.4"
+        android:strokeLineCap="round"
+        android:pathData="M 5,12 L 17,12" />
+    <path
+        android:strokeColor="#FFFFFFFF"
+        android:strokeWidth="2.4"
+        android:strokeLineCap="round"
+        android:pathData="M 5,16.8 L 14.5,15.4" />
 </vector>

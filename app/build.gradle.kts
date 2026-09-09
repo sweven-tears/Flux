@@ -18,7 +18,7 @@ android {
     compileSdk = 35
 
     defaultConfig {
-        applicationId = "cn.luoluna.sweven.ai"
+        applicationId = "cn.luoluna.flux"
         minSdk = 26
         targetSdk = 35
             versionCode = 20

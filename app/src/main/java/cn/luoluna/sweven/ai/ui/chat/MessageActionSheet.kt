@@ -158,7 +158,7 @@ fun FullScreenCopyDialog(message: MessageEntity, onDismiss: () -> Unit) {
 
 internal fun copyMessageText(context: Context, text: String) {
     val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-    cm.setPrimaryClip(ClipData.newPlainText("phoneRouter", text))
+    cm.setPrimaryClip(ClipData.newPlainText("Flux", text))
 }
 
 /** 删除消息的确认弹窗（物理删除，不可恢复） */

@@ -353,7 +353,7 @@ private fun AdvancedTab(
         value = customHeaders, onValueChange = onCustomHeaders,
         label = { Text("自定义 Headers（可选）") },
         supportingText = { Text("每行一条，格式：Name: Value") },
-        placeholder = { Text("X-Title: PhoneRouter") },
+        placeholder = { Text("X-Title: Flux") },
         minLines = 2, maxLines = 5,
         modifier = Modifier.fillMaxWidth(),
     )

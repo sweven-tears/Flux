@@ -176,10 +176,10 @@ class LanServer(
     }
 
     private fun infoJson(): String = buildJsonObject {
-        put("name", "PhoneRouter")
+        put("name", "Flux")
         put("object", "phone_router_info")
         put("model_format", "厂商别名/模型名")
-        put("auth", "首次使用需在 PhoneRouter App 内批准设备（请求头 X-Device-Id 可选）")
+        put("auth", "首次使用需在 Flux App 内批准设备（请求头 X-Device-Id 可选）")
         put(
             "endpoints",
             JsonArray(
@@ -219,8 +219,8 @@ class LanServer(
             is AuthDecision.NeedsApproval -> {
                 respondOpenAiError(
                     HttpStatusCode.Unauthorized,
-                    "设备未授权：请在 PhoneRouter App 的「局域网」页面批准该设备 (ID: $deviceId)。" +
-                        "Device not authorized. Approve it in the PhoneRouter app.",
+                    "设备未授权：请在 Flux App 的「局域网」页面批准该设备 (ID: $deviceId)。" +
+                        "Device not authorized. Approve it in the Flux app.",
                 )
                 null
             }
@@ -448,7 +448,7 @@ class LanServer(
             logRequest(device, aggregateId, null, stream, startedAt, null, false, "smartAi 未开放")
             respondOpenAiError(
                 HttpStatusCode.NotFound,
-                "smartAi 未开放：请在 PhoneRouter App 的「局域网」页面开启 smartAi 聚合模型",
+                "smartAi 未开放：请在 Flux App 的「局域网」页面开启 smartAi 聚合模型",
             )
             return
         }

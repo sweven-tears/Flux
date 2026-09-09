@@ -112,7 +112,7 @@ class LanService : Service() {
             WifiManager.WIFI_MODE_FULL_HIGH_PERF
         }
         wifiLock = runCatching {
-            wm.createWifiLock(mode, "PhoneRouter:LanServer").apply {
+            wm.createWifiLock(mode, "Flux:LanServer").apply {
                 setReferenceCounted(false)
                 acquire()
             }
@@ -127,7 +127,7 @@ class LanService : Service() {
     }
 
     companion object {
-        const val ACTION_STOP = "cn.luoluna.sweven.ai.action.STOP"
+        const val ACTION_STOP = "cn.luoluna.flux.action.STOP"
 
         fun startIntent(context: Context): Intent = Intent(context, LanService::class.java)
 

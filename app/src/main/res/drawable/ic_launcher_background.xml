@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 启动器背景：靛蓝→紫线性渐变，与应用主题主色 #4F46E5 一致 -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android">
+    <gradient
+        android:type="linear"
+        android:angle="315"
+        android:startColor="#4F46E5"
+        android:endColor="#7C3AED" />
+</shape>

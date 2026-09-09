@@ -1,20 +1,33 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Flux 启动器前景：三源汇流 — 左侧三个模型源点，三条渐细流线收束注入右侧出口圆点。
+     内容控制在自适应图标中心 66dp 安全区内（中心 54,54，半径 33）。 -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="108dp"
     android:height="108dp"
     android:viewportWidth="108"
     android:viewportHeight="108">
-    <!-- chat bubble -->
+    <!-- 三条流线：起点宽、尖端细，轻微下弯，尖端伸入出口圆 -->
     <path
         android:fillColor="#FFFFFF"
-        android:pathData="M38,34 h32 a8,8 0 0 1 8,8 v14 a8,8 0 0 1 -8,8 h-20 l-10,9 v-9 a8,8 0 0 1 -8,-8 v-14 a8,8 0 0 1 8,-8 z" />
-    <!-- three routing dots -->
+        android:pathData="M 33.96,36.61 Q 53.09,46.45 72.22,50.28 L 71.78,51.72 Q 52.11,49.66 32.44,41.59 Z" />
     <path
-        android:fillColor="#4F46E5"
-        android:pathData="M44,49 m-4.5,0 a4.5,4.5 0 1 0 9,0 a4.5,4.5 0 1 0 -9,0" />
+        android:fillColor="#FFFFFF"
+        android:pathData="M 30.6,51.1 Q 51.3,54.65 72,53.2 L 72,54.8 Q 51.3,58.35 30.6,56.9 Z" />
     <path
-        android:fillColor="#4F46E5"
-        android:pathData="M54,49 m-4.5,0 a4.5,4.5 0 1 0 9,0 a4.5,4.5 0 1 0 -9,0" />
+        android:fillColor="#FFFFFF"
+        android:pathData="M 33.96,71.39 Q 53.09,61.55 72.22,57.72 L 71.78,56.28 Q 52.11,58.34 32.44,66.41 Z" />
+    <!-- 左侧三个模型源点 -->
     <path
-        android:fillColor="#4F46E5"
-        android:pathData="M64,49 m-4.5,0 a4.5,4.5 0 1 0 9,0 a4.5,4.5 0 1 0 -9,0" />
+        android:fillColor="#FFFFFF"
+        android:pathData="M 33.2,39.1 m-5.2,0 a5.2,5.2 0 1 0 10.4,0 a5.2,5.2 0 1 0 -10.4,0" />
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M 30.6,54 m-5.8,0 a5.8,5.8 0 1 0 11.6,0 a5.8,5.8 0 1 0 -11.6,0" />
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M 33.2,68.9 m-5.2,0 a5.2,5.2 0 1 0 10.4,0 a5.2,5.2 0 1 0 -10.4,0" />
+    <!-- 右侧出口圆点 -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M 77.5,54 m-8,0 a8,8 0 1 0 16,0 a8,8 0 1 0 -16,0" />
 </vector>

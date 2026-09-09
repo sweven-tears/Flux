@@ -1464,7 +1464,7 @@ object ChatUiDefaults {
 
     fun copyText(context: Context, text: String) {
         val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-        cm.setPrimaryClip(ClipData.newPlainText("phoneRouter", text))
+        cm.setPrimaryClip(ClipData.newPlainText("Flux", text))
     }
 }
 

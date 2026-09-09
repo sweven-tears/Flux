@@ -164,7 +164,7 @@ fun SettingsScreen(onBack: () -> Unit) {
                 )
             }
             SectionCard(title = "关于") {
-                Text("PhoneRouter", style = MaterialTheme.typography.titleMedium)
+                Text("Flux", style = MaterialTheme.typography.titleMedium)
                 Text(
                     "版本 $versionName",
                     style = MaterialTheme.typography.bodySmall,
@@ -207,7 +207,7 @@ fun SettingsScreen(onBack: () -> Unit) {
                 TextButton(onClick = {
                     showExportDialog = false
                     val stamp = SimpleDateFormat("yyyyMMdd-HHmm", Locale.getDefault()).format(Date())
-                    exportLauncher.launch("PhoneRouter-backup-$stamp.json")
+                    exportLauncher.launch("Flux-backup-$stamp.json")
                 }) { Text("导出") }
             },
             dismissButton = { TextButton(onClick = { showExportDialog = false }) { Text("取消") } },

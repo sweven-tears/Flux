@@ -185,9 +185,9 @@ fun ModelTestDialog(
                     val startedAt = System.currentTimeMillis()
                     try {
                         val summary = when (kind) {
-                            TestKind.STREAM -> runStreamTest(client, provider.baseUrl, key.key, streamBody, extraHeaders)
-                            TestKind.NON_STREAM -> runNonStreamTest(client, provider.baseUrl, key.key, nonStreamBody, extraHeaders)
-                            TestKind.TOOL_CALL -> runToolCallTest(client, provider.baseUrl, key.key, toolBody, extraHeaders)
+                            TestKind.STREAM -> runStreamTest(client, provider.baseUrl, key.key, streamBody, extraHeaders, provider.protocol)
+                            TestKind.NON_STREAM -> runNonStreamTest(client, provider.baseUrl, key.key, nonStreamBody, extraHeaders, provider.protocol)
+                            TestKind.TOOL_CALL -> runToolCallTest(client, provider.baseUrl, key.key, toolBody, extraHeaders, provider.protocol)
                         }
                         states[kind] = TestState.Success(System.currentTimeMillis() - startedAt, summary)
                     } catch (e: CancellationException) {
@@ -416,11 +416,12 @@ private suspend fun runStreamTest(
     apiKey: String,
     body: JsonObject,
     extraHeaders: Map<String, String>,
+    protocol: String,
 ): String {
     val started = System.currentTimeMillis()
     var firstTokenAt = -1L
     val text = StringBuilder()
-    client.chatDeltas(baseUrl, apiKey, body, extraHeaders).collect { ev ->
+    client.chatDeltas(baseUrl, apiKey, body, extraHeaders, protocol).collect { ev ->
         when (ev) {
             is ChatEvent.Delta -> {
                 if (firstTokenAt < 0) firstTokenAt = System.currentTimeMillis() - started
@@ -446,8 +447,9 @@ private suspend fun runNonStreamTest(
     apiKey: String,
     body: JsonObject,
     extraHeaders: Map<String, String>,
+    protocol: String,
 ): String {
-    val resp = client.chatOnce(baseUrl, apiKey, body, extraHeaders).getOrThrow()
+    val resp = client.chatOnce(baseUrl, apiKey, body, extraHeaders, protocol).getOrThrow()
     val content = extractMessageContent(resp)
     if (content.isNullOrBlank()) {
         throw RuntimeException("响应无内容（choices[0].message.content 为空）")
@@ -461,8 +463,9 @@ private suspend fun runToolCallTest(
     apiKey: String,
     body: JsonObject,
     extraHeaders: Map<String, String>,
+    protocol: String,
 ): String {
-    val resp = client.chatOnce(baseUrl, apiKey, body, extraHeaders).getOrThrow()
+    val resp = client.chatOnce(baseUrl, apiKey, body, extraHeaders, protocol).getOrThrow()
     val calls = extractToolCalls(resp)
     if (calls.isEmpty()) {
         throw RuntimeException("模型未返回 tool_calls（可能不支持工具调用）")

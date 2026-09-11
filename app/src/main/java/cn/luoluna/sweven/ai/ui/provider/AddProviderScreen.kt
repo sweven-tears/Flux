@@ -53,6 +53,7 @@ import cn.luoluna.sweven.ai.App
 import cn.luoluna.sweven.ai.data.db.ApiKeyEntity
 import cn.luoluna.sweven.ai.data.db.ProviderEntity
 import cn.luoluna.sweven.ai.data.preset.Presets
+import cn.luoluna.sweven.ai.net.ProviderProtocol
 import cn.luoluna.sweven.ai.net.TestResult
 import kotlinx.coroutines.launch
 
@@ -202,8 +203,14 @@ fun AddProviderScreen(
                         testing = true
                         val url = baseUrl
                         val key = apiKey.ifBlank { null }
+                        val proto = if (mode == 0) {
+                            selectedPresetId?.let { id -> Presets.all.firstOrNull { it.id == id }?.protocol }
+                                ?: ProviderProtocol.OPENAI
+                        } else {
+                            ProviderProtocol.OPENAI
+                        }
                         scope.launch {
-                            testResult = app.providerClient.testConnection(url, key)
+                            testResult = app.providerClient.testConnection(url, key, protocol = proto)
                             testing = false
                         }
                     },
@@ -237,6 +244,7 @@ fun AddProviderScreen(
                                 return@launch
                             }
                             val isPreset = mode == 0 && selectedPresetId != null
+                            val preset = selectedPresetId?.let { id -> Presets.all.firstOrNull { it.id == id } }
                             val nextSort = app.database.providerDao().all().maxOfOrNull { it.sortOrder } ?: -1
                             val providerId = app.database.providerDao().insert(
                                 ProviderEntity(
@@ -245,6 +253,8 @@ fun AddProviderScreen(
                                     remark = remark.trim().ifBlank { null },
                                     isPreset = isPreset,
                                     presetId = if (isPreset) selectedPresetId else null,
+                                    protocol = if (isPreset) preset?.protocol ?: ProviderProtocol.OPENAI
+                                    else ProviderProtocol.OPENAI,
                                     sortOrder = nextSort + 1,
                                 )
                             )

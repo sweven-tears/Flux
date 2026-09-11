@@ -38,6 +38,7 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -71,6 +72,7 @@ import cn.luoluna.sweven.ai.App
 import cn.luoluna.sweven.ai.data.db.ApiKeyEntity
 import cn.luoluna.sweven.ai.data.db.ModelEntity
 import cn.luoluna.sweven.ai.data.db.ProviderEntity
+import cn.luoluna.sweven.ai.net.ProviderProtocol
 import cn.luoluna.sweven.ai.net.RemoteModel
 import cn.luoluna.sweven.ai.net.TestResult
 import cn.luoluna.sweven.ai.ui.common.ConfirmDialog
@@ -200,6 +202,32 @@ fun ProviderDetailScreen(id: Long, onBack: () -> Unit) {
                         }
                         IconButton(onClick = { showBaseEdit = true }) { Icon(Icons.Filled.Edit, contentDescription = "修改 Base URL") }
                     }
+                    Column {
+                        Text("接口协议", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            modifier = Modifier.padding(top = 4.dp),
+                        ) {
+                            PROTOCOL_OPTIONS.forEach { (value, label) ->
+                                FilterChip(
+                                    selected = p.protocol == value,
+                                    onClick = {
+                                        if (p.protocol != value) {
+                                            scope.launch {
+                                                app.database.providerDao().update(p.copy(protocol = value))
+                                            }
+                                            Toast.makeText(
+                                                context,
+                                                "已切换为「$label」协议，请确认 Base URL 与之匹配",
+                                                Toast.LENGTH_SHORT,
+                                            ).show()
+                                        }
+                                    },
+                                    label = { Text(label) },
+                                )
+                            }
+                        }
+                    }
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Column(Modifier.weight(1f)) {
                             Text("备注", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -231,7 +259,7 @@ fun ProviderDetailScreen(id: Long, onBack: () -> Unit) {
                                 testing = true
                                 scope.launch {
                                     val key = app.modelRouter.activeKey(p)
-                                    val r = app.providerClient.testConnection(p.baseUrl, key?.key)
+                                    val r = app.providerClient.testConnection(p.baseUrl, key?.key, protocol = p.protocol)
                                     testResult = r
                                     testing = false
                                     app.database.providerDao().updateTestResult(
@@ -313,7 +341,7 @@ fun ProviderDetailScreen(id: Long, onBack: () -> Unit) {
                                 fetchError = null
                                 scope.launch {
                                     val key = app.modelRouter.activeKey(p)
-                                    app.providerClient.listModels(p.baseUrl, key?.key)
+                                    app.providerClient.listModels(p.baseUrl, key?.key, protocol = p.protocol)
                                         .onSuccess { fetchedModels = it }
                                         .onFailure { fetchError = it.message ?: "获取失败" }
                                     fetching = false
@@ -520,6 +548,13 @@ fun ProviderDetailScreen(id: Long, onBack: () -> Unit) {
         )
     }
 }
+
+/** 厂商接口协议选项（基本信息卡的三选一） */
+private val PROTOCOL_OPTIONS = listOf(
+    ProviderProtocol.OPENAI to "OpenAI 兼容",
+    ProviderProtocol.GEMINI to "Gemini 原生",
+    ProviderProtocol.ANTHROPIC to "Claude 原生",
+)
 
 private fun copyApiKey(context: Context, key: String) {
     val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager

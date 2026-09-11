@@ -33,6 +33,7 @@ import cn.luoluna.sweven.ai.data.repo.orderCandidates
 import cn.luoluna.sweven.ai.net.AdvancedParams
 import cn.luoluna.sweven.ai.net.ChatEvent
 import cn.luoluna.sweven.ai.net.ProviderClient
+import cn.luoluna.sweven.ai.net.ProviderProtocol
 import cn.luoluna.sweven.ai.net.ThinkParser
 import cn.luoluna.sweven.ai.net.applyBuiltinTools
 import cn.luoluna.sweven.ai.net.applyThinkingDepth
@@ -486,7 +487,8 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         )
         body = applyThinkingDepth(body, conversation?.thinkingDepth, model.name)
         body = mergeCustomBody(body, model.customBody)
-        if (provider.presetId == "gemini") {
+        // Gemini 内置工具：兼容层预设（presetId）或原生协议厂商均注入，原生协议的格式转换由 ProviderClient 边界完成
+        if (provider.presetId == "gemini" || provider.protocol == ProviderProtocol.GEMINI) {
             body = applyBuiltinTools(
                 body,
                 model.builtinGoogleSearch,
@@ -525,7 +527,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         sendJob = viewModelScope.launch {
             var failed: ChatError? = null
             try {
-                client.chatDeltas(provider.baseUrl, key.key, built.body, extraHeaders).collect { ev ->
+                client.chatDeltas(provider.baseUrl, key.key, built.body, extraHeaders, provider.protocol).collect { ev ->
                     when (ev) {
                         is ChatEvent.Delta -> publisher.delta(ev.text)
                         is ChatEvent.ReasoningDelta -> publisher.reasoning(ev.text)
@@ -579,6 +581,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                 apiKey = key.key,
                 extraHeaders = parseCustomHeaders(model.customHeaders),
                 body = built.body,
+                protocol = resolved.provider.protocol,
             ) to model
         }
         _notice.value = trimNotice(maxDropped, maxStripped)

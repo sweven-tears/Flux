@@ -3,6 +3,7 @@ package cn.luoluna.sweven.ai.data.repo
 import cn.luoluna.sweven.ai.data.SmartModes
 import cn.luoluna.sweven.ai.net.ChatEvent
 import cn.luoluna.sweven.ai.net.ProviderClient
+import cn.luoluna.sweven.ai.net.ProviderProtocol
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.Channel
@@ -25,6 +26,8 @@ data class SmartCandidate(
     val apiKey: String,
     val extraHeaders: Map<String, String>,
     val body: JsonObject,
+    /** 厂商接口协议（ProviderProtocol 取值）：请求构建与 SSE 解析按协议分发 */
+    val protocol: String = ProviderProtocol.OPENAI,
 )
 
 /** 智能路由策略：响应模式 + 各档首字超时 + 冷却参数（App 内与局域网链路共用） */
@@ -127,7 +130,10 @@ class SmartRouteExecutor(private val client: ProviderClient) {
                 // 连接 + 等响应头阶段：整体受首字超时约束，超时直接 cancel 底层 Call；
                 // 连接被拒/超时/DNS 失败/坏地址等异常同样视为该候选失败，切换下一个
                 val call = try {
-                    client.newStreamingCall(candidate.baseUrl, candidate.apiKey, candidate.body, candidate.extraHeaders)
+                    client.newStreamingCall(
+                        candidate.baseUrl, candidate.apiKey, candidate.body, candidate.extraHeaders,
+                        candidate.protocol,
+                    )
                 } catch (e: CancellationException) {
                     throw e
                 } catch (e: Exception) {
@@ -157,7 +163,7 @@ class SmartRouteExecutor(private val client: ProviderClient) {
                 val events = Channel<ChatEvent>(Channel.UNLIMITED)
                 val producer = launch(Dispatchers.IO) {
                     try {
-                        client.chatEvents(resp).collect { events.send(it) }
+                        client.chatEvents(resp, candidate.protocol).collect { events.send(it) }
                     } catch (e: Exception) {
                         if (e is kotlinx.coroutines.CancellationException) throw e
                         events.send(ChatEvent.Failed(e.message ?: e.javaClass.simpleName))

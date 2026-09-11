@@ -17,6 +17,8 @@ data class ProviderEntity(
     val activeKeyId: Long? = null,
     /** 厂商启用状态：停用后模型不进聊天选择器，智能路由与局域网网关均跳过 */
     val enabled: Boolean = true,
+    /** 接口协议：openai（OpenAI 兼容）/ gemini（Gemini 原生）/ anthropic（Claude 原生），见 net.ProviderProtocol */
+    val protocol: String = "openai",
     val lastTestOk: Boolean? = null,
     val lastTestLatencyMs: Long? = null,
     val lastTestMessage: String? = null,

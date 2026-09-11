@@ -36,9 +36,13 @@ sealed interface ChatEvent {
 }
 
 /**
- * 调用模型厂商的 OpenAI 兼容接口：
- * GET  {base}/models
- * POST {base}/chat/completions
+ * 调用模型厂商接口，按厂商协议分发：
+ * - openai：{base}/chat/completions、{base}/models，Bearer 鉴权
+ * - gemini：{base}/models/{model}:streamGenerateContent、{base}/models，x-goog-api-key 鉴权
+ * - anthropic：{base}/messages、{base}/models，x-api-key + anthropic-version 鉴权
+ *
+ * 调用方始终传规范 OpenAI 形态请求体，本类在边界处转换为各协议原生请求体，
+ * 并把流式/非流式响应归一化为 ChatEvent / OpenAI chat completion 形态。
  */
 class ProviderClient {
 
@@ -57,20 +61,29 @@ class ProviderClient {
         baseUrl: String,
         apiKey: String?,
         extraHeaders: Map<String, String> = emptyMap(),
+        protocol: String = ProviderProtocol.OPENAI,
     ): Result<List<RemoteModel>> =
         withContext(Dispatchers.IO) {
             runCatching {
+                val base = baseUrl.trimEnd('/')
+                val url = when (protocol) {
+                    ProviderProtocol.GEMINI -> "$base/models?pageSize=1000"
+                    ProviderProtocol.ANTHROPIC -> "$base/models?limit=1000"
+                    else -> "$base/models"
+                }
                 val request = Request.Builder()
-                    .url("${baseUrl.trimEnd('/')}/models")
-                    .header("Authorization", "Bearer ${apiKey.orEmpty()}")
+                    .url(url)
                     .header("Accept", "application/json")
-                    .apply { extraHeaders.forEach { (k, v) -> header(k, v) } }
+                    .apply {
+                        applyAuth(protocol, apiKey)
+                        extraHeaders.forEach { (k, v) -> header(k, v) }
+                    }
                     .get()
                     .build()
                 http.newCall(request).execute().use { resp ->
                     val body = resp.body?.string().orEmpty()
                     if (!resp.isSuccessful) throw ApiException(parseErrorMessage(resp.code, body))
-                    extractModelInfos(body)
+                    extractModelInfos(normalizeModelsBody(protocol, body))
                 }
             }
         }
@@ -79,10 +92,11 @@ class ProviderClient {
         baseUrl: String,
         apiKey: String?,
         extraHeaders: Map<String, String> = emptyMap(),
+        protocol: String = ProviderProtocol.OPENAI,
     ): TestResult {
         val start = System.currentTimeMillis()
         return try {
-            val models = listModels(baseUrl, apiKey, extraHeaders).getOrThrow()
+            val models = listModels(baseUrl, apiKey, extraHeaders, protocol).getOrThrow()
             TestResult(
                 ok = true,
                 latencyMs = System.currentTimeMillis() - start,
@@ -109,9 +123,10 @@ class ProviderClient {
         apiKey: String?,
         body: JsonObject,
         extraHeaders: Map<String, String> = emptyMap(),
+        protocol: String = ProviderProtocol.OPENAI,
     ): Response =
         withContext(Dispatchers.IO) {
-            streamHttp.newCall(chatRequest(baseUrl, apiKey, body, extraHeaders)).execute()
+            streamHttp.newCall(chatRequest(protocol, baseUrl, apiKey, body, extraHeaders)).execute()
         }
 
     /** 构建未执行的流式请求 Call（供调用方在超时时 cancel 整个请求，如智能路由） */
@@ -120,21 +135,47 @@ class ProviderClient {
         apiKey: String?,
         body: JsonObject,
         extraHeaders: Map<String, String> = emptyMap(),
-    ): Call = streamHttp.newCall(chatRequest(baseUrl, apiKey, body, extraHeaders))
+        protocol: String = ProviderProtocol.OPENAI,
+    ): Call = streamHttp.newCall(chatRequest(protocol, baseUrl, apiKey, body, extraHeaders))
+
+    private fun Request.Builder.applyAuth(protocol: String, apiKey: String?): Request.Builder = apply {
+        when (protocol) {
+            ProviderProtocol.GEMINI -> header("x-goog-api-key", apiKey.orEmpty())
+            ProviderProtocol.ANTHROPIC -> {
+                header("x-api-key", apiKey.orEmpty())
+                header("anthropic-version", ANTHROPIC_VERSION)
+            }
+            else -> header("Authorization", "Bearer ${apiKey.orEmpty()}")
+        }
+    }
 
     private fun chatRequest(
+        protocol: String,
         baseUrl: String,
         apiKey: String?,
         body: JsonObject,
         extraHeaders: Map<String, String>,
     ): Request {
-        val jsonBody = body.toString()
+        val base = baseUrl.trimEnd('/')
+        val url = when (protocol) {
+            // gemini 流式与否由端点决定，body 中不含 stream 键
+            ProviderProtocol.GEMINI -> {
+                val model = body.stringAt("model").orEmpty().removePrefix("models/")
+                val action = if (streamFlagOf(body)) "streamGenerateContent?alt=sse" else "generateContent"
+                "$base/models/$model:$action"
+            }
+            ProviderProtocol.ANTHROPIC -> "$base/messages"
+            else -> "$base/chat/completions"
+        }
+        val jsonBody = toUpstreamBody(protocol, body).toString()
             .toRequestBody("application/json; charset=utf-8".toMediaType())
         return Request.Builder()
-            .url("${baseUrl.trimEnd('/')}/chat/completions")
-            .header("Authorization", "Bearer ${apiKey.orEmpty()}")
+            .url(url)
             .header("Accept", "text/event-stream, application/json")
-            .apply { extraHeaders.forEach { (k, v) -> header(k, v) } }
+            .apply {
+                applyAuth(protocol, apiKey)
+                extraHeaders.forEach { (k, v) -> header(k, v) }
+            }
             .post(jsonBody)
             .build()
     }
@@ -144,7 +185,7 @@ class ProviderClient {
         resp.body?.string().orEmpty()
     }
 
-    /** 读取 SSE 原始 data 载荷（不含 [DONE]），供局域网代理逐行透传 */
+    /** 读取 SSE 原始 data 载荷（不含 [DONE]），供局域网代理对 OpenAI 兼容上游逐行透传 */
     fun ssePayloads(resp: Response): Flow<String> = flow {
         val source = resp.body!!.source()
         while (true) {
@@ -163,18 +204,19 @@ class ProviderClient {
         apiKey: String?,
         body: JsonObject,
         extraHeaders: Map<String, String> = emptyMap(),
+        protocol: String = ProviderProtocol.OPENAI,
     ): Flow<ChatEvent> = flow {
         val resp = try {
-            openChat(baseUrl, apiKey, body, extraHeaders)
+            openChat(baseUrl, apiKey, body, extraHeaders, protocol)
         } catch (e: Exception) {
             emit(ChatEvent.Failed("连接失败: ${e.message ?: e.javaClass.simpleName}"))
             return@flow
         }
-        chatEvents(resp).collect { emit(it) }
+        chatEvents(resp, protocol).collect { emit(it) }
     }.flowOn(Dispatchers.IO)
 
-    /** 从已打开的 chat completion 响应读取流式事件（负责 close，供智能路由等复用） */
-    fun chatEvents(resp: Response): Flow<ChatEvent> = flow {
+    /** 从已打开的响应读取流式事件（负责 close，供智能路由等复用）；按协议解析 SSE 帧并归一化 */
+    fun chatEvents(resp: Response, protocol: String = ProviderProtocol.OPENAI): Flow<ChatEvent> = flow {
         resp.use { r ->
             if (!r.isSuccessful) {
                 val body = readBody(r)
@@ -186,44 +228,64 @@ class ProviderClient {
                 emit(ChatEvent.Failed("响应为空"))
                 return@flow
             }
-            while (true) {
+            loop@ while (true) {
                 val line = source.readUtf8Line() ?: break
                 if (!line.startsWith("data:")) continue
                 val payload = line.substring(5).trim()
-                if (payload == "[DONE]") break
                 if (payload.isEmpty()) continue
-                val reasoning = parseReasoningContent(payload)
-                if (!reasoning.isNullOrEmpty()) emit(ChatEvent.ReasoningDelta(reasoning))
-                val delta = parseDeltaContent(payload)
-                if (!delta.isNullOrEmpty()) emit(ChatEvent.Delta(delta))
+                when (protocol) {
+                    ProviderProtocol.GEMINI -> {
+                        val chunk = parseGeminiChunk(payload)
+                        if (chunk.error != null) {
+                            emit(ChatEvent.Failed(chunk.error))
+                            return@flow
+                        }
+                        chunk.reasoning?.let { emit(ChatEvent.ReasoningDelta(it)) }
+                        chunk.text?.let { emit(ChatEvent.Delta(it)) }
+                    }
+                    ProviderProtocol.ANTHROPIC -> {
+                        val chunk = parseAnthropicChunk(payload)
+                        when {
+                            chunk.error != null -> {
+                                emit(ChatEvent.Failed(chunk.error))
+                                return@flow
+                            }
+                            chunk.done -> break@loop
+                            else -> {
+                                chunk.reasoning?.let { emit(ChatEvent.ReasoningDelta(it)) }
+                                chunk.text?.let { emit(ChatEvent.Delta(it)) }
+                            }
+                        }
+                    }
+                    else -> {
+                        if (payload == "[DONE]") break@loop
+                        val reasoning = parseReasoningContent(payload)
+                        if (!reasoning.isNullOrEmpty()) emit(ChatEvent.ReasoningDelta(reasoning))
+                        val delta = parseDeltaContent(payload)
+                        if (!delta.isNullOrEmpty()) emit(ChatEvent.Delta(delta))
+                    }
+                }
             }
             emit(ChatEvent.Done)
         }
     }.flowOn(Dispatchers.IO)
 
-    /** 非流式聊天：stream=false 请求并返回完整响应 JSON（含 tool_calls 等原始字段） */
+    /** 非流式聊天：请求并返回完整响应 JSON；原生协议响应归一化为 OpenAI chat completion 形态 */
     suspend fun chatOnce(
         baseUrl: String,
         apiKey: String?,
         body: JsonObject,
         extraHeaders: Map<String, String> = emptyMap(),
+        protocol: String = ProviderProtocol.OPENAI,
     ): Result<JsonObject> = withContext(Dispatchers.IO) {
         runCatching {
-            val jsonBody = body.toString()
-                .toRequestBody("application/json; charset=utf-8".toMediaType())
-            val request = Request.Builder()
-                .url("${baseUrl.trimEnd('/')}/chat/completions")
-                .header("Authorization", "Bearer ${apiKey.orEmpty()}")
-                .header("Accept", "application/json")
-                .apply { extraHeaders.forEach { (k, v) -> header(k, v) } }
-                .post(jsonBody)
-                .build()
+            val request = chatRequest(protocol, baseUrl, apiKey, body, extraHeaders)
             http.newCall(request).execute().use { resp ->
                 val respBody = resp.body?.string().orEmpty()
                 if (!resp.isSuccessful) {
                     throw HttpApiException(resp.code, respBody, parseErrorMessage(resp.code, respBody))
                 }
-                ChatJson.json.parseToJsonElement(respBody).jsonObject
+                toOpenAiChatResponse(protocol, ChatJson.json.parseToJsonElement(respBody).jsonObject)
             }
         }
     }

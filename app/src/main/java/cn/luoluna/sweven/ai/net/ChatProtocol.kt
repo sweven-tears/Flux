@@ -7,6 +7,7 @@ import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
+import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.doubleOrNull
@@ -579,4 +580,471 @@ fun extractUsage(response: JsonObject): Pair<Long?, Long?>? {
     val completion = num("completion_tokens") ?: num("output_tokens")
     if (prompt == null && completion == null) return null
     return prompt to completion
+}
+
+// ==================== 多协议适配（OpenAI / Gemini / Anthropic） ====================
+
+/** 厂商接口协议（ProviderEntity.protocol 的取值） */
+object ProviderProtocol {
+    /** OpenAI 兼容：/chat/completions，Bearer 鉴权 */
+    const val OPENAI = "openai"
+    /** Gemini 原生：generateContent / streamGenerateContent，x-goog-api-key 鉴权 */
+    const val GEMINI = "gemini"
+    /** Anthropic 原生：/messages，x-api-key + anthropic-version 鉴权 */
+    const val ANTHROPIC = "anthropic"
+}
+
+/** Anthropic 协议的版本头 */
+const val ANTHROPIC_VERSION = "2023-06-01"
+
+/** 各协议 SSE 帧的归一化解析结果：正文增量 / 思考增量 / 错误 / 流结束 */
+data class StreamChunk(
+    val text: String? = null,
+    val reasoning: String? = null,
+    val error: String? = null,
+    val done: Boolean = false,
+)
+
+/**
+ * 解析 Gemini streamGenerateContent 的单个 SSE 帧（GenerateContentResponse JSON）。
+ * parts 中 thought=true 的文本归为思考增量；无 candidates 的帧视为心跳忽略。
+ */
+fun parseGeminiChunk(payload: String): StreamChunk = try {
+    val obj = ChatJson.json.parseToJsonElement(payload).jsonObject
+    obj.stringAt("error", "message")?.let { return StreamChunk(error = it) }
+    val candidates = obj["candidates"] as? JsonArray ?: return StreamChunk()
+    val content = (candidates.firstOrNull() as? JsonObject)?.get("content") as? JsonObject
+    val parts = content?.get("parts") as? JsonArray ?: return StreamChunk()
+    val text = StringBuilder()
+    val thinking = StringBuilder()
+    for (el in parts) {
+        val part = el as? JsonObject ?: continue
+        val t = (part["text"] as? JsonPrimitive)?.takeIf { it !is JsonNull }?.contentOrNull ?: continue
+        val isThought = (part["thought"] as? JsonPrimitive)?.booleanOrNull == true
+        if (isThought) thinking.append(t) else text.append(t)
+    }
+    StreamChunk(
+        text = text.toString().takeIf { it.isNotEmpty() },
+        reasoning = thinking.toString().takeIf { it.isNotEmpty() },
+    )
+} catch (_: Exception) {
+    StreamChunk()
+}
+
+/**
+ * 解析 Anthropic /messages 流式响应的单个 SSE data 帧（事件 JSON 自带 type 字段）。
+ * text_delta → 正文；thinking_delta → 思考；message_stop → 结束；error → 失败。
+ */
+fun parseAnthropicChunk(payload: String): StreamChunk = try {
+    val obj = ChatJson.json.parseToJsonElement(payload).jsonObject
+    when (obj.stringAt("type")) {
+        "content_block_delta" -> when (obj.stringAt("delta", "type")) {
+            "text_delta" -> StreamChunk(text = obj.stringAt("delta", "text"))
+            "thinking_delta" -> StreamChunk(reasoning = obj.stringAt("delta", "thinking"))
+            else -> StreamChunk()
+        }
+        "message_stop" -> StreamChunk(done = true)
+        "error" -> StreamChunk(error = obj.stringAt("error", "message") ?: "上游错误")
+        else -> StreamChunk()
+    }
+} catch (_: Exception) {
+    StreamChunk()
+}
+
+/** 解析 data URL 为 (mimeType, base64)；非 data URL 返回 null */
+private fun parseDataUrl(url: String): Pair<String, String>? {
+    if (!url.startsWith("data:")) return null
+    val marker = ";base64,"
+    val semi = url.indexOf(marker)
+    if (semi < 0) return null
+    val mime = url.substring(5, semi).ifBlank { "image/png" }
+    return mime to url.substring(semi + marker.length)
+}
+
+/** OpenAI content 元素提取纯文本（字符串或 parts 数组两种形态） */
+private fun contentText(content: JsonElement?): String? = when (content) {
+    is JsonPrimitive -> content.takeIf { it !is JsonNull }?.contentOrNull
+    is JsonArray -> content.mapNotNull { el ->
+        ((el as? JsonObject)?.get("text") as? JsonPrimitive)?.takeIf { it !is JsonNull }?.contentOrNull
+    }.joinToString("").takeIf { it.isNotEmpty() }
+    else -> null
+}
+
+/** OpenAI content → Anthropic content blocks（text + base64/url image）；空内容以空格占位 */
+private fun anthropicContentBlocks(content: JsonElement?): JsonArray {
+    val arr = buildJsonArray {
+        when (content) {
+            is JsonPrimitive -> add(
+                buildJsonObject {
+                    put("type", "text")
+                    put("text", content.takeIf { it !is JsonNull }?.contentOrNull ?: " ")
+                }
+            )
+            is JsonArray -> for (el in content) {
+                val part = el as? JsonObject ?: continue
+                when (part.stringAt("type")) {
+                    "text" -> part.stringAt("text")?.let {
+                        add(buildJsonObject { put("type", "text"); put("text", it) })
+                    }
+                    "image_url" -> {
+                        val url = part.stringAt("image_url", "url") ?: continue
+                        val dataUrl = parseDataUrl(url)
+                        if (dataUrl != null) {
+                            add(
+                                buildJsonObject {
+                                    put("type", "image")
+                                    put(
+                                        "source",
+                                        buildJsonObject {
+                                            put("type", "base64")
+                                            put("media_type", dataUrl.first)
+                                            put("data", dataUrl.second)
+                                        },
+                                    )
+                                }
+                            )
+                        } else {
+                            add(
+                                buildJsonObject {
+                                    put("type", "image")
+                                    put("source", buildJsonObject { put("type", "url"); put("url", url) })
+                                }
+                            )
+                        }
+                    }
+                }
+            }
+            else -> Unit
+        }
+    }
+    // 空内容占位，避免上游拒绝空 blocks
+    return if (arr.isEmpty()) {
+        buildJsonArray { add(buildJsonObject { put("type", "text"); put("text", " ") }) }
+    } else {
+        arr
+    }
+}
+
+/** OpenAI content → Gemini parts（text + inlineData/fileData）；空内容以空格占位 */
+private fun geminiParts(content: JsonElement?): JsonArray {
+    val arr = buildJsonArray {
+        when (content) {
+            is JsonPrimitive -> content.takeIf { it !is JsonNull }?.contentOrNull?.let {
+                add(buildJsonObject { put("text", it) })
+            }
+            is JsonArray -> for (el in content) {
+                val part = el as? JsonObject ?: continue
+                when (part.stringAt("type")) {
+                    "text" -> part.stringAt("text")?.let { add(buildJsonObject { put("text", it) }) }
+                    "image_url" -> {
+                        val url = part.stringAt("image_url", "url") ?: continue
+                        val dataUrl = parseDataUrl(url)
+                        if (dataUrl != null) {
+                            add(
+                                buildJsonObject {
+                                    put(
+                                        "inlineData",
+                                        buildJsonObject {
+                                            put("mimeType", dataUrl.first)
+                                            put("data", dataUrl.second)
+                                        },
+                                    )
+                                }
+                            )
+                        } else {
+                            add(buildJsonObject { put("fileData", buildJsonObject { put("fileUri", url) }) })
+                        }
+                    }
+                }
+            }
+            else -> Unit
+        }
+    }
+    return if (arr.isEmpty()) {
+        buildJsonArray { add(buildJsonObject { put("text", " ") }) }
+    } else {
+        arr
+    }
+}
+
+/** OpenAI stop（字符串或数组）→ 字符串数组 */
+private fun stopSequencesOf(stop: JsonElement?): List<JsonPrimitive>? = when (stop) {
+    is JsonPrimitive -> stop.takeIf { it !is JsonNull }?.contentOrNull?.let { listOf(JsonPrimitive(it)) }
+    is JsonArray -> stop.mapNotNull { (it as? JsonPrimitive)?.takeIf { p -> p !is JsonNull }?.contentOrNull }
+        .map(::JsonPrimitive).takeIf { it.isNotEmpty() }
+    else -> null
+}
+
+/** 思考深度档位 → Anthropic thinking 预算（tokens） */
+private fun anthropicThinkingBudget(effort: String?): Int? = when (effort) {
+    "low" -> 1024
+    "medium" -> 8192
+    "high" -> 32000
+    else -> null
+}
+
+/** 思考深度档位 → Gemini thinkingBudget（tokens） */
+private fun geminiThinkingBudget(effort: String?): Int? = when (effort) {
+    "low" -> 1024
+    "medium" -> 8192
+    "high" -> 24576
+    else -> null
+}
+
+/**
+ * 规范 OpenAI 请求体 → Anthropic /messages 原生请求体。
+ * system 消息合并为 system 字段；max_tokens 必填（缺省 4096，思考开启时保证大于预算）；
+ * 思考开启时按 Anthropic 要求不传 temperature/top_p；OpenAI 专属键一律不携带。
+ */
+fun toAnthropicBody(body: JsonObject): JsonObject {
+    val messages = body["messages"] as? JsonArray ?: JsonArray(emptyList())
+    val systemParts = mutableListOf<String>()
+    val outMessages = buildJsonArray {
+        for (el in messages) {
+            val m = el as? JsonObject ?: continue
+            when (m.stringAt("role")) {
+                "system" -> contentText(m["content"])?.let(systemParts::add)
+                "user", "assistant" -> add(
+                    buildJsonObject {
+                        put("role", m.stringAt("role"))
+                        put("content", anthropicContentBlocks(m["content"]))
+                    }
+                )
+            }
+        }
+    }
+    val budget = anthropicThinkingBudget(body.stringAt("reasoning_effort"))
+    val baseMax = body.intAt("max_tokens") ?: 4096
+    // thinking 开启时 max_tokens 必须大于 budget_tokens
+    val maxTokens = if (budget != null) maxOf(baseMax, budget + 2048) else baseMax
+    return buildJsonObject {
+        put("model", body.stringAt("model").orEmpty())
+        put("messages", outMessages)
+        put("max_tokens", maxTokens)
+        if (streamFlagOf(body)) put("stream", true)
+        if (systemParts.isNotEmpty()) put("system", systemParts.joinToString("\n\n"))
+        if (budget != null) {
+            put("thinking", buildJsonObject { put("type", "enabled"); put("budget_tokens", budget) })
+        } else {
+            body.doubleAt("temperature")?.let { put("temperature", it) }
+            body.doubleAt("top_p")?.let { put("top_p", it) }
+        }
+        stopSequencesOf(body["stop"])?.let { put("stop_sequences", JsonArray(it)) }
+    }
+}
+
+/**
+ * 规范 OpenAI 请求体 → Gemini generateContent 原生请求体。
+ * system 消息合并为 systemInstruction；assistant → model 角色；参数进 generationConfig；
+ * 兼容层注入的 google_search/url_context/modalities 转换为原生形态；stream 由端点决定，不携带。
+ */
+fun toGeminiBody(body: JsonObject): JsonObject {
+    val messages = body["messages"] as? JsonArray ?: JsonArray(emptyList())
+    val systemParts = mutableListOf<JsonObject>()
+    val contents = buildJsonArray {
+        for (el in messages) {
+            val m = el as? JsonObject ?: continue
+            when (m.stringAt("role")) {
+                "system" -> contentText(m["content"])?.let {
+                    systemParts.add(buildJsonObject { put("text", it) })
+                }
+                "user", "assistant" -> add(
+                    buildJsonObject {
+                        put("role", if (m.stringAt("role") == "assistant") "model" else "user")
+                        put("parts", geminiParts(m["content"]))
+                    }
+                )
+            }
+        }
+    }
+    return buildJsonObject {
+        put("contents", contents)
+        if (systemParts.isNotEmpty()) {
+            put("systemInstruction", buildJsonObject { put("parts", JsonArray(systemParts)) })
+        }
+        val genConfig = buildJsonObject {
+            body.doubleAt("temperature")?.let { put("temperature", it) }
+            body.doubleAt("top_p")?.let { put("topP", it) }
+            body.intAt("max_tokens")?.let { put("maxOutputTokens", it) }
+            stopSequencesOf(body["stop"])?.let { put("stopSequences", JsonArray(it)) }
+            (body["modalities"] as? JsonArray)?.let { arr ->
+                val modalities = arr.mapNotNull {
+                    (it as? JsonPrimitive)?.takeIf { p -> p !is JsonNull }?.contentOrNull?.uppercase()
+                }
+                if (modalities.isNotEmpty()) {
+                    put("responseModalities", JsonArray(modalities.map(::JsonPrimitive)))
+                }
+            }
+            geminiThinkingBudget(body.stringAt("reasoning_effort"))?.let { budget ->
+                put("thinkingConfig", buildJsonObject { put("thinkingBudget", budget) })
+            }
+        }
+        if (genConfig.isNotEmpty()) put("generationConfig", genConfig)
+        (body["tools"] as? JsonArray)?.let { tools ->
+            val native = tools.mapNotNull { el ->
+                val obj = el as? JsonObject ?: return@mapNotNull null
+                when {
+                    obj.containsKey("google_search") -> buildJsonObject { put("googleSearch", buildJsonObject {}) }
+                    obj.containsKey("url_context") -> buildJsonObject { put("urlContext", buildJsonObject {}) }
+                    else -> null
+                }
+            }
+            if (native.isNotEmpty()) put("tools", JsonArray(native))
+        }
+    }
+}
+
+/** 规范 OpenAI 请求体 → 目标协议原生请求体（openai 原样返回） */
+fun toUpstreamBody(protocol: String, body: JsonObject): JsonObject = when (protocol) {
+    ProviderProtocol.GEMINI -> toGeminiBody(body)
+    ProviderProtocol.ANTHROPIC -> toAnthropicBody(body)
+    else -> body
+}
+
+/** Anthropic 非流式响应 → OpenAI chat completion 形态 */
+private fun anthropicToOpenAiResponse(raw: JsonObject): JsonObject {
+    val contentArr = raw["content"] as? JsonArray
+    val text = StringBuilder()
+    val thinking = StringBuilder()
+    contentArr?.forEach { el ->
+        val block = el as? JsonObject ?: return@forEach
+        when (block.stringAt("type")) {
+            "text" -> block.stringAt("text")?.let(text::append)
+            "thinking" -> block.stringAt("thinking")?.let(thinking::append)
+        }
+    }
+    val finish = when (raw.stringAt("stop_reason")) {
+        "max_tokens" -> "length"
+        "tool_use" -> "tool_calls"
+        null -> null
+        else -> "stop"
+    }
+    return buildJsonObject {
+        put("id", raw.stringAt("id") ?: "chatcmpl-anthropic")
+        put("object", "chat.completion")
+        put("model", raw.stringAt("model") ?: "")
+        put(
+            "choices",
+            buildJsonArray {
+                add(
+                    buildJsonObject {
+                        put("index", 0)
+                        put(
+                            "message",
+                            buildJsonObject {
+                                put("role", "assistant")
+                                put("content", text.toString())
+                                if (thinking.isNotEmpty()) put("reasoning_content", thinking.toString())
+                            },
+                        )
+                        finish?.let { put("finish_reason", it) }
+                    },
+                )
+            },
+        )
+        val inputT = raw.intAt("usage", "input_tokens")
+        val outputT = raw.intAt("usage", "output_tokens")
+        if (inputT != null || outputT != null) {
+            put(
+                "usage",
+                buildJsonObject {
+                    put("prompt_tokens", inputT ?: 0)
+                    put("completion_tokens", outputT ?: 0)
+                    put("total_tokens", (inputT ?: 0) + (outputT ?: 0))
+                },
+            )
+        }
+    }
+}
+
+/** Gemini 非流式响应 → OpenAI chat completion 形态 */
+private fun geminiToOpenAiResponse(raw: JsonObject): JsonObject {
+    val candidate = (raw["candidates"] as? JsonArray)?.firstOrNull() as? JsonObject
+    val parts = (candidate?.get("content") as? JsonObject)?.get("parts") as? JsonArray
+    val text = StringBuilder()
+    val thinking = StringBuilder()
+    parts?.forEach { el ->
+        val part = el as? JsonObject ?: return@forEach
+        val t = (part["text"] as? JsonPrimitive)?.takeIf { it !is JsonNull }?.contentOrNull ?: return@forEach
+        if ((part["thought"] as? JsonPrimitive)?.booleanOrNull == true) thinking.append(t) else text.append(t)
+    }
+    val finish = when (candidate?.stringAt("finishReason")) {
+        "STOP" -> "stop"
+        "MAX_TOKENS" -> "length"
+        "SAFETY", "RECITATION", "PROHIBITED_CONTENT" -> "content_filter"
+        null -> null
+        else -> "stop"
+    }
+    return buildJsonObject {
+        put("id", "chatcmpl-gemini")
+        put("object", "chat.completion")
+        put("model", raw.stringAt("modelVersion") ?: "")
+        put(
+            "choices",
+            buildJsonArray {
+                add(
+                    buildJsonObject {
+                        put("index", 0)
+                        put(
+                            "message",
+                            buildJsonObject {
+                                put("role", "assistant")
+                                put("content", text.toString())
+                                if (thinking.isNotEmpty()) put("reasoning_content", thinking.toString())
+                            },
+                        )
+                        finish?.let { put("finish_reason", it) }
+                    },
+                )
+            },
+        )
+        val usage = raw["usageMetadata"] as? JsonObject
+        if (usage != null) {
+            val prompt = (usage["promptTokenCount"] as? JsonPrimitive)?.contentOrNull?.toIntOrNull() ?: 0
+            val candidatesT = (usage["candidatesTokenCount"] as? JsonPrimitive)?.contentOrNull?.toIntOrNull() ?: 0
+            val thoughtsT = (usage["thoughtsTokenCount"] as? JsonPrimitive)?.contentOrNull?.toIntOrNull() ?: 0
+            put(
+                "usage",
+                buildJsonObject {
+                    put("prompt_tokens", prompt)
+                    put("completion_tokens", candidatesT + thoughtsT)
+                    put("total_tokens", prompt + candidatesT + thoughtsT)
+                },
+            )
+        }
+    }
+}
+
+/** 原生协议非流式响应归一化为 OpenAI chat completion 形态（openai 原样返回），供测试弹窗与局域网网关复用 */
+fun toOpenAiChatResponse(protocol: String, raw: JsonObject): JsonObject = when (protocol) {
+    ProviderProtocol.GEMINI -> geminiToOpenAiResponse(raw)
+    ProviderProtocol.ANTHROPIC -> anthropicToOpenAiResponse(raw)
+    else -> raw
+}
+
+/**
+ * 各协议 /models 响应归一化为 OpenAI {data:[{id, display_name, context_length?}]} 形态文本，
+ * 供 extractModelInfos 统一解析。Anthropic 响应本身即该形态，原样返回。
+ */
+fun normalizeModelsBody(protocol: String, bodyText: String): String {
+    if (protocol != ProviderProtocol.GEMINI) return bodyText
+    return try {
+        val root = ChatJson.json.parseToJsonElement(bodyText).jsonObject
+        val models = root["models"] as? JsonArray ?: return bodyText
+        val data = models.mapNotNull { el ->
+            val obj = el as? JsonObject ?: return@mapNotNull null
+            val name = obj.stringAt("name")?.removePrefix("models/") ?: return@mapNotNull null
+            // 只保留可调 generateContent 的生成模型，剔除 embed/aqa 等专用模型
+            val methods = stringListOf(obj, "supportedGenerationMethods")
+            if (methods.isNotEmpty() && methods.none { it == "generateContent" }) return@mapNotNull null
+            buildJsonObject {
+                put("id", name)
+                obj.stringAt("displayName")?.let { put("display_name", it) }
+                obj.intAt("inputTokenLimit")?.let { put("context_length", it) }
+            }
+        }
+        buildJsonObject { put("data", JsonArray(data)) }.toString()
+    } catch (_: Exception) {
+        bodyText
+    }
 }

@@ -424,9 +424,13 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         ChatTarget.SmartAi -> SmartAi.pair
     }
 
-    fun send(text: String, imageUris: List<Uri>) {
+    /**
+     * 发送消息。[imageUris] 为相册新选图片（发送时压缩转 data URL）；
+     * [imageDataUrls] 为已是 data URL 的图片（助手生图「添加到对话」、编辑态保留原图等）。
+     */
+    fun send(text: String, imageUris: List<Uri>, imageDataUrls: List<String> = emptyList()) {
         val target = currentTarget.value
-        if (text.isBlank() && imageUris.isEmpty()) return
+        if (text.isBlank() && imageUris.isEmpty() && imageDataUrls.isEmpty()) return
         // 流式互斥：回复进行中拒绝新消息，避免两轮请求交叉写历史/并发写 _streamingText
         if (_streaming.value) {
             _error.value = ChatError("上一条回复尚未结束，请先停止或等待完成")
@@ -464,7 +468,8 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                 conversationDao.setModel(convId, providerId, modelName)
             }
 
-            val images = imageUris.mapNotNull { ChatImages.uriToDataUrl(getApplication(), it) }
+            val images = imageUris.mapNotNull { ChatImages.uriToDataUrl(getApplication(), it) } +
+                imageDataUrls.filter { it.startsWith("data:") }
             val isFirst = messageDao.forConversation(convId).isEmpty()
             messageDao.insert(
                 MessageEntity(

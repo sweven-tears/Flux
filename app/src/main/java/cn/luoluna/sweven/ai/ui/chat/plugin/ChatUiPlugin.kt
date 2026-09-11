@@ -105,6 +105,8 @@ class ChatUiEnv(
     val onInputChange: (String) -> Unit,
     val attachments: List<Uri>,
     val editAttachments: List<String>,
+    /** 待发送的 data URL 附件（助手生图「添加到对话」等，已是 data URL，发送时不再压缩） */
+    val attachmentDataUrls: List<String>,
     val editingMessage: MessageEntity?,
     /** 抽屉当前选中的分组 tab（null = 「聊天」默认分组） */
     val selectedFolderTab: Long?,
@@ -122,6 +124,7 @@ class ChatUiEnv(
     val send: () -> Unit,
     val removeAttachment: (Uri) -> Unit,
     val removeEditAttachment: (String) -> Unit,
+    val removeAttachmentDataUrl: (String) -> Unit,
     val cancelEditing: () -> Unit,
 
     // ---- 宿主对话框/弹层回调（任何插件不丢功能） ----

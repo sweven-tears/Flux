@@ -765,6 +765,7 @@ object ChatUiDefaults {
                     onCopy = { env.copyMessage(message) },
                     onRegenerate = { env.vm.regenerateFrom(message) },
                     onMore = { env.showMessageActions(message) },
+                    copyEnabled = message.images.isEmpty(),
                 )
                 MessageUsageRow(message, alignEnd = false)
             }
@@ -836,7 +837,7 @@ object ChatUiDefaults {
 
     @Composable
     fun AttachmentRow(env: ChatUiEnv) {
-        if (env.editAttachments.isEmpty() && env.attachments.isEmpty()) return
+        if (env.editAttachments.isEmpty() && env.attachments.isEmpty() && env.attachmentDataUrls.isEmpty()) return
         Row(
             horizontalArrangement = Arrangement.spacedBy(8.dp),
             modifier = Modifier
@@ -845,6 +846,9 @@ object ChatUiDefaults {
         ) {
             env.editAttachments.forEach { url ->
                 DataUrlThumb(url = url, onRemove = { env.removeEditAttachment(url) })
+            }
+            env.attachmentDataUrls.forEach { url ->
+                DataUrlThumb(url = url, onRemove = { env.removeAttachmentDataUrl(url) })
             }
             env.attachments.forEach { uri ->
                 AttachmentThumb(uri = uri, onRemove = { env.removeAttachment(uri) })
@@ -1115,7 +1119,7 @@ object ChatUiDefaults {
 
     // ---------------- 可复用组件 ----------------
 
-    /** 气泡下方操作行：复制 / 重新生成 / 更多 */
+    /** 气泡下方操作行：复制 / 重新生成 / 更多；copyEnabled=false 时复制置灰（媒体消息无文本可复制） */
     @Composable
     fun MessageActionsRow(
         alignEnd: Boolean,
@@ -1123,13 +1127,14 @@ object ChatUiDefaults {
         onCopy: () -> Unit,
         onRegenerate: () -> Unit,
         onMore: () -> Unit,
+        copyEnabled: Boolean = true,
     ) {
         Row(
             horizontalArrangement = if (alignEnd) Arrangement.End else Arrangement.Start,
             verticalAlignment = Alignment.CenterVertically,
             modifier = Modifier.fillMaxWidth(),
         ) {
-            SmallMessageAction(Icons.Filled.ContentCopy, "复制", enabled, onCopy)
+            SmallMessageAction(Icons.Filled.ContentCopy, "复制", enabled && copyEnabled, onCopy)
             SmallMessageAction(Icons.Filled.Refresh, "重新生成", enabled, onRegenerate)
             SmallMessageAction(Icons.Filled.MoreVert, "更多", enabled, onMore)
         }

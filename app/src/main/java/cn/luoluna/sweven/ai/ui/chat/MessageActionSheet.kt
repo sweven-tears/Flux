@@ -15,8 +15,10 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.AccountTree
+import androidx.compose.material.icons.filled.AddPhotoAlternate
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Web
 import androidx.compose.material3.AlertDialog
@@ -41,16 +43,25 @@ import androidx.compose.ui.window.DialogProperties
 import cn.luoluna.sweven.ai.data.db.MessageEntity
 import cn.luoluna.sweven.ai.data.db.Role
 
-/** 「更多」弹层的动作集合；onEdit 仅用户消息传入（编辑并重发） */
+/** 「更多」弹层的动作集合；onEdit 仅用户消息传入（编辑并重发）；onDownload/onAttach 仅媒体消息 */
 data class MessageActions(
     val onFreeCopy: () -> Unit,
     val onWebRender: () -> Unit,
     val onEdit: (() -> Unit)? = null,
     val onBranch: () -> Unit,
     val onDelete: () -> Unit,
+    /** 下载（保存到相册），媒体消息必传 */
+    val onDownload: (() -> Unit)? = null,
+    /** 添加到对话（作为待发附件）；attachEnabled=false 时置灰（当前助手不支持图像输入） */
+    val onAttach: (() -> Unit)? = null,
+    val attachEnabled: Boolean = true,
 )
 
-/** 消息「更多」弹层：自由选择复制 / 编辑并重发（仅用户消息）/ 网页视图渲染 / 创建分支 / 删除 */
+/**
+ * 消息「更多」弹层。
+ * 助手媒体消息（带图/视频）：下载 / 添加到对话 / 创建分支 / 删除；
+ * 其余：自由选择复制 / 编辑并重发（仅用户消息）/ 网页视图渲染 / 创建分支 / 删除。
+ */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun MessageActionSheet(
@@ -58,6 +69,7 @@ fun MessageActionSheet(
     onDismiss: () -> Unit,
     actions: MessageActions,
 ) {
+    val isAssistantMedia = message.role != Role.USER && message.images.isNotEmpty()
     ModalBottomSheet(onDismissRequest = onDismiss) {
         Column(Modifier.padding(bottom = 24.dp)) {
             Text(
@@ -65,43 +77,79 @@ fun MessageActionSheet(
                 style = MaterialTheme.typography.titleMedium,
                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
             )
-            MessageActionRow(Icons.Filled.ContentCopy, "复制（自由选择）") {
-                onDismiss(); actions.onFreeCopy()
-            }
-            if (message.role == Role.USER && actions.onEdit != null) {
-                MessageActionRow(Icons.Filled.Edit, "编辑并重发") {
-                    onDismiss(); actions.onEdit?.invoke()
+            if (isAssistantMedia) {
+                MessageActionRow(Icons.Filled.Download, "下载（保存到相册）") {
+                    onDismiss(); actions.onDownload?.invoke()
                 }
-            }
-            MessageActionRow(Icons.Filled.Web, "网页视图渲染") {
-                onDismiss(); actions.onWebRender()
-            }
-            MessageActionRow(Icons.Filled.AccountTree, "创建分支") {
-                onDismiss(); actions.onBranch()
-            }
-            MessageActionRow(Icons.Filled.Delete, "删除（不可恢复）") {
-                onDismiss(); actions.onDelete()
+                MessageActionRow(
+                    Icons.Filled.AddPhotoAlternate,
+                    if (actions.attachEnabled) "添加到对话" else "添加到对话（当前助手不支持图像输入）",
+                    enabled = actions.attachEnabled,
+                ) {
+                    onDismiss(); actions.onAttach?.invoke()
+                }
+                MessageActionRow(Icons.Filled.AccountTree, "创建分支") {
+                    onDismiss(); actions.onBranch()
+                }
+                MessageActionRow(Icons.Filled.Delete, "删除（不可恢复）") {
+                    onDismiss(); actions.onDelete()
+                }
+            } else {
+                MessageActionRow(Icons.Filled.ContentCopy, "复制（自由选择）") {
+                    onDismiss(); actions.onFreeCopy()
+                }
+                if (message.role == Role.USER && actions.onEdit != null) {
+                    MessageActionRow(Icons.Filled.Edit, "编辑并重发") {
+                        onDismiss(); actions.onEdit?.invoke()
+                    }
+                }
+                MessageActionRow(Icons.Filled.Web, "网页视图渲染") {
+                    onDismiss(); actions.onWebRender()
+                }
+                MessageActionRow(Icons.Filled.AccountTree, "创建分支") {
+                    onDismiss(); actions.onBranch()
+                }
+                MessageActionRow(Icons.Filled.Delete, "删除（不可恢复）") {
+                    onDismiss(); actions.onDelete()
+                }
             }
         }
     }
 }
 
 @Composable
-private fun MessageActionRow(icon: ImageVector, label: String, onClick: () -> Unit) {
+private fun MessageActionRow(
+    icon: ImageVector,
+    label: String,
+    enabled: Boolean = true,
+    onClick: () -> Unit,
+) {
     Row(
         verticalAlignment = Alignment.CenterVertically,
         modifier = Modifier
             .fillMaxWidth()
-            .clickable(onClick = onClick)
+            .clickable(enabled = enabled, onClick = onClick)
             .padding(horizontal = 16.dp, vertical = 12.dp),
     ) {
         Icon(
             icon,
             contentDescription = null,
-            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            tint = if (enabled) {
+                MaterialTheme.colorScheme.onSurfaceVariant
+            } else {
+                MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.38f)
+            },
             modifier = Modifier.padding(end = 12.dp),
         )
-        Text(label, style = MaterialTheme.typography.bodyMedium)
+        Text(
+            label,
+            style = MaterialTheme.typography.bodyMedium,
+            color = if (enabled) {
+                MaterialTheme.colorScheme.onSurface
+            } else {
+                MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
+            },
+        )
     }
 }
 

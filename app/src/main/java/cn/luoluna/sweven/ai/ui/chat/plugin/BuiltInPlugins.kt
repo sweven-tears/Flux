@@ -161,6 +161,7 @@ object FlatChatUiPlugin : ChatUiPlugin {
                         onCopy = { env.copyMessage(message) },
                         onRegenerate = { env.vm.regenerateFrom(message) },
                         onMore = { env.showMessageActions(message) },
+                        copyEnabled = message.images.isEmpty(),
                     )
                     ChatUiDefaults.MessageUsageRow(message, alignEnd = false)
                 }
@@ -304,6 +305,7 @@ object MonoChatUiPlugin : ChatUiPlugin {
                         onCopy = { env.copyMessage(message) },
                         onRegenerate = { env.vm.regenerateFrom(message) },
                         onMore = { env.showMessageActions(message) },
+                        copyEnabled = message.images.isEmpty(),
                     )
                     ChatUiDefaults.MessageUsageRow(message, alignEnd = false)
                 }

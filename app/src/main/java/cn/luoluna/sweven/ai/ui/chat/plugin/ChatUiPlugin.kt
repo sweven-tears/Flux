@@ -10,6 +10,7 @@ import cn.luoluna.sweven.ai.data.db.FolderEntity
 import cn.luoluna.sweven.ai.data.db.MessageEntity
 import cn.luoluna.sweven.ai.data.db.PresetEntity
 import cn.luoluna.sweven.ai.data.repo.SmartAggregateCapability
+import cn.luoluna.sweven.ai.ui.chat.ChatError
 import cn.luoluna.sweven.ai.ui.chat.ChatTarget
 import cn.luoluna.sweven.ai.ui.chat.ChatViewModel
 import cn.luoluna.sweven.ai.ui.chat.ConversationHit
@@ -83,7 +84,7 @@ class ChatUiEnv(
     /** 会话原模型不可用、当前展示回退目标 */
     val modelFallback: Boolean,
     val streaming: Boolean,
-    val error: String?,
+    val error: ChatError?,
     val notice: String?,
     val contextEstimateText: String?,
     /** 上下文用量级别：0 正常 / 1 接近(≥80%) / 2 超出(≥100%)，-1 表示无指示 */

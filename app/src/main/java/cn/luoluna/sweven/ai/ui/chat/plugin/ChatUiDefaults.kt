@@ -3,6 +3,7 @@ package cn.luoluna.sweven.ai.ui.chat.plugin
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
+import android.widget.Toast
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -105,7 +106,9 @@ import cn.luoluna.sweven.ai.data.db.MessageEntity
 import cn.luoluna.sweven.ai.data.db.PresetEntity
 import cn.luoluna.sweven.ai.data.db.Role
 import cn.luoluna.sweven.ai.net.ThinkingDepth
+import cn.luoluna.sweven.ai.ui.chat.ChatError
 import cn.luoluna.sweven.ai.ui.chat.ConversationHit
+import cn.luoluna.sweven.ai.ui.chat.ErrorDetailSheet
 import cn.luoluna.sweven.ai.ui.chat.MarkdownText
 import cn.luoluna.sweven.ai.ui.chat.ReasoningSection
 import cn.luoluna.sweven.ai.ui.chat.produceUriBitmap
@@ -484,6 +487,7 @@ object ChatUiDefaults {
 
     @Composable
     fun MessageList(env: ChatUiEnv, contentPadding: PaddingValues) {
+        var showErrorDetail by remember { mutableStateOf(false) }
         Box(Modifier.fillMaxSize()) {
             LazyColumn(
                 state = env.listState,
@@ -501,26 +505,11 @@ object ChatUiDefaults {
                 }
                 env.error?.let { err ->
                     item(key = "error") {
-                        Surface(
-                            color = MaterialTheme.colorScheme.errorContainer,
-                            shape = RoundedCornerShape(12.dp),
-                            modifier = Modifier.fillMaxWidth(),
-                        ) {
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                modifier = Modifier.padding(start = 12.dp),
-                            ) {
-                                Text(
-                                    err,
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onErrorContainer,
-                                    modifier = Modifier.weight(1f),
-                                )
-                                IconButton(onClick = { env.vm.dismissError() }) {
-                                    Icon(Icons.Filled.Close, contentDescription = "关闭")
-                                }
-                            }
-                        }
+                        ErrorBar(
+                            error = err,
+                            onShowDetail = { showErrorDetail = true },
+                            onDismiss = { env.vm.dismissError() },
+                        )
                     }
                 }
                 env.notice?.let { note ->
@@ -554,6 +543,57 @@ object ChatUiDefaults {
                     .align(Alignment.CenterEnd)
                     .padding(end = 6.dp),
             )
+        }
+        if (showErrorDetail) {
+            env.error?.let { err ->
+                ErrorDetailSheet(error = err, onDismiss = { showErrorDetail = false })
+            }
+        }
+    }
+
+    /** 错误条：整条可点击打开详情半窗；行内按钮复制完整错误文本 */
+    @Composable
+    private fun ErrorBar(
+        error: ChatError,
+        onShowDetail: () -> Unit,
+        onDismiss: () -> Unit,
+    ) {
+        val context = LocalContext.current
+        Surface(
+            color = MaterialTheme.colorScheme.errorContainer,
+            shape = RoundedCornerShape(12.dp),
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable(onClick = onShowDetail),
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.padding(start = 12.dp),
+            ) {
+                Text(
+                    error.message,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onErrorContainer,
+                    maxLines = 4,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier
+                        .weight(1f)
+                        .padding(vertical = 10.dp),
+                )
+                IconButton(onClick = {
+                    copyText(context, error.detailText())
+                    Toast.makeText(context, "已复制", Toast.LENGTH_SHORT).show()
+                }) {
+                    Icon(
+                        Icons.Filled.ContentCopy,
+                        contentDescription = "复制错误信息",
+                        tint = MaterialTheme.colorScheme.onErrorContainer,
+                    )
+                }
+                IconButton(onClick = onDismiss) {
+                    Icon(Icons.Filled.Close, contentDescription = "关闭")
+                }
+            }
         }
     }
 

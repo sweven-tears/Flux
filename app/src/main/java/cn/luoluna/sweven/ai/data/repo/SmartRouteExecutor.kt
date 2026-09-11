@@ -51,8 +51,13 @@ sealed interface SmartEvent {
     data class Delta(val text: String) : SmartEvent
     data class ReasoningDelta(val text: String) : SmartEvent
     data object Done : SmartEvent
-    /** 终态失败：全部候选耗尽，或已开始输出后中断（不再回退） */
-    data class Failed(val message: String) : SmartEvent
+
+    /** 终态失败：全部候选耗尽，或已开始输出后中断（不再回退）；中断自上游时附带其 HTTP 详情 */
+    data class Failed(
+        val message: String,
+        val httpCode: Int? = null,
+        val rawBody: String? = null,
+    ) : SmartEvent
 }
 
 /**
@@ -199,7 +204,7 @@ class SmartRouteExecutor(private val client: ProviderClient) {
                                 if (gotContent) {
                                     // 已开始输出后中断：不再回退，直接终态；中断本身也是上游不稳信号
                                     recordFailure(candidate)
-                                    send(SmartEvent.Failed("${candidate.label}：${ev.message}"))
+                                    send(SmartEvent.Failed("${candidate.label}：${ev.message}", ev.httpCode, ev.rawBody))
                                     return@channelFlow
                                 }
                                 lastErrors[candidate.label] = ev.message

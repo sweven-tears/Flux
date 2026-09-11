@@ -25,7 +25,13 @@ data class TestResult(
 sealed interface ChatEvent {
     data class Delta(val text: String) : ChatEvent
     data class ReasoningDelta(val text: String) : ChatEvent
-    data class Failed(val message: String) : ChatEvent
+
+    /** 流式失败；HTTP 错误时附带状态码与原始响应体，供聊天页错误详情展示 */
+    data class Failed(
+        val message: String,
+        val httpCode: Int? = null,
+        val rawBody: String? = null,
+    ) : ChatEvent
     data object Done : ChatEvent
 }
 
@@ -171,7 +177,8 @@ class ProviderClient {
     fun chatEvents(resp: Response): Flow<ChatEvent> = flow {
         resp.use { r ->
             if (!r.isSuccessful) {
-                emit(ChatEvent.Failed(parseErrorMessage(r.code, readBody(r))))
+                val body = readBody(r)
+                emit(ChatEvent.Failed(parseErrorMessage(r.code, body), r.code, body.takeIf { it.isNotBlank() }))
                 return@flow
             }
             val source = r.body?.source()

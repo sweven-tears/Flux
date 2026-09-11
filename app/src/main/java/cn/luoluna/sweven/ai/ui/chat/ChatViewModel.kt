@@ -89,6 +89,19 @@ data class DrawerState(
 /** 会话搜索命中条目：标题命中时 snippet 为 null，否则为首条命中消息的内容片段 */
 data class ConversationHit(val conversation: ConversationEntity, val snippet: String?)
 
+/** 聊天页错误：错误条展示 [message]，半窗详情可展开状态码与原始响应体 */
+data class ChatError(
+    val message: String,
+    val httpCode: Int? = null,
+    val rawBody: String? = null,
+) {
+    /** 复制用的完整错误文本：状态码 + 原始响应体（缺省回退 message） */
+    fun detailText(): String = buildString {
+        httpCode?.let { append("HTTP $it\n\n") }
+        if (rawBody.isNullOrBlank()) append(message) else append(rawBody)
+    }
+}
+
 /** 聊天页上下文用量指示：按当前会话与目标模型的粗估 token；窗口未知时 window 为 null */
 data class ContextEstimate(val usedTokens: Int, val window: Int?)
 
@@ -216,8 +229,8 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
     private val _streamingReasoning = MutableStateFlow("")
     val streamingReasoning: StateFlow<String> = _streamingReasoning
 
-    private val _error = MutableStateFlow<String?>(null)
-    val error: StateFlow<String?> = _error
+    private val _error = MutableStateFlow<ChatError?>(null)
+    val error: StateFlow<ChatError?> = _error
 
     /** 非阻断提示（如上下文被裁剪），用信息样式展示，用户可关闭 */
     private val _notice = MutableStateFlow<String?>(null)
@@ -363,7 +376,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         if (text.isBlank() && imageUris.isEmpty()) return
         // 流式互斥：回复进行中拒绝新消息，避免两轮请求交叉写历史/并发写 _streamingText
         if (_streaming.value) {
-            _error.value = "上一条回复尚未结束，请先停止或等待完成"
+            _error.value = ChatError("上一条回复尚未结束，请先停止或等待完成")
             return
         }
         if (target == null) {
@@ -372,11 +385,13 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                 val pid = current.value?.providerId
                 val providerDisabled = pid != null && pid != SmartAi.PROVIDER_ID &&
                     providerDao.byId(pid)?.enabled == false
-                _error.value = if (providerDisabled) {
-                    "当前会话的厂商已被停用，请到「厂商」页启用或重新选择模型"
-                } else {
-                    "请先选择模型"
-                }
+                _error.value = ChatError(
+                    if (providerDisabled) {
+                        "当前会话的厂商已被停用，请到「厂商」页启用或重新选择模型"
+                    } else {
+                        "请先选择模型"
+                    },
+                )
             }
             return
         }
@@ -486,12 +501,12 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         // 选择器数据是发送时刻的快照，落库前以最新状态复核厂商可用性
         val provider = providerDao.byId(picker.provider.id)
         if (provider == null || !provider.enabled) {
-            _error.value = "厂商「${picker.provider.alias}」已被停用，请到「厂商」页启用后再发送"
+            _error.value = ChatError("厂商「${picker.provider.alias}」已被停用，请到「厂商」页启用后再发送")
             return
         }
         val key = router.activeKey(provider)
         if (key == null || key.key.isBlank()) {
-            _error.value = "厂商「${picker.provider.alias}」未配置 API Key，请到「厂商」页添加"
+            _error.value = ChatError("厂商「${picker.provider.alias}」未配置 API Key，请到「厂商」页添加")
             return
         }
 
@@ -508,20 +523,20 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         activeStreamModel = picker.provider.id to picker.model.name
         val publisher = StreamPublisher()
         sendJob = viewModelScope.launch {
-            var failed: String? = null
+            var failed: ChatError? = null
             try {
-                client.chatDeltas(picker.provider.baseUrl, key.key, built.body, extraHeaders).collect { ev ->
+                client.chatDeltas(provider.baseUrl, key.key, built.body, extraHeaders).collect { ev ->
                     when (ev) {
                         is ChatEvent.Delta -> publisher.delta(ev.text)
                         is ChatEvent.ReasoningDelta -> publisher.reasoning(ev.text)
-                        is ChatEvent.Failed -> failed = ev.message
+                        is ChatEvent.Failed -> failed = ChatError(ev.message, ev.httpCode, ev.rawBody)
                         ChatEvent.Done -> Unit
                     }
                 }
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                failed = e.message ?: e.javaClass.simpleName
+                failed = ChatError(e.message ?: e.javaClass.simpleName)
             }
             finishStreaming(convId, publisher, failed)
         }
@@ -531,7 +546,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
     private suspend fun streamSmart(convId: Long) {
         val routes = smartRouteDao.all().filter { it.enabled }
         if (routes.isEmpty()) {
-            _error.value = "smartAi 没有启用的候选模型，请到「厂商」页右上角 → 智能路由配置"
+            _error.value = ChatError("smartAi 没有启用的候选模型，请到「厂商」页右上角 → 智能路由配置")
             return
         }
         val conversation = conversationDao.byId(convId)
@@ -576,7 +591,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
             bucketOf = { SmartHealth.bucket(it.first.providerId, it.first.modelName, now) },
         ).map { it.first }
         if (candidates.isEmpty()) {
-            _error.value = "smartAi 的候选模型均不可用（缺少 API Key 或已被删除）"
+            _error.value = ChatError("smartAi 的候选模型均不可用（缺少 API Key、已被删除或厂商已停用）")
             return
         }
         val policy = SmartPolicy(
@@ -595,13 +610,13 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         _streamingReasoning.value = ""
         val publisher = StreamPublisher()
         sendJob = viewModelScope.launch {
-            var failed: String? = null
+            var failed: ChatError? = null
             try {
                 smartExecutor.stream(candidates, policy, maxRounds).collect { ev ->
                     when (ev) {
                         is SmartEvent.Delta -> publisher.delta(ev.text)
                         is SmartEvent.ReasoningDelta -> publisher.reasoning(ev.text)
-                        is SmartEvent.Failed -> failed = ev.message
+                        is SmartEvent.Failed -> failed = ChatError(ev.message, ev.httpCode, ev.rawBody)
                         // 出内容后不再有 Trying，首个内容出现时的最新候选即胜出者
                         is SmartEvent.Trying -> activeStreamModel = ev.providerId to ev.modelName
                         SmartEvent.Done -> Unit
@@ -610,7 +625,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                failed = e.message ?: e.javaClass.simpleName
+                failed = ChatError(e.message ?: e.javaClass.simpleName)
             }
             finishStreaming(convId, publisher, failed)
         }
@@ -650,7 +665,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /** 收尾：发布剩余内容并落库助手消息，失败则呈现错误 */
-    private suspend fun finishStreaming(convId: Long, publisher: StreamPublisher, failed: String?) {
+    private suspend fun finishStreaming(convId: Long, publisher: StreamPublisher, failed: ChatError?) {
         publisher.publish(force = true)
         _streaming.value = false
         val finalContent = _streamingText.value
@@ -717,12 +732,12 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         if (convId != currentId.value) return
         if (newText.isBlank() && keepDataUrls.isEmpty() && newImageUris.isEmpty()) return
         if (_streaming.value) {
-            _error.value = "上一条回复尚未结束，请先停止或等待完成"
+            _error.value = ChatError("上一条回复尚未结束，请先停止或等待完成")
             return
         }
         val target = currentTarget.value
         if (target == null) {
-            _error.value = "请先选择模型"
+            _error.value = ChatError("请先选择模型")
             return
         }
         viewModelScope.launch {

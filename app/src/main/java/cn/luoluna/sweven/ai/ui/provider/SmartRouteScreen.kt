@@ -1,20 +1,15 @@
 package cn.luoluna.sweven.ai.ui.provider
 
-import androidx.compose.animation.core.Animatable
-import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
-import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
@@ -24,8 +19,11 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Block
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Category
 import androidx.compose.material.icons.filled.DragIndicator
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.Checkbox
@@ -38,27 +36,20 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontFamily
-import androidx.compose.ui.text.style.TextAlign
-import androidx.compose.ui.unit.Dp
-import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import cn.luoluna.sweven.ai.App
@@ -71,17 +62,14 @@ import cn.luoluna.sweven.ai.data.repo.SmartHealth
 import cn.luoluna.sweven.ai.ui.common.ModelBadgesRow
 import cn.luoluna.sweven.ai.ui.common.ModeSelectDialog
 import cn.luoluna.sweven.ai.ui.common.ReorderState
+import cn.luoluna.sweven.ai.ui.common.SwipeAction
+import cn.luoluna.sweven.ai.ui.common.SwipeRevealActions
 import cn.luoluna.sweven.ai.ui.common.TextFieldDialog
 import cn.luoluna.sweven.ai.ui.common.normalizeModelId
 import cn.luoluna.sweven.ai.ui.common.rememberReorderState
 import cn.luoluna.sweven.ai.ui.common.reorderDragged
 import cn.luoluna.sweven.ai.ui.common.reorderHandle
 import kotlinx.coroutines.launch
-import kotlin.math.roundToInt
-
-/** 操作按钮宽度：两个按钮，共 2 × 64dp */
-private val SwipeActionWidth = 128.dp
-private val SwipeActionEach = 64.dp
 
 /**
  * 智能路由配置：把所有厂商的模型整合成聚合模型 smartAi，
@@ -127,6 +115,11 @@ fun SmartRouteScreen(onBack: () -> Unit) {
     var localOrder by remember { mutableStateOf<List<SmartRouteEntity>?>(null) }
     val display = localOrder ?: entries
     val listState = rememberLazyListState()
+    // 侧滑操作：同一时间至多一行滑开，滚动列表时收回
+    var openSwipeEntryId by remember { mutableStateOf<Long?>(null) }
+    LaunchedEffect(listState.isScrollInProgress) {
+        if (listState.isScrollInProgress) openSwipeEntryId = null
+    }
     val reorderState = rememberReorderState(listState) { fromKey, toKey ->
         val from = display.indexOfFirst { it.id == fromKey }
         val to = display.indexOfFirst { it.id == toKey }
@@ -273,6 +266,8 @@ fun SmartRouteScreen(onBack: () -> Unit) {
                         models = models,
                         reorderState = reorderState,
                         modifier = Modifier.animateItem(),
+                        isOpen = openSwipeEntryId == entry.id,
+                        onOpenChange = { open -> openSwipeEntryId = if (open) entry.id else null },
                         onToggle = { nv ->
                             scope.launch { app.database.smartRouteDao().update(entry.copy(enabled = nv)) }
                         },
@@ -461,6 +456,8 @@ private fun SmartRouteRow(
     models: List<ModelEntity>,
     reorderState: ReorderState,
     modifier: Modifier = Modifier,
+    isOpen: Boolean,
+    onOpenChange: (Boolean) -> Unit,
     onToggle: (Boolean) -> Unit,
     onRemove: () -> Unit,
 ) {
@@ -471,21 +468,27 @@ private fun SmartRouteRow(
     val health = SmartHealth.info(entry.providerId, entry.modelName)
 
     SwipeRevealActions(
-        modifier = modifier,
-        actions = {
-            SwipeActionButton(
-                text = if (entry.enabled) "禁用" else "启用",
+        modifier = modifier.reorderDragged(reorderState, entry.id),
+        actions = listOf(
+            SwipeAction(
+                label = if (entry.enabled) "禁用" else "启用",
+                icon = if (entry.enabled) Icons.Filled.Block else Icons.Filled.PlayArrow,
                 container = MaterialTheme.colorScheme.tertiaryContainer,
                 content = MaterialTheme.colorScheme.onTertiaryContainer,
-            ) { onToggle(!entry.enabled) }
-            SwipeActionButton(
-                text = "移除",
+                onClick = { onToggle(!entry.enabled) },
+            ),
+            SwipeAction(
+                label = "移除",
+                icon = Icons.Filled.Delete,
                 container = MaterialTheme.colorScheme.errorContainer,
                 content = MaterialTheme.colorScheme.onErrorContainer,
-            ) { onRemove() }
-        },
+                onClick = onRemove,
+            ),
+        ),
+        isOpen = isOpen,
+        onOpenChange = onOpenChange,
     ) {
-        Card(modifier = Modifier.reorderDragged(reorderState, entry.id)) {
+        Card {
             Row(
                 Modifier
                     .fillMaxWidth()
@@ -543,81 +546,6 @@ private fun SmartRouteRow(
                 )
             }
         }
-    }
-}
-
-/** 左滑拉出操作按钮的容器 */
-@Composable
-private fun SwipeRevealActions(
-    modifier: Modifier = Modifier,
-    actionWidth: Dp = SwipeActionWidth,
-    actions: @Composable RowScope.() -> Unit,
-    content: @Composable () -> Unit,
-) {
-    val density = LocalDensity.current
-    val actionPx = with(density) { actionWidth.toPx() }
-    var offset by remember { mutableFloatStateOf(0f) }
-    val animatable = remember { Animatable(0f) }
-    val scope = rememberCoroutineScope()
-
-    fun settle() {
-        val target = if (offset < -actionPx / 2f) -actionPx else 0f
-        scope.launch {
-            animatable.snapTo(offset)
-            animatable.animateTo(target) { offset = value }
-        }
-    }
-
-    Box(modifier.fillMaxWidth()) {
-        // 背后的操作按钮（右对齐）
-        Row(
-            Modifier.matchParentSize(),
-            horizontalArrangement = Arrangement.End,
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            actions()
-        }
-        // 前层内容：跟手横向位移
-        Box(
-            Modifier
-                .offset { IntOffset(offset.roundToInt(), 0) }
-                .pointerInput(actionPx) {
-                    detectHorizontalDragGestures(
-                        onHorizontalDrag = { change, dragAmount ->
-                            change.consume()
-                            offset = (offset + dragAmount).coerceIn(-actionPx, 0f)
-                        },
-                        onDragEnd = { settle() },
-                        onDragCancel = { settle() },
-                    )
-                },
-        ) {
-            content()
-        }
-    }
-}
-
-@Composable
-private fun RowScope.SwipeActionButton(
-    text: String,
-    container: Color,
-    content: Color,
-    onClick: () -> Unit,
-) {
-    Surface(
-        color = container,
-        contentColor = content,
-        onClick = onClick,
-        modifier = Modifier
-            .width(SwipeActionEach)
-            .fillMaxHeight(),
-    ) {
-        Text(
-            text,
-            style = MaterialTheme.typography.labelMedium,
-            textAlign = TextAlign.Center,
-            modifier = Modifier.padding(vertical = 20.dp),
-        )
     }
 }
 

@@ -4,12 +4,6 @@ import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.widget.Toast
-import androidx.compose.animation.core.Animatable
-import androidx.compose.animation.core.tween
-import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.gestures.detectHorizontalDragGestures
-import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -18,9 +12,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -59,13 +51,9 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontFamily
-import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import cn.luoluna.sweven.ai.App
@@ -81,6 +69,8 @@ import cn.luoluna.sweven.ai.ui.common.ModalityTag
 import cn.luoluna.sweven.ai.ui.common.MonoFont
 import cn.luoluna.sweven.ai.ui.common.ReorderState
 import cn.luoluna.sweven.ai.ui.common.SectionCard
+import cn.luoluna.sweven.ai.ui.common.SwipeAction
+import cn.luoluna.sweven.ai.ui.common.SwipeRevealActions
 import cn.luoluna.sweven.ai.ui.common.TextFieldDialog
 import cn.luoluna.sweven.ai.ui.common.maskKey
 import cn.luoluna.sweven.ai.ui.common.normalizeModelId
@@ -89,7 +79,6 @@ import cn.luoluna.sweven.ai.ui.common.rememberReorderState
 import cn.luoluna.sweven.ai.ui.common.reorderDragged
 import cn.luoluna.sweven.ai.ui.common.reorderHandle
 import cn.luoluna.sweven.ai.ui.common.typeLabel
-import kotlin.math.roundToInt
 import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -571,8 +560,7 @@ private fun BackButton(onBack: () -> Unit) {
 
 /**
  * 模型行卡片：向左滑动露出红色删除按钮，点按钮直接删除（无确认弹窗）。
- * 滑过露出宽度一半松手即停住；点卡片空白处或滚动列表时收回；isOpen 供外部
- * 保证同一时间至多一行滑开。
+ * 侧滑容器统一走 [SwipeRevealActions]（单行互斥与滚动收回由外部状态保证）。
  */
 @Composable
 private fun ModelRowCard(
@@ -585,81 +573,21 @@ private fun ModelRowCard(
     onEdit: () -> Unit,
     onDelete: () -> Unit,
 ) {
-    val revealWidth = 84.dp
-    val revealPx = with(LocalDensity.current) { revealWidth.toPx() }
-    val scope = rememberCoroutineScope()
-    val offsetX = remember { Animatable(0f) }
-    var dragging by remember { mutableStateOf(false) }
-
-    LaunchedEffect(isOpen) {
-        if (!dragging) offsetX.animateTo(if (isOpen) -revealPx else 0f, tween(200))
-    }
-
-    Box(modifier.reorderDragged(reorderState, model.id)) {
-        // 背景：滑开后露出的删除按钮
-        Box(
-            Modifier
-                .matchParentSize()
-                .clip(MaterialTheme.shapes.medium)
-                .background(MaterialTheme.colorScheme.errorContainer)
-                .clickable { onDelete() },
-            contentAlignment = Alignment.CenterEnd,
-        ) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.Center,
-                modifier = Modifier.width(revealWidth),
-            ) {
-                Icon(
-                    Icons.Filled.Delete,
-                    contentDescription = "删除模型",
-                    tint = MaterialTheme.colorScheme.onErrorContainer,
-                )
-                Spacer(Modifier.width(4.dp))
-                Text(
-                    "删除",
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onErrorContainer,
-                )
-            }
-        }
-        // 前景卡片：跟手横移
-        Card(
-            modifier = Modifier
-                .offset { IntOffset(offsetX.value.roundToInt(), 0) }
-                .clickable(
-                    interactionSource = remember { MutableInteractionSource() },
-                    indication = null,
-                    enabled = isOpen,
-                ) { onOpenChange(false) }
-                .pointerInput(revealPx) {
-                    detectHorizontalDragGestures(
-                        onDragStart = { dragging = true },
-                        onHorizontalDrag = { change, amount ->
-                            change.consume()
-                            scope.launch {
-                                offsetX.snapTo((offsetX.value + amount).coerceIn(-revealPx, 0f))
-                            }
-                        },
-                        onDragEnd = {
-                            dragging = false
-                            val open = offsetX.value <= -revealPx / 2f
-                            scope.launch {
-                                offsetX.animateTo(if (open) -revealPx else 0f, tween(200))
-                            }
-                            onOpenChange(open)
-                        },
-                        onDragCancel = {
-                            dragging = false
-                            val open = offsetX.value <= -revealPx / 2f
-                            scope.launch {
-                                offsetX.animateTo(if (open) -revealPx else 0f, tween(200))
-                            }
-                            onOpenChange(open)
-                        },
-                    )
-                },
-        ) {
+    SwipeRevealActions(
+        actions = listOf(
+            SwipeAction(
+                label = "删除",
+                icon = Icons.Filled.Delete,
+                container = MaterialTheme.colorScheme.errorContainer,
+                content = MaterialTheme.colorScheme.onErrorContainer,
+                onClick = onDelete,
+            ),
+        ),
+        isOpen = isOpen,
+        onOpenChange = onOpenChange,
+        modifier = modifier.reorderDragged(reorderState, model.id),
+    ) {
+        Card {
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 modifier = Modifier

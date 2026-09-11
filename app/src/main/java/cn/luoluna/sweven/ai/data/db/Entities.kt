@@ -15,6 +15,8 @@ data class ProviderEntity(
     val isPreset: Boolean = false,
     val presetId: String? = null,
     val activeKeyId: Long? = null,
+    /** 厂商启用状态：停用后模型不进聊天选择器，智能路由与局域网网关均跳过 */
+    val enabled: Boolean = true,
     val lastTestOk: Boolean? = null,
     val lastTestLatencyMs: Long? = null,
     val lastTestMessage: String? = null,

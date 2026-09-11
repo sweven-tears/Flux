@@ -127,13 +127,13 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
 
     val pickerModels: StateFlow<List<PickerModel>> =
         combine(providerDao.observeAll(), modelDao.observeEnabled()) { providers, models ->
-            buildPickerModels(providers, models)
+            buildPickerModels(providers, models, onlyEnabledProviders = true)
         }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
-    /** 全部模型（含禁用）：预设编辑弹窗使用，避免预设模型已禁用时编辑一次就被静默清空 */
+    /** 全部模型（含禁用模型与停用厂商）：预设编辑弹窗使用，避免预设模型已禁用时编辑一次就被静默清空 */
     val allPickerModels: StateFlow<List<PickerModel>> =
         combine(providerDao.observeAll(), modelDao.observeAll()) { providers, models ->
-            buildPickerModels(providers, models)
+            buildPickerModels(providers, models, onlyEnabledProviders = false)
         }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     val drawerState: StateFlow<DrawerState> =
@@ -161,10 +161,12 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
             conv?.thinkingDepth ?: pending
         }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
 
-    /** 智能路由启用的候选数量（>0 时聊天选择器显示 smartAi） */
+    /** 智能路由启用的候选数量（>0 时聊天选择器显示 smartAi）；候选所属厂商停用后不计入 */
     private val smartEnabledCount: StateFlow<Int> =
-        smartRouteDao.observeAll().map { routes -> routes.count { it.enabled } }
-            .stateIn(viewModelScope, SharingStarted.Eagerly, 0)
+        combine(smartRouteDao.observeAll(), providerDao.observeAll()) { routes, providers ->
+            val enabledIds = providers.filter { it.enabled }.map { it.id }.toSet()
+            routes.count { it.enabled && it.providerId in enabledIds }
+        }.stateIn(viewModelScope, SharingStarted.Eagerly, 0)
 
     /** 聊天模型选择器是否显示 smartAi 条目 */
     val smartAiAvailable: StateFlow<Boolean> =
@@ -173,9 +175,10 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
 
     /** smartAi 聚合能力（启用候选的模态/能力并集）：SmartAi 目标下附件按钮与思考深度的显示依据 */
     val smartAiCapability: StateFlow<SmartAggregateCapability> =
-        combine(smartRouteDao.observeAll(), modelDao.observeAll()) { routes, models ->
+        combine(smartRouteDao.observeAll(), providerDao.observeAll(), modelDao.observeAll()) { routes, providers, models ->
+            val enabledIds = providers.filter { it.enabled }.map { it.id }.toSet()
             aggregateCapability(
-                routes.filter { it.enabled }.mapNotNull { route ->
+                routes.filter { it.enabled && it.providerId in enabledIds }.mapNotNull { route ->
                     models.firstOrNull { it.providerId == route.providerId && it.name == route.modelName }
                 },
             )
@@ -357,14 +360,24 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
 
     fun send(text: String, imageUris: List<Uri>) {
         val target = currentTarget.value
-        if (target == null) {
-            _error.value = "请先选择模型"
-            return
-        }
         if (text.isBlank() && imageUris.isEmpty()) return
         // 流式互斥：回复进行中拒绝新消息，避免两轮请求交叉写历史/并发写 _streamingText
         if (_streaming.value) {
             _error.value = "上一条回复尚未结束，请先停止或等待完成"
+            return
+        }
+        if (target == null) {
+            // 目标解析为空时区分「从未选过」与「会话指向的厂商已被停用」
+            viewModelScope.launch {
+                val pid = current.value?.providerId
+                val providerDisabled = pid != null && pid != SmartAi.PROVIDER_ID &&
+                    providerDao.byId(pid)?.enabled == false
+                _error.value = if (providerDisabled) {
+                    "当前会话的厂商已被停用，请到「厂商」页启用或重新选择模型"
+                } else {
+                    "请先选择模型"
+                }
+            }
             return
         }
         val (providerId, modelName) = target.identifiers()
@@ -470,7 +483,13 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     private suspend fun streamSingle(convId: Long, picker: PickerModel) {
-        val key = router.activeKey(picker.provider)
+        // 选择器数据是发送时刻的快照，落库前以最新状态复核厂商可用性
+        val provider = providerDao.byId(picker.provider.id)
+        if (provider == null || !provider.enabled) {
+            _error.value = "厂商「${picker.provider.alias}」已被停用，请到「厂商」页启用后再发送"
+            return
+        }
+        val key = router.activeKey(provider)
         if (key == null || key.key.isBlank()) {
             _error.value = "厂商「${picker.provider.alias}」未配置 API Key，请到「厂商」页添加"
             return
@@ -478,7 +497,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
 
         val conversation = conversationDao.byId(convId)
         val history = messageDao.forConversation(convId)
-        val built = buildRequestBody(picker.provider, picker.model, conversation, history)
+        val built = buildRequestBody(provider, picker.model, conversation, history)
         val extraHeaders = parseCustomHeaders(picker.model.customHeaders)
 
         _notice.value = trimNotice(built.droppedCount, built.strippedImageCount)
@@ -946,14 +965,16 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         /** 「再点一次停止」居中提示的显示时长 */
         private const val STOP_HINT_VISIBLE_MS = 1800L
 
-        /** 厂商按用户拖拽顺序分组，厂商内按模型拖拽顺序 */
+        /** 厂商按用户拖拽顺序分组，厂商内按模型拖拽顺序；onlyEnabledProviders=false 时含停用厂商（预设编辑回显用） */
         private fun buildPickerModels(
             providers: List<ProviderEntity>,
             models: List<ModelEntity>,
+            onlyEnabledProviders: Boolean,
         ): List<PickerModel> {
-            val providerRank = providers.withIndex().associate { it.value.id to it.index }
+            val visible = if (onlyEnabledProviders) providers.filter { it.enabled } else providers
+            val providerRank = visible.withIndex().associate { it.value.id to it.index }
             return models.mapNotNull { m ->
-                providers.firstOrNull { it.id == m.providerId }?.let { PickerModel(it, m) }
+                visible.firstOrNull { it.id == m.providerId }?.let { PickerModel(it, m) }
             }.sortedWith(
                 compareBy(
                     { providerRank[it.provider.id] ?: Int.MAX_VALUE },

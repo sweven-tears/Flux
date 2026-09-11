@@ -34,6 +34,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import cn.luoluna.sweven.ai.App
@@ -150,7 +151,9 @@ private fun ProviderCard(
 ) {
     Card(
         onClick = onClick,
-        modifier = modifier.reorderDragged(reorderState, p.id),
+        modifier = modifier
+            .reorderDragged(reorderState, p.id)
+            .alpha(if (p.enabled) 1f else 0.45f),
     ) {
         Row(
             Modifier
@@ -166,6 +169,13 @@ private fun ProviderCard(
                             "预设",
                             modifier = Modifier.padding(start = 6.dp),
                             color = MaterialTheme.colorScheme.primaryContainer,
+                        )
+                    }
+                    if (!p.enabled) {
+                        ModalityTag(
+                            "已停用",
+                            modifier = Modifier.padding(start = 6.dp),
+                            color = MaterialTheme.colorScheme.errorContainer,
                         )
                     }
                 }

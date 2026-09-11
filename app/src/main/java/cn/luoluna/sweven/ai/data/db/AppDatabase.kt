@@ -20,7 +20,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         PresetEntity::class,
         RequestLogEntity::class,
     ],
-    version = 10,
+    version = 11,
     exportSchema = false,
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -152,11 +152,18 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        /** v10 → v11：厂商表增加启用/禁用开关 */
+        private val MIGRATION_10_11 = object : Migration(10, 11) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE `providers` ADD COLUMN `enabled` INTEGER NOT NULL DEFAULT 1")
+            }
+        }
+
         fun build(context: Context): AppDatabase =
             Room.databaseBuilder(context, AppDatabase::class.java, "flux.db")
                 .addMigrations(
                     MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7,
-                    MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10,
+                    MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11,
                 )
                 .fallbackToDestructiveMigration()
                 .build()

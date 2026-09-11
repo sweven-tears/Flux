@@ -228,7 +228,8 @@ class LanServer(
     }
 
     private suspend fun aggregateModelsJson(): String {
-        val providers = providerDao.all().associateBy { it.id }
+        // 停用厂商的模型不对外提供
+        val providers = providerDao.all().filter { it.enabled }.associateBy { it.id }
         val enabled = modelDao.observeEnabled().first()
         val data = enabled.mapNotNull { m ->
             val p = providers[m.providerId] ?: return@mapNotNull null
@@ -248,8 +249,10 @@ class LanServer(
                 )
             }
         }.toMutableList()
-        // 开关开启且存在启用候选时，追加 smartAi 聚合模型
-        val smartRoutes = if (settings.lanSmartAiEnabled.value) smartRouteDao.all().filter { it.enabled } else emptyList()
+        // 开关开启且存在启用候选时，追加 smartAi 聚合模型（候选厂商停用后同样剔除）
+        val smartRoutes = if (settings.lanSmartAiEnabled.value) {
+            smartRouteDao.all().filter { it.enabled && it.providerId in providers }
+        } else emptyList()
         if (smartRoutes.isNotEmpty()) {
             // 聚合能力 = 启用候选的模态/能力并集（模型行已删除的候选按无能力参与并集）
             val agg = aggregateCapability(

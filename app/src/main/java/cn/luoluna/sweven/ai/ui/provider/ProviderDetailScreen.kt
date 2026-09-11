@@ -30,6 +30,7 @@ import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.DragIndicator
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.PowerSettingsNew
 import androidx.compose.material.icons.filled.Science
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -135,6 +136,18 @@ fun ProviderDetailScreen(id: Long, onBack: () -> Unit) {
                 title = { Text(p.alias) },
                 navigationIcon = { BackButton(onBack) },
                 actions = {
+                    IconButton(onClick = {
+                        scope.launch {
+                            app.database.providerDao().update(p.copy(enabled = !p.enabled))
+                        }
+                    }) {
+                        Icon(
+                            Icons.Filled.PowerSettingsNew,
+                            contentDescription = if (p.enabled) "停用厂商" else "启用厂商",
+                            tint = if (p.enabled) MaterialTheme.colorScheme.onSurfaceVariant
+                            else MaterialTheme.colorScheme.error,
+                        )
+                    }
                     IconButton(onClick = { showModelTest = true }) {
                         Icon(Icons.Filled.Science, contentDescription = "模型测试")
                     }

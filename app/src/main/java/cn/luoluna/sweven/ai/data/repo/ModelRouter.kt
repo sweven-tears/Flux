@@ -51,6 +51,8 @@ class ModelRouter(
     suspend fun resolveById(providerId: Long?, modelName: String?): ModelRoute? {
         if (providerId == null || modelName.isNullOrBlank()) return null
         val provider = providerDao.byId(providerId) ?: return null
+        // 停用厂商按不存在处理：智能路由与局域网网关统一跳过
+        if (!provider.enabled) return null
         val key = activeKey(provider)
         val model = modelDao.find(providerId, modelName)
         return ModelRoute(provider, key, model)
@@ -64,6 +66,7 @@ class ModelRouter(
         val modelName = aggregateId.substring(slash + 1).trim()
         if (alias.isEmpty() || modelName.isEmpty()) return null
         val provider = providerDao.byAlias(alias) ?: return null
+        if (!provider.enabled) return null
         val key = activeKey(provider)
         val model = modelDao.find(provider.id, modelName)
         return ModelRoute(provider, key, model)

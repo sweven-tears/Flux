@@ -22,8 +22,10 @@ import cn.luoluna.sweven.ai.data.repo.orderCandidates
 import cn.luoluna.sweven.ai.data.repo.pickFastRound
 import cn.luoluna.sweven.ai.data.repo.SMART_FAST_ROUND_LIMIT
 import cn.luoluna.sweven.ai.net.AdvancedParams
+import cn.luoluna.sweven.ai.net.ChatEvent
 import cn.luoluna.sweven.ai.net.ChatJson
 import cn.luoluna.sweven.ai.net.ProviderClient
+import cn.luoluna.sweven.ai.net.ProviderProtocol
 import cn.luoluna.sweven.ai.net.applyBuiltinTools
 import cn.luoluna.sweven.ai.net.buildChatBody
 import cn.luoluna.sweven.ai.net.extractUsage
@@ -31,6 +33,7 @@ import cn.luoluna.sweven.ai.net.mergeCustomBody
 import cn.luoluna.sweven.ai.net.parseCustomHeaders
 import cn.luoluna.sweven.ai.net.stringAt
 import cn.luoluna.sweven.ai.net.streamFlagOf
+import cn.luoluna.sweven.ai.net.toOpenAiChatResponse
 import io.ktor.http.ContentType
 import io.ktor.http.HttpStatusCode
 import io.ktor.server.application.Application
@@ -58,6 +61,7 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.put
@@ -345,7 +349,7 @@ class LanServer(
             base = body,
         )
         payload = mergeCustomBody(payload, route.model?.customBody)
-        if (route.provider.presetId == "gemini" && route.model != null) {
+        if ((route.provider.presetId == "gemini" || route.provider.protocol == ProviderProtocol.GEMINI) && route.model != null) {
             payload = applyBuiltinTools(
                 payload,
                 route.model.builtinGoogleSearch,
@@ -355,9 +359,10 @@ class LanServer(
         }
         val extraHeaders = parseCustomHeaders(route.model?.customHeaders)
         val via = "${route.provider.alias}/$modelName"
+        val protocol = route.provider.protocol
 
         val upstream = try {
-            client.openChat(route.provider.baseUrl, apiKey.key, payload, extraHeaders)
+            client.openChat(route.provider.baseUrl, apiKey.key, payload, extraHeaders, protocol)
         } catch (e: Exception) {
             logRequest(device, aggregateId, via, stream, startedAt, null, false, "上游连接失败: ${e.message ?: e.javaClass.simpleName}")
             respondOpenAiError(HttpStatusCode.BadGateway, "上游连接失败: ${e.message ?: e.javaClass.simpleName}")
@@ -386,14 +391,26 @@ class LanServer(
             var streamError: String? = null
             try {
                 respondBytesWriter(contentType = ContentType("text", "event-stream")) {
-                    client.ssePayloads(upstream).collect { payloadLine ->
-                        if (ttft == null) ttft = System.currentTimeMillis() - startedAt
-                        usageOfPayload(payloadLine)?.let { (p, c) ->
-                            if (p != null) promptTok = p
-                            if (c != null) completionTok = c
+                    if (protocol == ProviderProtocol.OPENAI) {
+                        // OpenAI 兼容上游：原始帧透传，保留 usage/finish_reason 等字段
+                        client.ssePayloads(upstream).collect { payloadLine ->
+                            if (ttft == null) ttft = System.currentTimeMillis() - startedAt
+                            usageOfPayload(payloadLine)?.let { (p, c) ->
+                                if (p != null) promptTok = p
+                                if (c != null) completionTok = c
+                            }
+                            writeStringUtf8("data: $payloadLine\n\n")
+                            flush()
                         }
-                        writeStringUtf8("data: $payloadLine\n\n")
-                        flush()
+                    } else {
+                        // 原生协议上游：解析归一化后回译为 OpenAI chunk 帧
+                        client.chatEvents(upstream, protocol).collect { ev ->
+                            if (ttft == null) ttft = System.currentTimeMillis() - startedAt
+                            chatEventToChunkLine(ev, modelName)?.let {
+                                writeStringUtf8("data: $it\n\n")
+                                flush()
+                            }
+                        }
                     }
                     writeStringUtf8("data: [DONE]\n\n")
                     flush()
@@ -421,14 +438,28 @@ class LanServer(
         } else {
             val respBody = client.readBody(upstream)
             upstream.close()
-            val usage = runCatching {
-                extractUsage(ChatJson.json.parseToJsonElement(respBody).jsonObject)
-            }.getOrNull()
-            logRequest(
-                device, aggregateId, via, stream, startedAt, null, true, null,
-                usage?.first, usage?.second,
-            )
-            respondText(respBody, ContentType.Application.Json)
+            if (protocol == ProviderProtocol.OPENAI) {
+                val usage = runCatching {
+                    extractUsage(ChatJson.json.parseToJsonElement(respBody).jsonObject)
+                }.getOrNull()
+                logRequest(
+                    device, aggregateId, via, stream, startedAt, null, true, null,
+                    usage?.first, usage?.second,
+                )
+                respondText(respBody, ContentType.Application.Json)
+            } else {
+                // 原生协议非流式响应归一化为 OpenAI 形态后返回
+                val normalized = runCatching {
+                    toOpenAiChatResponse(protocol, ChatJson.json.parseToJsonElement(respBody).jsonObject)
+                }.getOrNull()
+                val usage = normalized?.let { extractUsage(it) }
+                logRequest(
+                    device, aggregateId, via, stream, startedAt, null, normalized != null,
+                    if (normalized == null) "响应归一化失败" else null,
+                    usage?.first, usage?.second,
+                )
+                respondText(normalized?.toString() ?: respBody, ContentType.Application.Json)
+            }
         }
     }
 
@@ -548,7 +579,7 @@ class LanServer(
                     base = rawBody,
                 )
                 payload = mergeCustomBody(payload, candidate.model.customBody)
-                if (candidate.provider.presetId == "gemini") {
+                if (candidate.provider.presetId == "gemini" || candidate.provider.protocol == ProviderProtocol.GEMINI) {
                     payload = applyBuiltinTools(
                         payload,
                         candidate.model.builtinGoogleSearch,
@@ -559,8 +590,11 @@ class LanServer(
                 val extraHeaders = parseCustomHeaders(candidate.model.customHeaders)
 
                 if (!stream) {
-                    // 非流式候选：带读超时的完整请求，成功即转发
-                    val result = client.chatOnce(candidate.provider.baseUrl, candidate.apiKey, payload, extraHeaders)
+                    // 非流式候选：带读超时的完整请求，成功即转发（原生协议由 chatOnce 归一化为 OpenAI 形态）
+                    val result = client.chatOnce(
+                        candidate.provider.baseUrl, candidate.apiKey, payload, extraHeaders,
+                        candidate.provider.protocol,
+                    )
                     val resp = result.getOrNull()
                     if (resp == null) {
                         lastErrors[candidate.label] = result.exceptionOrNull()?.message ?: "请求失败"
@@ -581,7 +615,10 @@ class LanServer(
 
                 // 流式候选：限时建立连接，超时或连接失败（拒绝/DNS/坏地址）均取消并尝试下一个
                 val upstream = try {
-                    val call = client.newStreamingCall(candidate.provider.baseUrl, candidate.apiKey, payload, extraHeaders)
+                    val call = client.newStreamingCall(
+                        candidate.provider.baseUrl, candidate.apiKey, payload, extraHeaders,
+                        candidate.provider.protocol,
+                    )
                     withTimeoutOrNull(timeoutMs) {
                         withContext(Dispatchers.IO) { call.execute() }
                     }.also { if (it == null) call.cancel() }
@@ -611,7 +648,14 @@ class LanServer(
                 // 请求取消时随之取消
                 val producer = CoroutineScope(coroutineContext).launch(Dispatchers.IO) {
                     try {
-                        client.ssePayloads(upstream).collect { payloads.send(it) }
+                        if (candidate.provider.protocol == ProviderProtocol.OPENAI) {
+                            client.ssePayloads(upstream).collect { payloads.send(it) }
+                        } else {
+                            // 原生协议：解析归一化后回译为 OpenAI chunk 帧
+                            client.chatEvents(upstream, candidate.provider.protocol).collect { ev ->
+                                chatEventToChunkLine(ev, candidate.model.name)?.let { payloads.send(it) }
+                            }
+                        }
                     } catch (e: CancellationException) {
                         throw e
                     } catch (e: Exception) {
@@ -693,6 +737,32 @@ class LanServer(
             HttpStatusCode.BadGateway,
             "smartAi 全部 ${prepared.size} 个候选均不可用（已尝试 $maxRounds 轮）：$summary",
         )
+    }
+
+    /**
+     * 归一化流事件 → OpenAI chat.completion.chunk 帧文本（原生协议上游回译给 OpenAI 客户端）。
+     * Delta/ReasoningDelta → delta 帧；Failed → error 帧；Done → null（由调用方收尾 [DONE]）。
+     */
+    private fun chatEventToChunkLine(ev: ChatEvent, model: String): String? {
+        fun chunk(delta: JsonObject) = buildJsonObject {
+            put("id", "chatcmpl-flux")
+            put("object", "chat.completion.chunk")
+            put("model", model)
+            put(
+                "choices",
+                buildJsonArray {
+                    add(buildJsonObject { put("index", 0); put("delta", delta) })
+                },
+            )
+        }.toString()
+        return when (ev) {
+            is ChatEvent.Delta -> chunk(buildJsonObject { put("content", ev.text) })
+            is ChatEvent.ReasoningDelta -> chunk(buildJsonObject { put("reasoning_content", ev.text) })
+            is ChatEvent.Failed -> buildJsonObject {
+                put("error", buildJsonObject { put("message", ev.message) })
+            }.toString()
+            ChatEvent.Done -> null
+        }
     }
 
     private suspend fun ApplicationCall.respondOpenAiError(status: HttpStatusCode, message: String) {

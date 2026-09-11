@@ -59,6 +59,7 @@ import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Button
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -691,24 +692,37 @@ object ChatUiDefaults {
                     )
                 }
                 Column(Modifier.widthIn(max = 320.dp)) {
+                    // 生图消息：助手消息也可携带图片（模型产出）
+                    if (message.images.isNotEmpty()) {
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            modifier = Modifier.padding(bottom = 4.dp),
+                        ) {
+                            message.images.forEach { url ->
+                                MessageImage(url = url, onClick = env.showImage)
+                            }
+                        }
+                    }
                     val isLong = remember(message.content) {
                         message.content.lines().size > 12 || message.content.length > 600
                     }
                     var collapsed by rememberSaveable(message.id) { mutableStateOf(false) }
-                    Surface(
-                        color = MaterialTheme.colorScheme.surfaceVariant,
-                        shape = RoundedCornerShape(4.dp, 16.dp, 16.dp, 16.dp),
-                        modifier = Modifier.combinedClickable(
-                            onClick = { if (isLong) collapsed = !collapsed },
-                            onLongClick = { env.showDetail(message) },
-                        ),
-                    ) {
-                        Column(Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
-                            if (!message.reasoning.isNullOrBlank()) {
-                                ReasoningSection(message.reasoning, inProgress = false)
-                            }
-                            CollapsibleMessageBody(message.content, isLong, collapsed) {
-                                collapsed = !collapsed
+                    if (message.content.isNotBlank() || !message.reasoning.isNullOrBlank()) {
+                        Surface(
+                            color = MaterialTheme.colorScheme.surfaceVariant,
+                            shape = RoundedCornerShape(4.dp, 16.dp, 16.dp, 16.dp),
+                            modifier = Modifier.combinedClickable(
+                                onClick = { if (isLong) collapsed = !collapsed },
+                                onLongClick = { env.showDetail(message) },
+                            ),
+                        ) {
+                            Column(Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
+                                if (!message.reasoning.isNullOrBlank()) {
+                                    ReasoningSection(message.reasoning, inProgress = false)
+                                }
+                                CollapsibleMessageBody(message.content, isLong, collapsed) {
+                                    collapsed = !collapsed
+                                }
                             }
                         }
                     }
@@ -734,20 +748,21 @@ object ChatUiDefaults {
     fun StreamingBubble(env: ChatUiEnv) {
         val reasoning by env.vm.streamingReasoning.collectAsStateWithLifecycle()
         val content by env.vm.streamingText.collectAsStateWithLifecycle()
+        val generatingImage by env.vm.generatingImage.collectAsStateWithLifecycle()
 
         // 跟随滚动：视口已接近底部时才自动下滚到最新内容，避免打断用户上翻
-        LaunchedEffect(content, reasoning) {
+        LaunchedEffect(content, reasoning, generatingImage) {
             val info = env.listState.layoutInfo
             val last = info.totalItemsCount - 1
             val lastVisible = info.visibleItemsInfo.lastOrNull()?.index ?: return@LaunchedEffect
             if (lastVisible >= last - 1) env.listState.scrollBy(1_000_000f)
         }
 
-        StreamingBubbleContent(reasoning = reasoning, content = content)
+        StreamingBubbleContent(reasoning = reasoning, content = content, generatingImage = generatingImage)
     }
 
     @Composable
-    fun StreamingBubbleContent(reasoning: String, content: String) {
+    fun StreamingBubbleContent(reasoning: String, content: String, generatingImage: Boolean = false) {
         Column(Modifier.fillMaxWidth()) {
             // 头像在上方：助手 = 头像 + 名字
             Row(
@@ -756,7 +771,7 @@ object ChatUiDefaults {
             ) {
                 cn.luoluna.sweven.ai.ui.chat.AssistantAvatar(size = 24.dp)
                 Text(
-                    "回复中",
+                    if (generatingImage) "生成中" else "回复中",
                     style = MaterialTheme.typography.labelMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(start = 6.dp),
@@ -766,16 +781,30 @@ object ChatUiDefaults {
                 color = MaterialTheme.colorScheme.surfaceVariant,
                 shape = RoundedCornerShape(4.dp, 16.dp, 16.dp, 16.dp),
             ) {
-                Column(
-                    Modifier
-                        .widthIn(max = 320.dp)
-                        .padding(horizontal = 12.dp, vertical = 8.dp)
-                ) {
-                    if (reasoning.isNotBlank()) {
-                        ReasoningSection(reasoning, inProgress = content.isEmpty())
+                if (generatingImage) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+                    ) {
+                        CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
+                        Text(
+                            "正在生成图片，请稍候…",
+                            style = MaterialTheme.typography.bodyMedium,
+                            modifier = Modifier.padding(start = 8.dp),
+                        )
                     }
-                    if (content.isNotEmpty()) {
-                        Text(content + " ▍", style = MaterialTheme.typography.bodyMedium)
+                } else {
+                    Column(
+                        Modifier
+                            .widthIn(max = 320.dp)
+                            .padding(horizontal = 12.dp, vertical = 8.dp)
+                    ) {
+                        if (reasoning.isNotBlank()) {
+                            ReasoningSection(reasoning, inProgress = content.isEmpty())
+                        }
+                        if (content.isNotEmpty()) {
+                            Text(content + " ▍", style = MaterialTheme.typography.bodyMedium)
+                        }
                     }
                 }
             }

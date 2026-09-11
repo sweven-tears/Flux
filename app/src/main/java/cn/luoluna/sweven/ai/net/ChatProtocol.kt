@@ -1,5 +1,6 @@
 package cn.luoluna.sweven.ai.net
 
+import android.util.Base64
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
@@ -1046,5 +1047,63 @@ fun normalizeModelsBody(protocol: String, bodyText: String): String {
         buildJsonObject { put("data", JsonArray(data)) }.toString()
     } catch (_: Exception) {
         bodyText
+    }
+}
+
+// ==================== 图片生成 ====================
+
+/**
+ * 生图响应解析中间态：字节与临时 URL 二选一（url 形态由调用方立即下载转字节，避免链接过期），
+ * revisedText 为上游附带的改写提示（OpenAI revised_prompt / Gemini 文本 parts）。
+ */
+data class ImageGenPayload(
+    val bytes: ByteArray?,
+    val mimeType: String?,
+    val url: String?,
+    val revisedText: String?,
+)
+
+/**
+ * 解析生图响应：
+ * - openai：POST /images/generations → data[0] 的 b64_json 或 url（gpt-image 系恒 b64，智谱等回 url）
+ * - gemini：generateContent + responseModalities:[TEXT,IMAGE] → parts 中的 inlineData（base64）
+ */
+fun parseImageResponse(protocol: String, bodyText: String): ImageGenPayload {
+    val root = ChatJson.json.parseToJsonElement(bodyText).jsonObject
+    return when (protocol) {
+        ProviderProtocol.GEMINI -> {
+            val parts = (((root["candidates"] as? JsonArray)?.firstOrNull() as? JsonObject)
+                ?.get("content") as? JsonObject)?.get("parts") as? JsonArray
+                ?: throw ApiException("响应中没有图片内容")
+            val texts = StringBuilder()
+            var bytes: ByteArray? = null
+            var mime = "image/png"
+            for (el in parts) {
+                val part = el as? JsonObject ?: continue
+                (part["text"] as? JsonPrimitive)?.takeIf { it !is JsonNull }?.contentOrNull?.let(texts::append)
+                val inline = part["inlineData"] as? JsonObject ?: continue
+                val data = inline.stringAt("data") ?: continue
+                bytes = runCatching { Base64.decode(data, Base64.DEFAULT) }.getOrNull()
+                inline.stringAt("mimeType")?.let { mime = it }
+            }
+            if (bytes == null) throw ApiException("响应中没有图片内容")
+            ImageGenPayload(bytes, mime, null, texts.toString().takeIf { it.isNotBlank() })
+        }
+        else -> {
+            val first = (root["data"] as? JsonArray)?.firstOrNull() as? JsonObject
+                ?: throw ApiException("响应中没有图片内容")
+            val b64 = first.stringAt("b64_json")
+            val url = first.stringAt("url")
+            val revised = first.stringAt("revised_prompt")
+            when {
+                !b64.isNullOrBlank() -> ImageGenPayload(
+                    runCatching { Base64.decode(b64, Base64.DEFAULT) }.getOrNull()
+                        ?: throw ApiException("图片 base64 解码失败"),
+                    "image/png", null, revised,
+                )
+                !url.isNullOrBlank() -> ImageGenPayload(null, null, url, revised)
+                else -> throw ApiException("响应中没有图片内容")
+            }
+        }
     }
 }

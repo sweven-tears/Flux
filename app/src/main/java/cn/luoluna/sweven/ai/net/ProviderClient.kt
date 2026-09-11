@@ -6,7 +6,11 @@ import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonArray
+import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.put
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Call
@@ -20,6 +24,13 @@ data class TestResult(
     val latencyMs: Long,
     val modelCount: Int,
     val message: String,
+)
+
+/** 生图最终结果：图片字节 + MIME + 上游附带的改写提示（若有） */
+class GeneratedImage(
+    val bytes: ByteArray,
+    val mimeType: String,
+    val revisedText: String?,
 )
 
 sealed interface ChatEvent {
@@ -287,6 +298,87 @@ class ProviderClient {
                 }
                 toOpenAiChatResponse(protocol, ChatJson.json.parseToJsonElement(respBody).jsonObject)
             }
+        }
+    }
+
+    /**
+     * 文生图：openai 走 {base}/images/generations；gemini 走 generateContent + responseModalities。
+     * Anthropic 无生图接口（调用方提前拦截）。返回字节结果；上游回临时 URL 时立即下载，避免过期。
+     */
+    suspend fun generateImage(
+        baseUrl: String,
+        apiKey: String?,
+        model: String,
+        prompt: String,
+        extraHeaders: Map<String, String> = emptyMap(),
+        protocol: String = ProviderProtocol.OPENAI,
+    ): Result<GeneratedImage> = withContext(Dispatchers.IO) {
+        runCatching {
+            val base = baseUrl.trimEnd('/')
+            val (url, body) = when (protocol) {
+                ProviderProtocol.GEMINI -> "$base/models/${model.removePrefix("models/")}:generateContent" to
+                    buildJsonObject {
+                        put(
+                            "contents",
+                            buildJsonArray {
+                                add(
+                                    buildJsonObject {
+                                        put("parts", buildJsonArray { add(buildJsonObject { put("text", prompt) }) })
+                                    },
+                                )
+                            },
+                        )
+                        put(
+                            "generationConfig",
+                            buildJsonObject {
+                                put(
+                                    "responseModalities",
+                                    buildJsonArray { add(JsonPrimitive("TEXT")); add(JsonPrimitive("IMAGE")) },
+                                )
+                            },
+                        )
+                    }
+                else -> "$base/images/generations" to buildJsonObject {
+                    put("model", model)
+                    put("prompt", prompt)
+                    put("n", 1)
+                }
+            }
+            val request = Request.Builder()
+                .url(url)
+                .header("Accept", "application/json")
+                .apply {
+                    applyAuth(protocol, apiKey)
+                    extraHeaders.forEach { (k, v) -> header(k, v) }
+                }
+                .post(body.toString().toRequestBody("application/json; charset=utf-8".toMediaType()))
+                .build()
+            http.newCall(request).execute().use { resp ->
+                val respBody = resp.body?.string().orEmpty()
+                if (!resp.isSuccessful) {
+                    throw HttpApiException(resp.code, respBody, parseErrorMessage(resp.code, respBody))
+                }
+                val payload = parseImageResponse(protocol, respBody)
+                when {
+                    payload.bytes != null ->
+                        GeneratedImage(payload.bytes, payload.mimeType ?: "image/png", payload.revisedText)
+                    payload.url != null -> {
+                        val (bytes, mime) = downloadImageBytes(payload.url)
+                        GeneratedImage(bytes, mime, payload.revisedText)
+                    }
+                    else -> throw ApiException("响应中没有图片内容")
+                }
+            }
+        }
+    }
+
+    /** 下载厂商返回的临时图片 URL 为字节（部分厂商的 url 短时会过期） */
+    private suspend fun downloadImageBytes(url: String): Pair<ByteArray, String> = withContext(Dispatchers.IO) {
+        http.newCall(Request.Builder().url(url).get().build()).execute().use { resp ->
+            if (!resp.isSuccessful) throw ApiException("图片下载失败（HTTP ${resp.code}）")
+            val bytes = resp.body?.bytes() ?: throw ApiException("图片下载失败（空响应）")
+            val mime = resp.body?.contentType()?.let { "${it.type}/${it.subtype}" } ?: "image/png"
+            bytes to mime
         }
     }
 }

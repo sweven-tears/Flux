@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -19,6 +20,7 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Psychology
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.FilledIconButton
@@ -115,27 +117,39 @@ object FlatChatUiPlugin : ChatUiPlugin {
                     )
                 }
             } else {
-                // 助手：全宽无气泡，直接 Markdown；长消息仍支持折叠
+                // 助手：全宽无气泡，直接 Markdown；长消息仍支持折叠；生图消息图片在文本上方
                 Column(Modifier.fillMaxWidth()) {
+                    if (message.images.isNotEmpty()) {
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            modifier = Modifier.padding(start = 4.dp, bottom = 4.dp),
+                        ) {
+                            message.images.forEach { url ->
+                                ChatUiDefaults.MessageImage(url = url, onClick = env.showImage)
+                            }
+                        }
+                    }
                     val isLong = remember(message.content) {
                         message.content.lines().size > 12 || message.content.length > 600
                     }
                     var collapsed by rememberSaveable(message.id) { mutableStateOf(false) }
-                    Column(
-                        Modifier
-                            .fillMaxWidth()
-                            .clip(RoundedCornerShape(6.dp))
-                            .combinedClickable(
-                                onClick = { if (isLong) collapsed = !collapsed },
-                                onLongClick = { env.showDetail(message) },
-                            )
-                            .padding(horizontal = 4.dp, vertical = 4.dp),
-                    ) {
-                        if (!message.reasoning.isNullOrBlank()) {
-                            ReasoningSection(message.reasoning, inProgress = false)
-                        }
-                        ChatUiDefaults.CollapsibleMessageBody(message.content, isLong, collapsed) {
-                            collapsed = !collapsed
+                    if (message.content.isNotBlank() || !message.reasoning.isNullOrBlank()) {
+                        Column(
+                            Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(6.dp))
+                                .combinedClickable(
+                                    onClick = { if (isLong) collapsed = !collapsed },
+                                    onLongClick = { env.showDetail(message) },
+                                )
+                                .padding(horizontal = 4.dp, vertical = 4.dp),
+                        ) {
+                            if (!message.reasoning.isNullOrBlank()) {
+                                ReasoningSection(message.reasoning, inProgress = false)
+                            }
+                            ChatUiDefaults.CollapsibleMessageBody(message.content, isLong, collapsed) {
+                                collapsed = !collapsed
+                            }
                         }
                     }
                     ChatUiDefaults.MessageActionsRow(
@@ -152,7 +166,8 @@ object FlatChatUiPlugin : ChatUiPlugin {
     override val streamingBubble: (@Composable (ChatUiEnv) -> Unit) = { env ->
         val reasoning by env.vm.streamingReasoning.collectAsStateWithLifecycle()
         val content by env.vm.streamingText.collectAsStateWithLifecycle()
-        LaunchedEffect(content, reasoning) {
+        val generatingImage by env.vm.generatingImage.collectAsStateWithLifecycle()
+        LaunchedEffect(content, reasoning, generatingImage) {
             val info = env.listState.layoutInfo
             val last = info.totalItemsCount - 1
             val lastVisible = info.visibleItemsInfo.lastOrNull()?.index ?: return@LaunchedEffect
@@ -163,11 +178,18 @@ object FlatChatUiPlugin : ChatUiPlugin {
                 .fillMaxWidth()
                 .padding(horizontal = 4.dp, vertical = 4.dp),
         ) {
-            if (reasoning.isNotBlank()) {
-                ReasoningSection(reasoning, inProgress = content.isEmpty())
-            }
-            if (content.isNotEmpty()) {
-                MarkdownText(content + " ▍")
+            if (generatingImage) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    CircularProgressIndicator(Modifier.size(14.dp), strokeWidth = 2.dp)
+                    Text("正在生成图片，请稍候…", modifier = Modifier.padding(start = 8.dp))
+                }
+            } else {
+                if (reasoning.isNotBlank()) {
+                    ReasoningSection(reasoning, inProgress = content.isEmpty())
+                }
+                if (content.isNotEmpty()) {
+                    MarkdownText(content + " ▍")
+                }
             }
         }
     }
@@ -233,26 +255,39 @@ object MonoChatUiPlugin : ChatUiPlugin {
                 }
             } else {
                 Column(Modifier.fillMaxWidth()) {
-                    Surface(
-                        color = MaterialTheme.colorScheme.surface,
-                        shape = RoundedCornerShape(4.dp),
-                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
-                        modifier = Modifier
-                            .widthIn(max = 340.dp)
-                            .combinedClickable(
-                                onClick = {},
-                                onLongClick = { env.showDetail(message) },
-                            ),
-                    ) {
-                        Column(Modifier.padding(horizontal = 10.dp, vertical = 6.dp)) {
-                            if (!message.reasoning.isNullOrBlank()) {
-                                ReasoningSection(message.reasoning, inProgress = false)
+                    // 生图消息：图片在气泡上方
+                    if (message.images.isNotEmpty()) {
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            modifier = Modifier.padding(bottom = 4.dp),
+                        ) {
+                            message.images.forEach { url ->
+                                ChatUiDefaults.MessageImage(url = url, onClick = env.showImage)
                             }
-                            Text(
-                                message.content,
-                                style = MaterialTheme.typography.bodyMedium.copy(fontFamily = mono),
-                                color = MaterialTheme.colorScheme.onSurface,
-                            )
+                        }
+                    }
+                    if (message.content.isNotBlank() || !message.reasoning.isNullOrBlank()) {
+                        Surface(
+                            color = MaterialTheme.colorScheme.surface,
+                            shape = RoundedCornerShape(4.dp),
+                            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+                            modifier = Modifier
+                                .widthIn(max = 340.dp)
+                                .combinedClickable(
+                                    onClick = {},
+                                    onLongClick = { env.showDetail(message) },
+                                ),
+                        ) {
+                            Column(Modifier.padding(horizontal = 10.dp, vertical = 6.dp)) {
+                                if (!message.reasoning.isNullOrBlank()) {
+                                    ReasoningSection(message.reasoning, inProgress = false)
+                                }
+                                Text(
+                                    message.content,
+                                    style = MaterialTheme.typography.bodyMedium.copy(fontFamily = mono),
+                                    color = MaterialTheme.colorScheme.onSurface,
+                                )
+                            }
                         }
                     }
                     ChatUiDefaults.MessageActionsRow(
@@ -269,7 +304,8 @@ object MonoChatUiPlugin : ChatUiPlugin {
     override val streamingBubble: (@Composable (ChatUiEnv) -> Unit) = { env ->
         val reasoning by env.vm.streamingReasoning.collectAsStateWithLifecycle()
         val content by env.vm.streamingText.collectAsStateWithLifecycle()
-        LaunchedEffect(content, reasoning) {
+        val generatingImage by env.vm.generatingImage.collectAsStateWithLifecycle()
+        LaunchedEffect(content, reasoning, generatingImage) {
             val info = env.listState.layoutInfo
             val last = info.totalItemsCount - 1
             val lastVisible = info.visibleItemsInfo.lastOrNull()?.index ?: return@LaunchedEffect
@@ -285,14 +321,25 @@ object MonoChatUiPlugin : ChatUiPlugin {
                     .widthIn(max = 340.dp)
                     .padding(horizontal = 10.dp, vertical = 6.dp),
             ) {
-                if (reasoning.isNotBlank()) {
-                    ReasoningSection(reasoning, inProgress = content.isEmpty())
-                }
-                if (content.isNotEmpty()) {
-                    Text(
-                        content + " ▍",
-                        style = MaterialTheme.typography.bodyMedium.copy(fontFamily = FontFamily.Monospace),
-                    )
+                if (generatingImage) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        CircularProgressIndicator(Modifier.size(14.dp), strokeWidth = 2.dp)
+                        Text(
+                            "正在生成图片，请稍候…",
+                            style = MaterialTheme.typography.bodyMedium.copy(fontFamily = FontFamily.Monospace),
+                            modifier = Modifier.padding(start = 8.dp),
+                        )
+                    }
+                } else {
+                    if (reasoning.isNotBlank()) {
+                        ReasoningSection(reasoning, inProgress = content.isEmpty())
+                    }
+                    if (content.isNotEmpty()) {
+                        Text(
+                            content + " ▍",
+                            style = MaterialTheme.typography.bodyMedium.copy(fontFamily = FontFamily.Monospace),
+                        )
+                    }
                 }
             }
         }

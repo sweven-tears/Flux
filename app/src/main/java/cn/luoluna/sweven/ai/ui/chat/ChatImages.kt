@@ -50,6 +50,35 @@ object ChatImages {
             "data:image/jpeg;base64," + Base64.encodeToString(baos.toByteArray(), Base64.NO_WRAP)
         }.getOrNull()
     }
+
+    /** 将生成的图片字节压缩为 JPEG data URL（与 uriToDataUrl 同一存储形态，直接落库消息） */
+    suspend fun bytesToDataUrl(
+        bytes: ByteArray,
+        maxDim: Int = 1536,
+        quality: Int = 88,
+    ): String? = withContext(Dispatchers.IO) {
+        runCatching {
+            val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
+            var sample = 1
+            while (maxOf(bounds.outWidth, bounds.outHeight) / (sample * 2) >= maxDim) sample *= 2
+            val opts = BitmapFactory.Options().apply { inSampleSize = sample }
+            val src = BitmapFactory.decodeByteArray(bytes, 0, bytes.size, opts) ?: return@runCatching null
+            val scaled = if (maxOf(src.width, src.height) > maxDim) {
+                val scale = maxDim.toFloat() / maxOf(src.width, src.height)
+                Bitmap.createScaledBitmap(
+                    src,
+                    (src.width * scale).toInt().coerceAtLeast(1),
+                    (src.height * scale).toInt().coerceAtLeast(1),
+                    true,
+                )
+            } else src
+            val baos = ByteArrayOutputStream()
+            scaled.compress(Bitmap.CompressFormat.JPEG, quality, baos)
+            if (scaled !== src) scaled.recycle()
+            "data:image/jpeg;base64," + Base64.encodeToString(baos.toByteArray(), Base64.NO_WRAP)
+        }.getOrNull()
+    }
 }
 
 /** 解码 data URL 图片用于展示 */

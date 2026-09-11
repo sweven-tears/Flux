@@ -13,6 +13,7 @@ import cn.luoluna.sweven.ai.data.db.MessageDao
 import cn.luoluna.sweven.ai.data.db.MessageEntity
 import cn.luoluna.sweven.ai.data.db.ModelDao
 import cn.luoluna.sweven.ai.data.db.ModelEntity
+import cn.luoluna.sweven.ai.data.db.ModelType
 import cn.luoluna.sweven.ai.data.db.PresetDao
 import cn.luoluna.sweven.ai.data.db.PresetEntity
 import cn.luoluna.sweven.ai.data.db.ProviderDao
@@ -32,6 +33,7 @@ import cn.luoluna.sweven.ai.data.repo.isSelfGatewayUrl
 import cn.luoluna.sweven.ai.data.repo.orderCandidates
 import cn.luoluna.sweven.ai.net.AdvancedParams
 import cn.luoluna.sweven.ai.net.ChatEvent
+import cn.luoluna.sweven.ai.net.HttpApiException
 import cn.luoluna.sweven.ai.net.ProviderClient
 import cn.luoluna.sweven.ai.net.ProviderProtocol
 import cn.luoluna.sweven.ai.net.ThinkParser
@@ -223,6 +225,10 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
 
     private val _streaming = MutableStateFlow(false)
     val streaming: StateFlow<Boolean> = _streaming
+
+    /** 正在生图（复用流式气泡位置展示「生成中…」，输入栏同样显示停止按钮） */
+    private val _generatingImage = MutableStateFlow(false)
+    val generatingImage: StateFlow<Boolean> = _generatingImage
 
     private val _streamingText = MutableStateFlow("")
     val streamingText: StateFlow<String> = _streamingText
@@ -432,10 +438,14 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    /** 按目标发起流式请求：单个模型直连；smartAi 走回退链 */
+    /** 按目标发起请求：生图模型走文生图分支；其余单模型直连；smartAi 走回退链 */
     private suspend fun startStreaming(convId: Long, target: ChatTarget) {
         when (target) {
-            is ChatTarget.Single -> streamSingle(convId, target.picker)
+            is ChatTarget.Single -> if (target.picker.model.type == ModelType.IMAGE) {
+                generateImage(convId, target.picker)
+            } else {
+                streamSingle(convId, target.picker)
+            }
             ChatTarget.SmartAi -> streamSmart(convId)
         }
     }
@@ -461,7 +471,10 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         conversation: ConversationEntity?,
         history: List<MessageEntity>,
     ): BuiltBody {
-        var chatMessages = history.map { Triple(it.role, it.content, it.images) }
+        var chatMessages = history.map {
+            // 助手消息里的图片是模型产出（生图结果），不回传上游：Anthropic 不允许 assistant 携带图片
+            Triple(it.role, it.content, if (it.role == Role.ASSISTANT) emptyList() else it.images)
+        }
         val systemPrompt = conversation?.systemPrompt?.takeIf { it.isNotBlank() }
         var dropped = 0
         var strippedImages = 0
@@ -544,6 +557,84 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    /**
+     * 文生图：目标为生图模型（type=image）时的发送分支。
+     * 取会话最近一条用户消息作为提示词；生成中复用流式气泡位置显示占位，停止按钮可中断；
+     * 成功落库一条带图助手消息（图片经压缩转 data URL，与用户附图同一存储形态）。
+     */
+    private suspend fun generateImage(convId: Long, picker: PickerModel) {
+        // 选择器数据是发送时刻的快照，落库前以最新状态复核厂商可用性
+        val provider = providerDao.byId(picker.provider.id)
+        if (provider == null || !provider.enabled) {
+            _error.value = ChatError("厂商「${picker.provider.alias}」已被停用，请到「厂商」页启用后再发送")
+            return
+        }
+        if (provider.protocol == ProviderProtocol.ANTHROPIC) {
+            _error.value = ChatError("Anthropic（Claude）暂不提供图片生成接口，请换用支持生图的厂商")
+            return
+        }
+        val key = router.activeKey(provider)
+        if (key == null || key.key.isBlank()) {
+            _error.value = ChatError("厂商「${picker.provider.alias}」未配置 API Key，请到「厂商」页添加")
+            return
+        }
+        val prompt = messageDao.forConversation(convId).lastOrNull { it.role == Role.USER }?.content
+        if (prompt.isNullOrBlank()) {
+            _error.value = ChatError("请先输入图片描述再生成")
+            return
+        }
+
+        _error.value = null
+        _generatingImage.value = true
+        _streaming.value = true
+        activeStreamModel = provider.id to picker.model.name
+        sendJob = viewModelScope.launch {
+            var failed: ChatError? = null
+            var imageDataUrl: String? = null
+            var note: String? = null
+            try {
+                client.generateImage(
+                    baseUrl = provider.baseUrl,
+                    apiKey = key.key,
+                    model = picker.model.name,
+                    prompt = prompt,
+                    extraHeaders = parseCustomHeaders(picker.model.customHeaders),
+                    protocol = provider.protocol,
+                ).onSuccess { img ->
+                    imageDataUrl = ChatImages.bytesToDataUrl(img.bytes)
+                    note = img.revisedText?.takeIf { it.isNotBlank() }
+                    if (imageDataUrl == null) failed = ChatError("生成的图片无法解析或保存")
+                }.onFailure { e ->
+                    failed = when (e) {
+                        is HttpApiException -> ChatError(e.message ?: "生图失败", e.httpCode, e.rawBody)
+                        else -> ChatError(e.message ?: e.javaClass.simpleName)
+                    }
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                failed = ChatError(e.message ?: e.javaClass.simpleName)
+            }
+            _streaming.value = false
+            _generatingImage.value = false
+            val url = imageDataUrl
+            if (url != null) {
+                messageDao.insert(
+                    MessageEntity(
+                        conversationId = convId,
+                        role = Role.ASSISTANT,
+                        content = note ?: "",
+                        imagesJson = MessageEntity.imagesJsonOf(listOf(url)),
+                        providerId = activeStreamModel?.first,
+                        modelName = activeStreamModel?.second,
+                    )
+                )
+                conversationDao.touch(convId, System.currentTimeMillis())
+            }
+            activeStreamModel = null
+            failed?.let { _error.value = it }
+        }
+    }
     /** smartAi：按智能路由候选顺序发起请求，首字前失败/超时自动切换下一个 */
     private suspend fun streamSmart(convId: Long) {
         val routes = smartRouteDao.all().filter { it.enabled }
@@ -696,6 +787,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
     private fun cancelStreamingDiscard() {
         sendJob?.cancel()
         _streaming.value = false
+        _generatingImage.value = false
         _streamingText.value = ""
         _streamingReasoning.value = ""
         activeStreamModel = null
@@ -821,6 +913,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         activeStreamModel = null
         sendJob?.cancel()
         _streaming.value = false
+        _generatingImage.value = false
         _streamingText.value = ""
         _streamingReasoning.value = ""
         if (partial.isNotEmpty() || partialReasoning != null) {
@@ -877,6 +970,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         activeStreamModel = null
         sendJob?.cancel()
         _streaming.value = false
+        _generatingImage.value = false
         _streamingText.value = ""
         _streamingReasoning.value = ""
         if (partial.isNotEmpty() || partialReasoning != null) {

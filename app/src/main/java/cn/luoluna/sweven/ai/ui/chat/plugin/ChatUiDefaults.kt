@@ -494,7 +494,7 @@ object ChatUiDefaults {
                 state = env.listState,
                 modifier = Modifier.fillMaxSize(),
                 contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(16.dp),
             ) {
                 items(env.messages, key = { it.id }) { msg ->
                     env.renderMessageBubble(msg)
@@ -600,6 +600,77 @@ object ChatUiDefaults {
 
     // ---------------- 单条消息气泡 ----------------
 
+    /** 用户消息头：名字 + 头像（右对齐由调用方 Column 的 Alignment.End 决定） */
+    @Composable
+    fun UserMessageHeader(env: ChatUiEnv) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.padding(bottom = 4.dp),
+        ) {
+            Text(
+                env.userName?.ifBlank { null } ?: "我",
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            cn.luoluna.sweven.ai.ui.chat.UserAvatar(
+                name = env.userName,
+                avatarDataUrl = env.userAvatar,
+                size = 24.dp,
+                modifier = Modifier.padding(start = 6.dp),
+            )
+        }
+    }
+
+    /** 助手消息头：头像 + 名字（按消息记录的模型显示当时回复者，而非当前选中模型） */
+    @Composable
+    fun AssistantMessageHeader(env: ChatUiEnv, message: MessageEntity) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.padding(bottom = 4.dp),
+        ) {
+            val recorded = message.providerId?.let { pid ->
+                message.modelName?.let { name -> env.modelsByKey[pid to name] }
+            }
+            if (recorded != null) {
+                cn.luoluna.sweven.ai.ui.chat.InitialAvatar(
+                    name = recorded.displayName,
+                    size = 24.dp,
+                )
+            } else {
+                cn.luoluna.sweven.ai.ui.chat.AssistantAvatar(size = 24.dp)
+            }
+            Text(
+                when {
+                    recorded != null -> recorded.displayName
+                    // 模型已删除：保留原始模型名，头像无法匹配回落机器人
+                    message.modelName != null -> message.modelName
+                    // 旧数据未记录模型：诚实显示"助手"，不按会话当前模型猜测
+                    else -> "助手"
+                },
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(start = 6.dp),
+            )
+        }
+    }
+
+    /** 流式消息头：机器人头像 + 状态文案 */
+    @Composable
+    fun StreamingMessageHeader(generatingImage: Boolean) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.padding(bottom = 4.dp),
+        ) {
+            cn.luoluna.sweven.ai.ui.chat.AssistantAvatar(size = 24.dp)
+            Text(
+                if (generatingImage) "生成中" else "回复中",
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(start = 6.dp),
+            )
+        }
+    }
+
     @Composable
     fun MessageBubble(env: ChatUiEnv, message: MessageEntity) {
         if (message.role == Role.USER) {
@@ -607,23 +678,7 @@ object ChatUiDefaults {
                 horizontalAlignment = Alignment.End,
                 modifier = Modifier.fillMaxWidth(),
             ) {
-                // 头像在上方：用户 = 名字 + 头像（右对齐）
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier.padding(bottom = 4.dp),
-                ) {
-                    Text(
-                        env.userName?.ifBlank { null } ?: "我",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                    cn.luoluna.sweven.ai.ui.chat.UserAvatar(
-                        name = env.userName,
-                        avatarDataUrl = env.userAvatar,
-                        size = 24.dp,
-                        modifier = Modifier.padding(start = 6.dp),
-                    )
-                }
+                UserMessageHeader(env)
                 if (message.images.isNotEmpty()) {
                     Row(
                         horizontalArrangement = Arrangement.spacedBy(6.dp),
@@ -662,35 +717,7 @@ object ChatUiDefaults {
             }
         } else {
             Column(Modifier.fillMaxWidth()) {
-                // 头像在上方：助手 = 头像 + 名字（按消息记录的模型显示当时回复者，而非当前选中模型）
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier.padding(bottom = 4.dp),
-                ) {
-                    val recorded = message.providerId?.let { pid ->
-                        message.modelName?.let { name -> env.modelsByKey[pid to name] }
-                    }
-                    if (recorded != null) {
-                        cn.luoluna.sweven.ai.ui.chat.InitialAvatar(
-                            name = recorded.displayName,
-                            size = 24.dp,
-                        )
-                    } else {
-                        cn.luoluna.sweven.ai.ui.chat.AssistantAvatar(size = 24.dp)
-                    }
-                    Text(
-                        when {
-                            recorded != null -> recorded.displayName
-                            // 模型已删除：保留原始模型名，头像无法匹配回落机器人
-                            message.modelName != null -> message.modelName
-                            // 旧数据未记录模型：诚实显示"助手"，不按会话当前模型猜测
-                            else -> "助手"
-                        },
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.padding(start = 6.dp),
-                    )
-                }
+                AssistantMessageHeader(env, message)
                 Column(Modifier.widthIn(max = 320.dp)) {
                     // 生图消息：助手消息也可携带图片（模型产出）
                     if (message.images.isNotEmpty()) {
@@ -764,19 +791,7 @@ object ChatUiDefaults {
     @Composable
     fun StreamingBubbleContent(reasoning: String, content: String, generatingImage: Boolean = false) {
         Column(Modifier.fillMaxWidth()) {
-            // 头像在上方：助手 = 头像 + 名字
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier.padding(bottom = 4.dp),
-            ) {
-                cn.luoluna.sweven.ai.ui.chat.AssistantAvatar(size = 24.dp)
-                Text(
-                    if (generatingImage) "生成中" else "回复中",
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(start = 6.dp),
-                )
-            }
+            StreamingMessageHeader(generatingImage)
             Surface(
                 color = MaterialTheme.colorScheme.surfaceVariant,
                 shape = RoundedCornerShape(4.dp, 16.dp, 16.dp, 16.dp),

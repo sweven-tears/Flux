@@ -77,6 +77,7 @@ object FlatChatUiPlugin : ChatUiPlugin {
                     horizontalAlignment = Alignment.End,
                     modifier = Modifier.fillMaxWidth(),
                 ) {
+                    ChatUiDefaults.UserMessageHeader(env)
                     if (message.images.isNotEmpty()) {
                         Row(
                             horizontalArrangement = Arrangement.spacedBy(6.dp),
@@ -119,6 +120,7 @@ object FlatChatUiPlugin : ChatUiPlugin {
             } else {
                 // 助手：全宽无气泡，直接 Markdown；长消息仍支持折叠；生图消息图片在文本上方
                 Column(Modifier.fillMaxWidth()) {
+                    ChatUiDefaults.AssistantMessageHeader(env, message)
                     if (message.images.isNotEmpty()) {
                         Row(
                             horizontalArrangement = Arrangement.spacedBy(6.dp),
@@ -178,6 +180,7 @@ object FlatChatUiPlugin : ChatUiPlugin {
                 .fillMaxWidth()
                 .padding(horizontal = 4.dp, vertical = 4.dp),
         ) {
+            ChatUiDefaults.StreamingMessageHeader(generatingImage)
             if (generatingImage) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     CircularProgressIndicator(Modifier.size(14.dp), strokeWidth = 2.dp)
@@ -213,6 +216,7 @@ object MonoChatUiPlugin : ChatUiPlugin {
                     horizontalAlignment = Alignment.End,
                     modifier = Modifier.fillMaxWidth(),
                 ) {
+                    ChatUiDefaults.UserMessageHeader(env)
                     if (message.images.isNotEmpty()) {
                         Row(
                             horizontalArrangement = Arrangement.spacedBy(6.dp),
@@ -255,6 +259,7 @@ object MonoChatUiPlugin : ChatUiPlugin {
                 }
             } else {
                 Column(Modifier.fillMaxWidth()) {
+                    ChatUiDefaults.AssistantMessageHeader(env, message)
                     // 生图消息：图片在气泡上方
                     if (message.images.isNotEmpty()) {
                         Row(
@@ -311,34 +316,37 @@ object MonoChatUiPlugin : ChatUiPlugin {
             val lastVisible = info.visibleItemsInfo.lastOrNull()?.index ?: return@LaunchedEffect
             if (lastVisible >= last - 1) env.listState.scrollBy(1_000_000f)
         }
-        Surface(
-            color = MaterialTheme.colorScheme.surface,
-            shape = RoundedCornerShape(4.dp),
-            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
-        ) {
-            Column(
-                Modifier
-                    .widthIn(max = 340.dp)
-                    .padding(horizontal = 10.dp, vertical = 6.dp),
+        Column(Modifier.fillMaxWidth()) {
+            ChatUiDefaults.StreamingMessageHeader(generatingImage)
+            Surface(
+                color = MaterialTheme.colorScheme.surface,
+                shape = RoundedCornerShape(4.dp),
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
             ) {
-                if (generatingImage) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        CircularProgressIndicator(Modifier.size(14.dp), strokeWidth = 2.dp)
-                        Text(
-                            "正在生成图片，请稍候…",
-                            style = MaterialTheme.typography.bodyMedium.copy(fontFamily = FontFamily.Monospace),
-                            modifier = Modifier.padding(start = 8.dp),
-                        )
-                    }
-                } else {
-                    if (reasoning.isNotBlank()) {
-                        ReasoningSection(reasoning, inProgress = content.isEmpty())
-                    }
-                    if (content.isNotEmpty()) {
-                        Text(
-                            content + " ▍",
-                            style = MaterialTheme.typography.bodyMedium.copy(fontFamily = FontFamily.Monospace),
-                        )
+                Column(
+                    Modifier
+                        .widthIn(max = 340.dp)
+                        .padding(horizontal = 10.dp, vertical = 6.dp),
+                ) {
+                    if (generatingImage) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            CircularProgressIndicator(Modifier.size(14.dp), strokeWidth = 2.dp)
+                            Text(
+                                "正在生成图片，请稍候…",
+                                style = MaterialTheme.typography.bodyMedium.copy(fontFamily = FontFamily.Monospace),
+                                modifier = Modifier.padding(start = 8.dp),
+                            )
+                        }
+                    } else {
+                        if (reasoning.isNotBlank()) {
+                            ReasoningSection(reasoning, inProgress = content.isEmpty())
+                        }
+                        if (content.isNotEmpty()) {
+                            Text(
+                                content + " ▍",
+                                style = MaterialTheme.typography.bodyMedium.copy(fontFamily = FontFamily.Monospace),
+                            )
+                        }
                     }
                 }
             }

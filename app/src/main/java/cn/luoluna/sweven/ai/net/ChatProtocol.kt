@@ -598,13 +598,46 @@ object ProviderProtocol {
 /** Anthropic 协议的版本头 */
 const val ANTHROPIC_VERSION = "2023-06-01"
 
-/** 各协议 SSE 帧的归一化解析结果：正文增量 / 思考增量 / 错误 / 流结束 */
+/** 各协议 SSE 帧的归一化解析结果：正文增量 / 思考增量 / 错误 / 流结束 / token 用量 */
 data class StreamChunk(
     val text: String? = null,
     val reasoning: String? = null,
     val error: String? = null,
     val done: Boolean = false,
+    val usage: UsageInfo? = null,
 )
+
+/**
+ * 归一化的 token 用量（三协议流式/非流式共用）。
+ * 各字段可空：流式里 usage 可能拆在多帧（如 Anthropic 首帧给输入、末帧给输出），
+ * 消费方按「最后非空值覆盖」逐字段合并。
+ */
+data class UsageInfo(
+    val promptTokens: Long? = null,
+    val completionTokens: Long? = null,
+    /** prompt 中命中缓存的 token 数（OpenAI prompt_tokens_details.cached_tokens / Anthropic cache_read / Gemini cachedContent） */
+    val cachedTokens: Long? = null,
+)
+
+/** 解析 OpenAI 兼容流式尾帧（或非流式响应体）中的 usage，含缓存命中明细；无 usage 字段返回 null */
+fun parseOpenAiUsage(payload: String): UsageInfo? = try {
+    val obj = ChatJson.json.parseToJsonElement(payload).jsonObject
+    val usage = obj["usage"] as? JsonObject ?: return null
+    fun num(vararg keys: String): Long? {
+        var el: JsonElement? = usage
+        for (k in keys) {
+            el = (el as? JsonObject)?.get(k) ?: return null
+        }
+        return (el as? JsonPrimitive)?.takeIf { it !is JsonNull }?.contentOrNull?.toLongOrNull()
+    }
+    val prompt = num("prompt_tokens")
+    val completion = num("completion_tokens")
+    val cached = num("prompt_tokens_details", "cached_tokens")
+    if (prompt == null && completion == null && cached == null) null
+    else UsageInfo(prompt, completion, cached)
+} catch (_: Exception) {
+    null
+}
 
 /**
  * 解析 Gemini streamGenerateContent 的单个 SSE 帧（GenerateContentResponse JSON）。
@@ -613,9 +646,20 @@ data class StreamChunk(
 fun parseGeminiChunk(payload: String): StreamChunk = try {
     val obj = ChatJson.json.parseToJsonElement(payload).jsonObject
     obj.stringAt("error", "message")?.let { return StreamChunk(error = it) }
-    val candidates = obj["candidates"] as? JsonArray ?: return StreamChunk()
+    // usageMetadata 常出现在末帧，可能与 candidates 同帧，也可能独立成帧，先于 candidates 早退解析
+    val usage = (obj["usageMetadata"] as? JsonObject)?.let { u ->
+        fun num(key: String) = (u[key] as? JsonPrimitive)?.takeIf { it !is JsonNull }?.contentOrNull?.toLongOrNull()
+        val candidatesT = num("candidatesTokenCount")
+        val thoughtsT = num("thoughtsTokenCount")
+        UsageInfo(
+            promptTokens = num("promptTokenCount"),
+            completionTokens = if (candidatesT != null || thoughtsT != null) (candidatesT ?: 0) + (thoughtsT ?: 0) else null,
+            cachedTokens = num("cachedContentTokenCount"),
+        )
+    }
+    val candidates = obj["candidates"] as? JsonArray ?: return StreamChunk(usage = usage)
     val content = (candidates.firstOrNull() as? JsonObject)?.get("content") as? JsonObject
-    val parts = content?.get("parts") as? JsonArray ?: return StreamChunk()
+    val parts = content?.get("parts") as? JsonArray ?: return StreamChunk(usage = usage)
     val text = StringBuilder()
     val thinking = StringBuilder()
     for (el in parts) {
@@ -627,6 +671,7 @@ fun parseGeminiChunk(payload: String): StreamChunk = try {
     StreamChunk(
         text = text.toString().takeIf { it.isNotEmpty() },
         reasoning = thinking.toString().takeIf { it.isNotEmpty() },
+        usage = usage,
     )
 } catch (_: Exception) {
     StreamChunk()
@@ -638,11 +683,30 @@ fun parseGeminiChunk(payload: String): StreamChunk = try {
  */
 fun parseAnthropicChunk(payload: String): StreamChunk = try {
     val obj = ChatJson.json.parseToJsonElement(payload).jsonObject
+    fun num(usage: JsonObject?, key: String) =
+        (usage?.get(key) as? JsonPrimitive)?.takeIf { it !is JsonNull }?.contentOrNull?.toLongOrNull()
     when (obj.stringAt("type")) {
         "content_block_delta" -> when (obj.stringAt("delta", "type")) {
             "text_delta" -> StreamChunk(text = obj.stringAt("delta", "text"))
             "thinking_delta" -> StreamChunk(reasoning = obj.stringAt("delta", "thinking"))
             else -> StreamChunk()
+        }
+        // 输入 token 在 message_start 的 message.usage（output_tokens 此处恒为 1，忽略）；缓存命中一并带出
+        "message_start" -> {
+            val usage = (obj["message"] as? JsonObject)?.get("usage") as? JsonObject
+            StreamChunk(
+                usage = usage?.let {
+                    UsageInfo(
+                        promptTokens = num(it, "input_tokens"),
+                        cachedTokens = num(it, "cache_read_input_tokens"),
+                    )
+                },
+            )
+        }
+        // 输出 token 在 message_delta 的 usage.output_tokens（累计值，最后一帧为准）
+        "message_delta" -> {
+            val usage = obj["usage"] as? JsonObject
+            StreamChunk(usage = usage?.let { UsageInfo(completionTokens = num(it, "output_tokens")) })
         }
         "message_stop" -> StreamChunk(done = true)
         "error" -> StreamChunk(error = obj.stringAt("error", "message") ?: "上游错误")

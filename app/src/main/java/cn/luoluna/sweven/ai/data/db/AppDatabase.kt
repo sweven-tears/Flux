@@ -20,7 +20,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         PresetEntity::class,
         RequestLogEntity::class,
     ],
-    version = 12,
+    version = 13,
     exportSchema = false,
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -166,11 +166,22 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        /** v12 → v13：消息表增加 token 用量与耗时字段（助手消息的消耗展示） */
+        private val MIGRATION_12_13 = object : Migration(12, 13) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE `messages` ADD COLUMN `promptTokens` INTEGER")
+                db.execSQL("ALTER TABLE `messages` ADD COLUMN `completionTokens` INTEGER")
+                db.execSQL("ALTER TABLE `messages` ADD COLUMN `cachedTokens` INTEGER")
+                db.execSQL("ALTER TABLE `messages` ADD COLUMN `ttftMs` INTEGER")
+                db.execSQL("ALTER TABLE `messages` ADD COLUMN `totalMs` INTEGER")
+            }
+        }
+
         fun build(context: Context): AppDatabase =
             Room.databaseBuilder(context, AppDatabase::class.java, "flux.db")
                 .addMigrations(
-                    MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7,
-                    MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12,
+                    MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_6_7,
+                    MIGRATION_7_8, MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13,
                 )
                 .fallbackToDestructiveMigration()
                 .build()

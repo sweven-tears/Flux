@@ -4,6 +4,7 @@ import cn.luoluna.sweven.ai.data.SmartModes
 import cn.luoluna.sweven.ai.net.ChatEvent
 import cn.luoluna.sweven.ai.net.ProviderClient
 import cn.luoluna.sweven.ai.net.ProviderProtocol
+import cn.luoluna.sweven.ai.net.UsageInfo
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.Channel
@@ -53,6 +54,9 @@ sealed interface SmartEvent {
     ) : SmartEvent
     data class Delta(val text: String) : SmartEvent
     data class ReasoningDelta(val text: String) : SmartEvent
+
+    /** 胜出候选的 usage 统计（透传上游，各字段可空，按「最后非空值」合并） */
+    data class Usage(val info: UsageInfo) : SmartEvent
     data object Done : SmartEvent
 
     /** 终态失败：全部候选耗尽，或已开始输出后中断（不再回退）；中断自上游时附带其 HTTP 详情 */
@@ -205,6 +209,10 @@ class SmartRouteExecutor(private val client: ProviderClient) {
                                     firstTokenMs = System.currentTimeMillis() - startedAt
                                 }
                                 send(SmartEvent.ReasoningDelta(ev.text))
+                            }
+                            is ChatEvent.Usage -> {
+                                // usage 不计入内容事件（Anthropic 首帧即带输入 token），只透传给消费方
+                                send(SmartEvent.Usage(ev.info))
                             }
                             is ChatEvent.Failed -> {
                                 if (gotContent) {

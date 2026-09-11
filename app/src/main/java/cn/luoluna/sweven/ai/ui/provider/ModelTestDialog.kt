@@ -431,6 +431,7 @@ private suspend fun runStreamTest(
                 if (firstTokenAt < 0) firstTokenAt = System.currentTimeMillis() - started
             }
             is ChatEvent.Failed -> throw RuntimeException(ev.message)
+            is ChatEvent.Usage -> Unit
             ChatEvent.Done -> Unit
         }
     }

@@ -116,6 +116,7 @@ object FlatChatUiPlugin : ChatUiPlugin {
                         onRegenerate = { env.vm.regenerateFrom(message) },
                         onMore = { env.showMessageActions(message) },
                     )
+                    ChatUiDefaults.MessageUsageRow(message, alignEnd = true)
                 }
             } else {
                 // 助手：全宽无气泡，直接 Markdown；长消息仍支持折叠；生图消息图片在文本上方
@@ -161,6 +162,7 @@ object FlatChatUiPlugin : ChatUiPlugin {
                         onRegenerate = { env.vm.regenerateFrom(message) },
                         onMore = { env.showMessageActions(message) },
                     )
+                    ChatUiDefaults.MessageUsageRow(message, alignEnd = false)
                 }
             }
         }
@@ -256,6 +258,7 @@ object MonoChatUiPlugin : ChatUiPlugin {
                         onRegenerate = { env.vm.regenerateFrom(message) },
                         onMore = { env.showMessageActions(message) },
                     )
+                    ChatUiDefaults.MessageUsageRow(message, alignEnd = true)
                 }
             } else {
                 Column(Modifier.fillMaxWidth()) {
@@ -302,6 +305,7 @@ object MonoChatUiPlugin : ChatUiPlugin {
                         onRegenerate = { env.vm.regenerateFrom(message) },
                         onMore = { env.showMessageActions(message) },
                     )
+                    ChatUiDefaults.MessageUsageRow(message, alignEnd = false)
                 }
             }
         }

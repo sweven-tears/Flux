@@ -38,8 +38,10 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Chat
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.ArrowDownward
 import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.ArrowUpward
+import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.CloseFullscreen
@@ -56,6 +58,7 @@ import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Psychology
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Button
@@ -102,6 +105,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import java.util.Locale
 import cn.luoluna.sweven.ai.data.db.ConversationEntity
 import cn.luoluna.sweven.ai.data.db.MessageEntity
 import cn.luoluna.sweven.ai.data.db.PresetEntity
@@ -714,6 +718,7 @@ object ChatUiDefaults {
                     onRegenerate = { env.vm.regenerateFrom(message) },
                     onMore = { env.showMessageActions(message) },
                 )
+                MessageUsageRow(message, alignEnd = true)
             }
         } else {
             Column(Modifier.fillMaxWidth()) {
@@ -761,6 +766,7 @@ object ChatUiDefaults {
                     onRegenerate = { env.vm.regenerateFrom(message) },
                     onMore = { env.showMessageActions(message) },
                 )
+                MessageUsageRow(message, alignEnd = false)
             }
         }
     }
@@ -1127,6 +1133,81 @@ object ChatUiDefaults {
             SmallMessageAction(Icons.Filled.Refresh, "重新生成", enabled, onRegenerate)
             SmallMessageAction(Icons.Filled.MoreVert, "更多", enabled, onMore)
         }
+    }
+
+    /**
+     * 助手消息正下方的 token 消耗行：上传 / 下载 / 速度 / 生成耗时。
+     * 无 usage 数据（旧消息、生图、厂商不回传）时不渲染。
+     */
+    @Composable
+    fun MessageUsageRow(message: MessageEntity, alignEnd: Boolean) {
+        val prompt = message.promptTokens
+        val completion = message.completionTokens
+        if (prompt == null && completion == null) return
+        val totalSec = message.totalMs?.takeIf { it > 0 }?.let { it / 1000.0 }
+        Row(
+            horizontalArrangement = if (alignEnd) Arrangement.End else Arrangement.Start,
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(top = 2.dp),
+        ) {
+            if (prompt != null) {
+                UsageItem(
+                    icon = Icons.Filled.ArrowUpward,
+                    text = buildString {
+                        append(formatTokenCount(prompt))
+                        append(" tokens")
+                        message.cachedTokens?.takeIf { it > 0 }?.let {
+                            append(" (${formatTokenCount(it)} cached)")
+                        }
+                    },
+                )
+            }
+            if (completion != null) {
+                UsageItem(
+                    icon = Icons.Filled.ArrowDownward,
+                    text = "${formatTokenCount(completion)} tokens",
+                )
+                // 速度 = 输出 token ÷ 总耗时（与厂商口径一致的端到端速度）
+                if (totalSec != null) {
+                    UsageItem(
+                        icon = Icons.Filled.Bolt,
+                        text = String.format(Locale.US, "%.1f tok/s", completion / totalSec),
+                    )
+                }
+            }
+            if (totalSec != null) {
+                UsageItem(
+                    icon = Icons.Filled.Schedule,
+                    text = String.format(Locale.US, "%.1fs", totalSec),
+                )
+            }
+        }
+    }
+
+    @Composable
+    private fun UsageItem(icon: ImageVector, text: String) {
+        Icon(
+            icon,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.size(12.dp),
+        )
+        Text(
+            text,
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(start = 3.dp, end = 12.dp),
+        )
+    }
+
+    /** token 数紧凑格式：≥1000 转 K 保留一位小数（去尾零），如 3.3K / 514 */
+    private fun formatTokenCount(n: Long): String = if (n >= 1000) {
+        val k = n / 1000.0
+        if (k % 1.0 == 0.0) "${k.toInt()}K" else String.format(Locale.US, "%.1fK", k)
+    } else {
+        n.toString()
     }
 
     @Composable

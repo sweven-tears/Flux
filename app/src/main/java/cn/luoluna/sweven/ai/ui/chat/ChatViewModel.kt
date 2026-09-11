@@ -36,6 +36,7 @@ import cn.luoluna.sweven.ai.net.ChatEvent
 import cn.luoluna.sweven.ai.net.HttpApiException
 import cn.luoluna.sweven.ai.net.ProviderClient
 import cn.luoluna.sweven.ai.net.ProviderProtocol
+import cn.luoluna.sweven.ai.net.UsageInfo
 import cn.luoluna.sweven.ai.net.ThinkParser
 import cn.luoluna.sweven.ai.net.applyBuiltinTools
 import cn.luoluna.sweven.ai.net.applyThinkingDepth
@@ -64,6 +65,7 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 
 /** 模型选择器条目：厂商 + 模型 */
 data class PickerModel(val provider: ProviderEntity, val model: ModelEntity) {
@@ -292,6 +294,50 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
      */
     @Volatile private var activeStreamModel: Pair<Long, String>? = null
 
+    // ---- 本次流式的用量与耗时统计（startStreaming 时重置，落库后清空） ----
+    private var streamStartedAt = 0L
+    private var streamFirstTokenAt = 0L
+    private var streamUsage: UsageInfo? = null
+
+    private fun beginStreamStats() {
+        streamStartedAt = System.currentTimeMillis()
+        streamFirstTokenAt = 0L
+        streamUsage = null
+    }
+
+    /** 首个内容/思考增量到达时打点首字时间（重复调用只取第一次） */
+    private fun markFirstToken() {
+        if (streamFirstTokenAt == 0L && streamStartedAt > 0L) {
+            streamFirstTokenAt = System.currentTimeMillis()
+        }
+    }
+
+    /** usage 各字段按「最后非空值」合并（Anthropic 首帧给输入、末帧给输出；OpenAI/Gemini 单帧全量） */
+    private fun mergeStreamUsage(info: UsageInfo) {
+        val cur = streamUsage
+        streamUsage = UsageInfo(
+            promptTokens = info.promptTokens ?: cur?.promptTokens,
+            completionTokens = info.completionTokens ?: cur?.completionTokens,
+            cachedTokens = info.cachedTokens ?: cur?.cachedTokens,
+        )
+    }
+
+    /** 快照本次统计（供消息落库），并复位为未开始状态 */
+    private fun takeStreamStats(): StreamStats {
+        val started = streamStartedAt
+        val stats = StreamStats(
+            usage = streamUsage,
+            ttftMs = if (started > 0L && streamFirstTokenAt > 0L) streamFirstTokenAt - started else null,
+            totalMs = if (started > 0L) System.currentTimeMillis() - started else null,
+        )
+        streamStartedAt = 0L
+        streamFirstTokenAt = 0L
+        streamUsage = null
+        return stats
+    }
+
+    private data class StreamStats(val usage: UsageInfo?, val ttftMs: Long?, val totalMs: Long?)
+
     init {
         viewModelScope.launch {
             val latest = conversationDao.observeAll().first().firstOrNull()
@@ -498,6 +544,11 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
             stream = true,
             defaults = advancedParamsOf(model),
         )
+        // OpenAI 兼容上游：请求流式尾帧携带 usage（Gemini/Anthropic 原生自带 usage，边界转换会剥离此键）；
+        // 仅 App 内聊天注入，局域网网关不改动客户端语义
+        body = JsonObject(
+            body + ("stream_options" to JsonObject(mapOf("include_usage" to JsonPrimitive(true))))
+        )
         body = applyThinkingDepth(body, conversation?.thinkingDepth, model.name)
         body = mergeCustomBody(body, model.customBody)
         // Gemini 内置工具：兼容层预设（presetId）或原生协议厂商均注入，原生协议的格式转换由 ProviderClient 边界完成
@@ -536,14 +587,22 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         _streamingText.value = ""
         _streamingReasoning.value = ""
         activeStreamModel = picker.provider.id to picker.model.name
+        beginStreamStats()
         val publisher = StreamPublisher()
         sendJob = viewModelScope.launch {
             var failed: ChatError? = null
             try {
                 client.chatDeltas(provider.baseUrl, key.key, built.body, extraHeaders, provider.protocol).collect { ev ->
                     when (ev) {
-                        is ChatEvent.Delta -> publisher.delta(ev.text)
-                        is ChatEvent.ReasoningDelta -> publisher.reasoning(ev.text)
+                        is ChatEvent.Delta -> {
+                            markFirstToken()
+                            publisher.delta(ev.text)
+                        }
+                        is ChatEvent.ReasoningDelta -> {
+                            markFirstToken()
+                            publisher.reasoning(ev.text)
+                        }
+                        is ChatEvent.Usage -> mergeStreamUsage(ev.info)
                         is ChatEvent.Failed -> failed = ChatError(ev.message, ev.httpCode, ev.rawBody)
                         ChatEvent.Done -> Unit
                     }
@@ -702,14 +761,22 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         _streaming.value = true
         _streamingText.value = ""
         _streamingReasoning.value = ""
+        beginStreamStats()
         val publisher = StreamPublisher()
         sendJob = viewModelScope.launch {
             var failed: ChatError? = null
             try {
                 smartExecutor.stream(candidates, policy, maxRounds).collect { ev ->
                     when (ev) {
-                        is SmartEvent.Delta -> publisher.delta(ev.text)
-                        is SmartEvent.ReasoningDelta -> publisher.reasoning(ev.text)
+                        is SmartEvent.Delta -> {
+                            markFirstToken()
+                            publisher.delta(ev.text)
+                        }
+                        is SmartEvent.ReasoningDelta -> {
+                            markFirstToken()
+                            publisher.reasoning(ev.text)
+                        }
+                        is SmartEvent.Usage -> mergeStreamUsage(ev.info)
                         is SmartEvent.Failed -> failed = ChatError(ev.message, ev.httpCode, ev.rawBody)
                         // 出内容后不再有 Trying，首个内容出现时的最新候选即胜出者
                         is SmartEvent.Trying -> activeStreamModel = ev.providerId to ev.modelName
@@ -758,7 +825,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    /** 收尾：发布剩余内容并落库助手消息，失败则呈现错误 */
+    /** 收尾：发布剩余内容并落库助手消息（附 token 用量与耗时），失败则呈现错误 */
     private suspend fun finishStreaming(convId: Long, publisher: StreamPublisher, failed: ChatError?) {
         publisher.publish(force = true)
         _streaming.value = false
@@ -766,6 +833,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         val finalReasoning = _streamingReasoning.value.trim().takeIf { it.isNotEmpty() }
         _streamingText.value = ""
         _streamingReasoning.value = ""
+        val stats = takeStreamStats()
         if (finalContent.isNotEmpty() || finalReasoning != null) {
             messageDao.insert(
                 MessageEntity(
@@ -775,6 +843,11 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                     reasoning = finalReasoning,
                     providerId = activeStreamModel?.first,
                     modelName = activeStreamModel?.second,
+                    promptTokens = stats.usage?.promptTokens,
+                    completionTokens = stats.usage?.completionTokens,
+                    cachedTokens = stats.usage?.cachedTokens,
+                    ttftMs = stats.ttftMs,
+                    totalMs = stats.totalMs,
                 )
             )
             conversationDao.touch(convId, System.currentTimeMillis())
@@ -791,6 +864,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         _streamingText.value = ""
         _streamingReasoning.value = ""
         activeStreamModel = null
+        takeStreamStats()
     }
 
     /**
@@ -911,6 +985,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         val partialReasoning = _streamingReasoning.value.trim().takeIf { it.isNotEmpty() }
         val model = activeStreamModel
         activeStreamModel = null
+        val stats = takeStreamStats()
         sendJob?.cancel()
         _streaming.value = false
         _generatingImage.value = false
@@ -927,6 +1002,11 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                         reasoning = partialReasoning,
                         providerId = model?.first,
                         modelName = model?.second,
+                        promptTokens = stats.usage?.promptTokens,
+                        completionTokens = stats.usage?.completionTokens,
+                        cachedTokens = stats.usage?.cachedTokens,
+                        ttftMs = stats.ttftMs,
+                        totalMs = stats.totalMs,
                     )
                 )
                 conversationDao.touch(convId, System.currentTimeMillis())
@@ -968,6 +1048,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         val partialReasoning = _streamingReasoning.value.trim().takeIf { it.isNotEmpty() }
         val model = activeStreamModel
         activeStreamModel = null
+        val stats = takeStreamStats()
         sendJob?.cancel()
         _streaming.value = false
         _generatingImage.value = false
@@ -985,6 +1066,11 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                             reasoning = partialReasoning,
                             providerId = model?.first,
                             modelName = model?.second,
+                            promptTokens = stats.usage?.promptTokens,
+                            completionTokens = stats.usage?.completionTokens,
+                            cachedTokens = stats.usage?.cachedTokens,
+                            ttftMs = stats.ttftMs,
+                            totalMs = stats.totalMs,
                         )
                     )
                 }

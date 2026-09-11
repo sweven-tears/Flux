@@ -742,6 +742,7 @@ class LanServer(
     /**
      * 归一化流事件 → OpenAI chat.completion.chunk 帧文本（原生协议上游回译给 OpenAI 客户端）。
      * Delta/ReasoningDelta → delta 帧；Failed → error 帧；Done → null（由调用方收尾 [DONE]）。
+     * Usage 不回译为空 choices 帧：避免下游客户端未请求 stream_options 时对空 choices 数组措手不及。
      */
     private fun chatEventToChunkLine(ev: ChatEvent, model: String): String? {
         fun chunk(delta: JsonObject) = buildJsonObject {
@@ -761,6 +762,7 @@ class LanServer(
             is ChatEvent.Failed -> buildJsonObject {
                 put("error", buildJsonObject { put("message", ev.message) })
             }.toString()
+            is ChatEvent.Usage -> null
             ChatEvent.Done -> null
         }
     }

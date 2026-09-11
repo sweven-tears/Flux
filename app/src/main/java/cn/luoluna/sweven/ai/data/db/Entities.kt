@@ -205,6 +205,15 @@ data class MessageEntity(
     /** 生成此助手消息的模型：厂商 id + 模型名；用户消息与旧数据为 null（显示回落"助手"） */
     val providerId: Long? = null,
     val modelName: String? = null,
+    /** 上游 usage 统计：输入/输出 token；无 usage 帧（旧数据、生图、厂商不回传）为 null */
+    val promptTokens: Long? = null,
+    val completionTokens: Long? = null,
+    /** prompt 中命中缓存的 token 数 */
+    val cachedTokens: Long? = null,
+    /** 首字延迟毫秒（首个内容/思考增量到达）；未出任何内容即结束为 null */
+    val ttftMs: Long? = null,
+    /** 本次生成总耗时毫秒（发起请求到收尾落库） */
+    val totalMs: Long? = null,
     val createdAt: Long = System.currentTimeMillis(),
 ) {
     val images: List<String>

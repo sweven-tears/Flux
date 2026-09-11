@@ -37,6 +37,9 @@ sealed interface ChatEvent {
     data class Delta(val text: String) : ChatEvent
     data class ReasoningDelta(val text: String) : ChatEvent
 
+    /** 上游 usage 统计（流式中可能多次出现，各字段可空；消费方按「最后非空值」逐字段合并） */
+    data class Usage(val info: UsageInfo) : ChatEvent
+
     /** 流式失败；HTTP 错误时附带状态码与原始响应体，供聊天页错误详情展示 */
     data class Failed(
         val message: String,
@@ -253,6 +256,7 @@ class ProviderClient {
                         }
                         chunk.reasoning?.let { emit(ChatEvent.ReasoningDelta(it)) }
                         chunk.text?.let { emit(ChatEvent.Delta(it)) }
+                        chunk.usage?.let { emit(ChatEvent.Usage(it)) }
                     }
                     ProviderProtocol.ANTHROPIC -> {
                         val chunk = parseAnthropicChunk(payload)
@@ -265,6 +269,7 @@ class ProviderClient {
                             else -> {
                                 chunk.reasoning?.let { emit(ChatEvent.ReasoningDelta(it)) }
                                 chunk.text?.let { emit(ChatEvent.Delta(it)) }
+                                chunk.usage?.let { emit(ChatEvent.Usage(it)) }
                             }
                         }
                     }
@@ -274,6 +279,7 @@ class ProviderClient {
                         if (!reasoning.isNullOrEmpty()) emit(ChatEvent.ReasoningDelta(reasoning))
                         val delta = parseDeltaContent(payload)
                         if (!delta.isNullOrEmpty()) emit(ChatEvent.Delta(delta))
+                        parseOpenAiUsage(payload)?.let { emit(ChatEvent.Usage(it)) }
                     }
                 }
             }

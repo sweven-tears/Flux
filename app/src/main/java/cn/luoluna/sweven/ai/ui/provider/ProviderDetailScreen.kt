@@ -4,7 +4,9 @@ import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.widget.Toast
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.basicMarquee
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -19,6 +21,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.ContentCopy
@@ -54,6 +57,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
@@ -84,7 +88,7 @@ import cn.luoluna.sweven.ai.ui.common.reorderHandle
 import cn.luoluna.sweven.ai.ui.common.typeLabel
 import kotlinx.coroutines.launch
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
 fun ProviderDetailScreen(id: Long, onBack: () -> Unit) {
     val context = LocalContext.current
@@ -325,26 +329,52 @@ fun ProviderDetailScreen(id: Long, onBack: () -> Unit) {
             // 模型（模型行为独立条目，支持长按拖动排序）
             item(key = "models_header") {
                 Column {
+                    // 单击走 30 分钟缓存（命中时 Toast 提示），双击强制刷新
+                    fun fetchModelList(forceRefresh: Boolean) {
+                        if (fetching) return
+                        fetching = true
+                        fetchError = null
+                        scope.launch {
+                            val key = app.modelRouter.activeKey(p)
+                            val cachedAge = app.providerClient.listModelsCacheAge(p.baseUrl, key?.key, p.protocol)
+                            app.providerClient.listModels(
+                                p.baseUrl, key?.key, protocol = p.protocol, forceRefresh = forceRefresh,
+                            )
+                                .onSuccess { models ->
+                                    if (!forceRefresh && cachedAge != null) {
+                                        Toast.makeText(
+                                            context,
+                                            "使用 ${cachedAge / 60_000} 分钟前的缓存，双击「获取列表」可强制刷新",
+                                            Toast.LENGTH_SHORT,
+                                        ).show()
+                                    }
+                                    fetchedModels = models
+                                }
+                                .onFailure { fetchError = it.message ?: "获取失败" }
+                            fetching = false
+                        }
+                    }
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text(
                             "模型（${models.size}）",
                             style = MaterialTheme.typography.titleMedium,
                             modifier = Modifier.weight(1f),
                         )
-                        TextButton(
-                            onClick = {
-                                fetching = true
-                                fetchError = null
-                                scope.launch {
-                                    val key = app.modelRouter.activeKey(p)
-                                    app.providerClient.listModels(p.baseUrl, key?.key, protocol = p.protocol)
-                                        .onSuccess { fetchedModels = it }
-                                        .onFailure { fetchError = it.message ?: "获取失败" }
-                                    fetching = false
-                                }
-                            },
-                            enabled = !fetching,
-                        ) { Text(if (fetching) "获取中…" else "获取列表") }
+                        Box(
+                            Modifier
+                                .clip(RoundedCornerShape(20.dp))
+                                .combinedClickable(
+                                    onClick = { fetchModelList(false) },
+                                    onDoubleClick = { fetchModelList(true) },
+                                )
+                                .padding(horizontal = 12.dp, vertical = 10.dp),
+                        ) {
+                            Text(
+                                if (fetching) "获取中…" else "获取列表",
+                                color = MaterialTheme.colorScheme.primary,
+                                style = MaterialTheme.typography.labelLarge,
+                            )
+                        }
                         TextButton(onClick = { showNewModel = true }) { Text("手动添加") }
                     }
                     fetchError?.let {

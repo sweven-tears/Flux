@@ -71,11 +71,51 @@ class ProviderClient {
         .readTimeout(0, TimeUnit.MILLISECONDS)
         .build()
 
+    /**
+     * 模型列表内存缓存：同一 baseUrl+协议+Key 30 分钟内直接复用，
+     * 避免重复进详情页就打一次 /models（部分中转站限流）。进程内存级，失败不写缓存。
+     */
+    private val MODEL_LIST_TTL_MS = 30 * 60_000L
+
+    private class ListCacheEntry(val at: Long, val models: List<RemoteModel>)
+
+    private val listCache = java.util.concurrent.ConcurrentHashMap<String, ListCacheEntry>()
+
+    private fun listCacheKey(baseUrl: String, apiKey: String?, protocol: String): String =
+        "${baseUrl.trimEnd('/')}|$protocol|${apiKey ?: ""}"
+
+    /** 现存缓存的年龄（毫秒）；无缓存返回 null。UI 用于「用了 N 分钟前的缓存」提示 */
+    fun listModelsCacheAge(baseUrl: String, apiKey: String?, protocol: String = ProviderProtocol.OPENAI): Long? {
+        val entry = listCache[listCacheKey(baseUrl, apiKey, protocol)] ?: return null
+        val age = System.currentTimeMillis() - entry.at
+        return age.takeIf { it < MODEL_LIST_TTL_MS }
+    }
+
     suspend fun listModels(
         baseUrl: String,
         apiKey: String?,
         extraHeaders: Map<String, String> = emptyMap(),
         protocol: String = ProviderProtocol.OPENAI,
+        forceRefresh: Boolean = false,
+    ): Result<List<RemoteModel>> {
+        val key = listCacheKey(baseUrl, apiKey, protocol)
+        if (!forceRefresh) {
+            listCache[key]?.let { entry ->
+                if (System.currentTimeMillis() - entry.at < MODEL_LIST_TTL_MS) {
+                    return Result.success(entry.models)
+                }
+            }
+        }
+        return fetchModels(baseUrl, apiKey, extraHeaders, protocol)
+            .onSuccess { listCache[key] = ListCacheEntry(System.currentTimeMillis(), it) }
+    }
+
+    /** 无缓存直连拉取（连接测试走这条路径，测出的延迟才是真实的） */
+    private suspend fun fetchModels(
+        baseUrl: String,
+        apiKey: String?,
+        extraHeaders: Map<String, String>,
+        protocol: String,
     ): Result<List<RemoteModel>> =
         withContext(Dispatchers.IO) {
             runCatching {
@@ -110,7 +150,7 @@ class ProviderClient {
     ): TestResult {
         val start = System.currentTimeMillis()
         return try {
-            val models = listModels(baseUrl, apiKey, extraHeaders, protocol).getOrThrow()
+            val models = fetchModels(baseUrl, apiKey, extraHeaders, protocol).getOrThrow()
             TestResult(
                 ok = true,
                 latencyMs = System.currentTimeMillis() - start,

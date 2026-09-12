@@ -1,9 +1,11 @@
 package cn.luoluna.sweven.ai.ui.provider
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -11,12 +13,17 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.PagerState
+import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -53,6 +60,8 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
@@ -85,8 +94,8 @@ import cn.luoluna.sweven.ai.ui.common.reorderHandle
 import kotlinx.coroutines.launch
 
 /**
- * 智能路由配置：把所有厂商的模型整合成聚合模型 smartAi，
- * 编辑回退优先级（长按拖动排序），侧滑可禁用/移除候选。
+ * 智能路由配置：分段切换「路由分组」（flux-xxx 组，组内自动切换）与「聚合模型」
+ * （smartAi 回退链：长按拖动排序，侧滑可禁用/移除候选，右上角分类查看/添加候选）。
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -139,44 +148,48 @@ fun SmartRouteScreen(onBack: () -> Unit) {
     // 拖拽换位后的本地顺序，落库完成前临时覆盖 Flow 数据
     var localOrder by remember { mutableStateOf<List<SmartRouteEntity>?>(null) }
     val display = localOrder ?: entries
-    val listState = rememberLazyListState()
+    // 分段内容：0=路由分组 1=聚合模型
+    val pagerState = rememberPagerState(pageCount = { 2 })
+    // 两个分段各自的列表/拖序状态（key 体系不同：候选 Long、分组成员 m<id>，不能共用）
+    val listStateGroups = rememberLazyListState()
+    val listStateSmart = rememberLazyListState()
     // 侧滑操作：同一时间至多一行滑开（候选 c<id> / 分组 g<id> / 成员 m<id> 共用），滚动列表时收回
     var openSwipeKey by remember { mutableStateOf<String?>(null) }
-    LaunchedEffect(listState.isScrollInProgress) {
-        if (listState.isScrollInProgress) openSwipeKey = null
+    LaunchedEffect(listStateGroups.isScrollInProgress, listStateSmart.isScrollInProgress) {
+        if (listStateGroups.isScrollInProgress || listStateSmart.isScrollInProgress) openSwipeKey = null
     }
-    val reorderState = rememberReorderState(listState) { fromKey, toKey ->
-        when {
-            // smartAi 回退链候选换位
-            fromKey is Long && toKey is Long -> {
-                val from = display.indexOfFirst { it.id == fromKey }
-                val to = display.indexOfFirst { it.id == toKey }
-                if (from < 0 || to < 0 || from == to) return@rememberReorderState
-                val reordered = display.toMutableList().apply { add(to, removeAt(from)) }
-                    .mapIndexed { index, e -> e.copy(sortOrder = index) }
-                localOrder = reordered
-                scope.launch {
-                    app.database.smartRouteDao().updateAll(reordered)
-                    localOrder = null
-                }
+    val reorderStateSmart = rememberReorderState(listStateSmart) { fromKey, toKey ->
+        // smartAi 回退链候选换位
+        if (fromKey is Long && toKey is Long) {
+            val from = display.indexOfFirst { it.id == fromKey }
+            val to = display.indexOfFirst { it.id == toKey }
+            if (from < 0 || to < 0 || from == to) return@rememberReorderState
+            val reordered = display.toMutableList().apply { add(to, removeAt(from)) }
+                .mapIndexed { index, e -> e.copy(sortOrder = index) }
+            localOrder = reordered
+            scope.launch {
+                app.database.smartRouteDao().updateAll(reordered)
+                localOrder = null
             }
-            // 分组成员换位（仅同组内；key 形如 m<id>）
-            fromKey is String && toKey is String &&
-                fromKey.startsWith("m") && toKey.startsWith("m") -> {
-                val fromId = fromKey.removePrefix("m").toLongOrNull() ?: return@rememberReorderState
-                val toId = toKey.removePrefix("m").toLongOrNull() ?: return@rememberReorderState
-                val fromMember = members.firstOrNull { it.id == fromId } ?: return@rememberReorderState
-                val toMember = members.firstOrNull { it.id == toId } ?: return@rememberReorderState
-                if (fromMember.groupId != toMember.groupId || fromId == toId) return@rememberReorderState
-                val groupMembers = members.filter { it.groupId == fromMember.groupId }.toMutableList()
-                val fi = groupMembers.indexOfFirst { it.id == fromId }
-                val ti = groupMembers.indexOfFirst { it.id == toId }
-                if (fi < 0 || ti < 0) return@rememberReorderState
-                groupMembers.add(ti, groupMembers.removeAt(fi))
-                val reordered = groupMembers.mapIndexed { i, m -> m.copy(sortOrder = i) }
-                scope.launch { app.database.smartRouteMemberDao().updateAll(reordered) }
-            }
-            else -> Unit
+        }
+    }
+    val reorderStateGroups = rememberReorderState(listStateGroups) { fromKey, toKey ->
+        // 分组成员换位（仅同组内；key 形如 m<id>）
+        if (fromKey is String && toKey is String &&
+            fromKey.startsWith("m") && toKey.startsWith("m")
+        ) {
+            val fromId = fromKey.removePrefix("m").toLongOrNull() ?: return@rememberReorderState
+            val toId = toKey.removePrefix("m").toLongOrNull() ?: return@rememberReorderState
+            val fromMember = members.firstOrNull { it.id == fromId } ?: return@rememberReorderState
+            val toMember = members.firstOrNull { it.id == toId } ?: return@rememberReorderState
+            if (fromMember.groupId != toMember.groupId || fromId == toId) return@rememberReorderState
+            val groupMembers = members.filter { it.groupId == fromMember.groupId }.toMutableList()
+            val fi = groupMembers.indexOfFirst { it.id == fromId }
+            val ti = groupMembers.indexOfFirst { it.id == toId }
+            if (fi < 0 || ti < 0) return@rememberReorderState
+            groupMembers.add(ti, groupMembers.removeAt(fi))
+            val reordered = groupMembers.mapIndexed { i, m -> m.copy(sortOrder = i) }
+            scope.launch { app.database.smartRouteMemberDao().updateAll(reordered) }
         }
     }
 
@@ -190,24 +203,147 @@ fun SmartRouteScreen(onBack: () -> Unit) {
                     }
                 },
                 actions = {
-                    IconButton(onClick = { showCategoryView = true }) {
-                        Icon(Icons.Filled.Category, contentDescription = "分类查看")
-                    }
-                    IconButton(onClick = { showAddModels = true }) {
-                        Icon(Icons.Filled.Add, contentDescription = "添加候选模型")
+                    // 分类查看/添加候选只服务聚合模型分段
+                    if (pagerState.currentPage == 1) {
+                        IconButton(onClick = { showCategoryView = true }) {
+                            Icon(Icons.Filled.Category, contentDescription = "分类查看")
+                        }
+                        IconButton(onClick = { showAddModels = true }) {
+                            Icon(Icons.Filled.Add, contentDescription = "添加候选模型")
+                        }
                     }
                 },
             )
         },
     ) { padding ->
-        LazyColumn(
+        Column(
             Modifier
                 .fillMaxSize()
-                .padding(padding)
-                .padding(horizontal = 12.dp),
-            state = listState,
-            verticalArrangement = Arrangement.spacedBy(12.dp),
+                .padding(padding),
         ) {
+            SlidingSegmentedControl(
+                options = listOf("路由分组", "聚合模型"),
+                pagerState = pagerState,
+                onSelect = { scope.launch { pagerState.animateScrollToPage(it) } },
+                modifier = Modifier.padding(horizontal = 12.dp),
+            )
+            Spacer(Modifier.height(8.dp))
+            HorizontalPager(
+                state = pagerState,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(1f),
+            ) { page ->
+                if (page == 0) {
+                    // ---------------- 页 0：路由分组（按模型 id 归组，flux-xxx） ----------------
+                    LazyColumn(
+                        Modifier
+                            .fillMaxSize()
+                            .padding(horizontal = 12.dp),
+                        state = listStateGroups,
+                        verticalArrangement = Arrangement.spacedBy(12.dp),
+                    ) {
+            item(key = "groups_header") {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.padding(horizontal = 4.dp),
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text("路由分组", style = MaterialTheme.typography.titleSmall)
+                        Text(
+                            "同族模型（跨厂商/版本号）聚为一组，对外暴露为 flux-模型名，组内自动切换",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    IconButton(onClick = { showAddGroup = true }) {
+                        Icon(Icons.Filled.Add, contentDescription = "新建路由分组")
+                    }
+                }
+            }
+            if (groups.isEmpty()) {
+                item(key = "groups_empty") {
+                    Text(
+                        "还没有路由分组。点上方 + 搜索模型 id，一次匹配即可把各厂商的同族模型聚成一组。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(horizontal = 4.dp),
+                    )
+                }
+            } else {
+                val enabledProviderIds = providers.filter { it.enabled }.map { it.id }.toSet()
+                groups.forEach { group ->
+                    val groupMembers = members.filter { it.groupId == group.id }
+                    // 短板口径只统计「启用且厂商未停用」的成员——被禁成员不参与交集，也不拖低短板
+                    val activePairs = groupMembers
+                        .filter { it.enabled && it.providerId in enabledProviderIds }
+                        .mapNotNull { m ->
+                            models.firstOrNull { it.providerId == m.providerId && it.name == m.modelName }
+                                ?.let { m to it }
+                        }
+                    val gaps = capabilityGaps(activePairs.map { it.second })
+                    item(key = "g${group.id}") {
+                        RouteGroupCard(
+                            group = group,
+                            memberCount = groupMembers.size,
+                            memberModels = activePairs.map { it.second },
+                            gapText = gaps.takeIf { it.isNotEmpty() }?.let { gapLine(it, providers) },
+                            onShowGaps = { gapSheetGroup = group },
+                            expanded = group.id in expandedGroups,
+                            onToggleExpand = {
+                                expandedGroups = if (group.id in expandedGroups) {
+                                    expandedGroups - group.id
+                                } else {
+                                    expandedGroups + group.id
+                                }
+                            },
+                            isOpen = openSwipeKey == "g${group.id}",
+                            onOpenChange = { open -> openSwipeKey = if (open) "g${group.id}" else null },
+                            onToggle = { nv ->
+                                scope.launch { app.database.smartRouteGroupDao().update(group.copy(enabled = nv)) }
+                            },
+                            onDelete = { deleteGroupTarget = group },
+                            modifier = Modifier.animateItem(),
+                        )
+                    }
+                    // 成员行作为独立 LazyColumn item：拖拽排序与侧滑互斥才能命中可见项
+                    if (group.id in expandedGroups) {
+                        items(groupMembers, key = { "m${it.id}" }) { member ->
+                            RouteMemberRow(
+                                member = member,
+                                providers = providers,
+                                models = models,
+                                gaps = gaps,
+                                reorderState = reorderStateGroups,
+                                isOpen = openSwipeKey == "m${member.id}",
+                                onOpenChange = { open -> openSwipeKey = if (open) "m${member.id}" else null },
+                                onToggle = { nv ->
+                                    scope.launch {
+                                        app.database.smartRouteMemberDao().update(member.copy(enabled = nv))
+                                    }
+                                },
+                                onRemove = {
+                                    scope.launch { app.database.smartRouteMemberDao().delete(member) }
+                                },
+                                modifier = Modifier
+                                    .padding(start = 24.dp)
+                                    .animateItem(),
+                            )
+                        }
+                    }
+                }
+            }
+            item(key = "groups_footer") { Spacer(Modifier.height(12.dp)) }
+                    }
+                } else {
+                    // ---------------- 页 1：聚合模型 smartAi ----------------
+                    LazyColumn(
+                        Modifier
+                            .fillMaxSize()
+                            .padding(horizontal = 12.dp),
+                        state = listStateSmart,
+                        verticalArrangement = Arrangement.spacedBy(12.dp),
+                    ) {
             item(key = "intro") {
                 Card {
                     Column(Modifier.fillMaxWidth().padding(16.dp)) {
@@ -226,7 +362,7 @@ fun SmartRouteScreen(onBack: () -> Unit) {
                             Column(Modifier.weight(1f)) {
                                 Text("响应模式（本机聊天）", style = MaterialTheme.typography.bodyMedium)
                                 Text(
-                                    "局域网设备的模式在「局域网」页按设备单独设置",
+                                    "局域网设备的模式已迁至「局域网 → 已授权设备」页按设备单独设置",
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 )
@@ -281,98 +417,6 @@ fun SmartRouteScreen(onBack: () -> Unit) {
                 }
             }
 
-            // ---------------- 路由分组（按模型 id 归组，flux-xxx） ----------------
-            item(key = "groups_header") {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier.padding(horizontal = 4.dp),
-                ) {
-                    Column(Modifier.weight(1f)) {
-                        Text("路由分组", style = MaterialTheme.typography.titleSmall)
-                        Text(
-                            "同族模型（跨厂商/版本号）聚为一组，对外暴露为 flux-模型名，组内自动切换",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                    IconButton(onClick = { showAddGroup = true }) {
-                        Icon(Icons.Filled.Add, contentDescription = "新建路由分组")
-                    }
-                }
-            }
-            if (groups.isEmpty()) {
-                item(key = "groups_empty") {
-                    Text(
-                        "还没有路由分组。点右上角 + 搜索模型 id，一次匹配即可把各厂商的同族模型聚成一组。",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.padding(horizontal = 4.dp),
-                    )
-                }
-            } else {
-                val enabledProviderIds = providers.filter { it.enabled }.map { it.id }.toSet()
-                groups.forEach { group ->
-                    val groupMembers = members.filter { it.groupId == group.id }
-                    // 短板口径只统计「启用且厂商未停用」的成员——被禁成员不参与交集，也不拖低短板
-                    val activePairs = groupMembers
-                        .filter { it.enabled && it.providerId in enabledProviderIds }
-                        .mapNotNull { m ->
-                            models.firstOrNull { it.providerId == m.providerId && it.name == m.modelName }
-                                ?.let { m to it }
-                        }
-                    val gaps = capabilityGaps(activePairs.map { it.second })
-                    item(key = "g${group.id}") {
-                        RouteGroupCard(
-                            group = group,
-                            memberCount = groupMembers.size,
-                            memberModels = activePairs.map { it.second },
-                            gapText = gaps.takeIf { it.isNotEmpty() }?.let { gapLine(it, providers) },
-                            onShowGaps = { gapSheetGroup = group },
-                            expanded = group.id in expandedGroups,
-                            onToggleExpand = {
-                                expandedGroups = if (group.id in expandedGroups) {
-                                    expandedGroups - group.id
-                                } else {
-                                    expandedGroups + group.id
-                                }
-                            },
-                            isOpen = openSwipeKey == "g${group.id}",
-                            onOpenChange = { open -> openSwipeKey = if (open) "g${group.id}" else null },
-                            onToggle = { nv ->
-                                scope.launch { app.database.smartRouteGroupDao().update(group.copy(enabled = nv)) }
-                            },
-                            onDelete = { deleteGroupTarget = group },
-                            modifier = Modifier.animateItem(),
-                        )
-                    }
-                    // 成员行作为独立 LazyColumn item：拖拽排序与侧滑互斥才能命中可见项
-                    if (group.id in expandedGroups) {
-                        items(groupMembers, key = { "m${it.id}" }) { member ->
-                            RouteMemberRow(
-                                member = member,
-                                providers = providers,
-                                models = models,
-                                gaps = gaps,
-                                reorderState = reorderState,
-                                isOpen = openSwipeKey == "m${member.id}",
-                                onOpenChange = { open -> openSwipeKey = if (open) "m${member.id}" else null },
-                                onToggle = { nv ->
-                                    scope.launch {
-                                        app.database.smartRouteMemberDao().update(member.copy(enabled = nv))
-                                    }
-                                },
-                                onRemove = {
-                                    scope.launch { app.database.smartRouteMemberDao().delete(member) }
-                                },
-                                modifier = Modifier
-                                    .padding(start = 24.dp)
-                                    .animateItem(),
-                            )
-                        }
-                    }
-                }
-            }
-
             if (display.isEmpty()) {
                 item(key = "empty") {
                     Column(
@@ -403,7 +447,7 @@ fun SmartRouteScreen(onBack: () -> Unit) {
                         entry = entry,
                         providers = providers,
                         models = models,
-                        reorderState = reorderState,
+                        reorderState = reorderStateSmart,
                         modifier = Modifier.animateItem(),
                         isOpen = openSwipeKey == "c${entry.id}",
                         onOpenChange = { open -> openSwipeKey = if (open) "c${entry.id}" else null },
@@ -417,6 +461,9 @@ fun SmartRouteScreen(onBack: () -> Unit) {
                 }
             }
             item(key = "footer") { Spacer(Modifier.height(12.dp)) }
+                    }
+                }
+            }
         }
     }
 
@@ -762,6 +809,60 @@ private fun SmartRouteRow(
                     tint = MaterialTheme.colorScheme.outlineVariant,
                     modifier = Modifier.reorderHandle(reorderState, entry.id),
                 )
+            }
+        }
+    }
+}
+
+/**
+ * 两段滑动分段控件：选中块位置由 PagerState 驱动（手势拖动内容时色块实时跟移），点击分段平滑切页
+ */
+@Composable
+private fun SlidingSegmentedControl(
+    options: List<String>,
+    pagerState: PagerState,
+    onSelect: (Int) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    // 选中块连续位置：当前页 + 拖动进度（钳位到段数范围）
+    val progress = (pagerState.currentPage + pagerState.currentPageOffsetFraction)
+        .coerceIn(0f, (options.size - 1).toFloat())
+    BoxWithConstraints(
+        modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .background(MaterialTheme.colorScheme.surfaceVariant)
+            .padding(3.dp),
+    ) {
+        val segWidth = maxWidth / options.size
+        Box(
+            Modifier
+                .offset(x = segWidth * progress)
+                .width(segWidth)
+                .height(34.dp)
+                .shadow(1.dp, RoundedCornerShape(9.dp))
+                .background(MaterialTheme.colorScheme.surface, RoundedCornerShape(9.dp)),
+        )
+        Row {
+            options.forEachIndexed { i, label ->
+                Box(
+                    Modifier
+                        .width(segWidth)
+                        .height(34.dp)
+                        .clip(RoundedCornerShape(9.dp))
+                        .clickable { onSelect(i) },
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text(
+                        label,
+                        style = MaterialTheme.typography.labelLarge,
+                        color = if (pagerState.currentPage == i) {
+                            MaterialTheme.colorScheme.onSurface
+                        } else {
+                            MaterialTheme.colorScheme.onSurfaceVariant
+                        },
+                    )
+                }
             }
         }
     }

@@ -135,6 +135,7 @@ fun ChatScreen(
     val error by vm.error.collectAsStateWithLifecycle()
     val notice by vm.notice.collectAsStateWithLifecycle()
     val stopHint by vm.stopHint.collectAsStateWithLifecycle()
+    val activeVideoJobs by vm.activeVideoJobs.collectAsStateWithLifecycle()
     val contextEstimate by vm.contextEstimate.collectAsStateWithLifecycle()
     val drawer by vm.drawerState.collectAsStateWithLifecycle()
     val thinkingDepth by vm.thinkingDepth.collectAsStateWithLifecycle()
@@ -410,6 +411,26 @@ fun ChatScreen(
                         visible = stopHint,
                         modifier = Modifier.align(Alignment.Center),
                     )
+                    // 视频生成任务进行中：顶部常驻小角标（结果会以新消息+通知呈现）
+                    androidx.compose.animation.AnimatedVisibility(
+                        visible = activeVideoJobs > 0,
+                        enter = fadeIn(),
+                        exit = fadeOut(),
+                        modifier = Modifier.align(Alignment.TopCenter),
+                    ) {
+                        Surface(
+                            color = MaterialTheme.colorScheme.secondaryContainer,
+                            shape = RoundedCornerShape(50),
+                            modifier = Modifier.padding(top = 8.dp),
+                        ) {
+                            Text(
+                                "🎬 视频生成中 · $activeVideoJobs",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSecondaryContainer,
+                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                            )
+                        }
+                    }
                 }
                 (plugin.inputBar ?: { ChatUiDefaults.InputBar(env) })(env)
             }

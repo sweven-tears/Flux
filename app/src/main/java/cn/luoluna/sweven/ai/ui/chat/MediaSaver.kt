@@ -19,24 +19,29 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.LocalContext
 import androidx.core.content.ContextCompat
+import cn.luoluna.sweven.ai.data.db.MessageEntity
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
 
+/** 可保存条目：图片 data URL 或视频文件引用（flux-video: 前缀） */
+private fun isSavable(url: String): Boolean =
+    url.startsWith("data:") || url.startsWith(MessageEntity.VIDEO_PREFIX)
+
 /**
- * 保存图片（data URL）到系统相册 Pictures/Flux。
+ * 保存媒体到系统相册：图片（data URL）→ Pictures/Flux，视频（flux-video: 文件路径）→ Movies/Flux。
  * API 29+ 走 MediaStore 相对路径免权限；26-28 需 WRITE_EXTERNAL_STORAGE（调用方先申请）。
  */
 object MediaSaver {
 
     data class SaveResult(val saved: Int, val failed: Int)
 
-    /** 批量保存；非 data: 前缀的条目（如已清理的占位标记）自动跳过 */
+    /** 批量保存；非 data:/视频前缀的条目（如已清理的占位标记）自动跳过 */
     suspend fun saveDataUrls(context: Context, urls: List<String>): SaveResult = withContext(Dispatchers.IO) {
         var saved = 0
         var failed = 0
-        urls.filter { it.startsWith("data:") }.distinct().forEach { url ->
+        urls.filter { isSavable(it) }.distinct().forEach { url ->
             runCatching { saveOne(context, url) }
                 .onSuccess { saved++ }
                 .onFailure { failed++ }
@@ -44,7 +49,50 @@ object MediaSaver {
         SaveResult(saved, failed)
     }
 
-    private fun saveOne(context: Context, dataUrl: String) {
+    private fun saveOne(context: Context, url: String) {
+        if (url.startsWith(MessageEntity.VIDEO_PREFIX)) {
+            saveVideoOne(context, url.removePrefix(MessageEntity.VIDEO_PREFIX))
+        } else {
+            saveImageOne(context, url)
+        }
+    }
+
+    private fun saveVideoOne(context: Context, path: String) {
+        val file = File(path)
+        require(file.exists()) { "视频文件不存在" }
+        val name = "flux_${System.currentTimeMillis()}.mp4"
+        val resolver = context.contentResolver
+        val values = ContentValues().apply {
+            put(MediaStore.Video.Media.DISPLAY_NAME, name)
+            put(MediaStore.Video.Media.MIME_TYPE, "video/mp4")
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            values.put(MediaStore.Video.Media.RELATIVE_PATH, Environment.DIRECTORY_MOVIES + "/Flux")
+            values.put(MediaStore.Video.Media.IS_PENDING, 1)
+            val uri = resolver.insert(MediaStore.Video.Media.EXTERNAL_CONTENT_URI, values)
+                ?: error("相册写入失败")
+            resolver.openOutputStream(uri)?.use { out -> file.inputStream().use { it.copyTo(out) } }
+                ?: error("相册写入失败")
+            values.clear()
+            values.put(MediaStore.Video.Media.IS_PENDING, 0)
+            resolver.update(uri, values, null, null)
+        } else {
+            // API 26-28：直接写公共视频目录，再以 DATA 列登记进媒体库
+            @Suppress("DEPRECATION")
+            val dir = File(
+                Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MOVIES),
+                "Flux",
+            )
+            dir.mkdirs()
+            val dest = File(dir, name)
+            file.copyTo(dest, overwrite = true)
+            @Suppress("DEPRECATION")
+            values.put(MediaStore.Video.Media.DATA, dest.absolutePath)
+            resolver.insert(MediaStore.Video.Media.EXTERNAL_CONTENT_URI, values) ?: error("相册写入失败")
+        }
+    }
+
+    private fun saveImageOne(context: Context, dataUrl: String) {
         val mime = dataUrl.substringAfter("data:").substringBefore(";").ifBlank { "image/jpeg" }
         val base64 = dataUrl.substringAfter("base64,", "")
         require(base64.isNotEmpty()) { "不是 base64 data URL" }
@@ -116,9 +164,9 @@ fun rememberGallerySaver(): (List<String>) -> Unit {
         }
     }
     return { urls ->
-        val targets = urls.filter { it.startsWith("data:") }
+        val targets = urls.filter { isSavable(it) }
         if (targets.isEmpty()) {
-            Toast.makeText(context, "没有可保存的图片", Toast.LENGTH_SHORT).show()
+            Toast.makeText(context, "没有可保存的媒体", Toast.LENGTH_SHORT).show()
         } else {
             val needPermission = Build.VERSION.SDK_INT <= Build.VERSION_CODES.P &&
                 ContextCompat.checkSelfPermission(

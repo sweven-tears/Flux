@@ -469,3 +469,24 @@ interface RequestLogDao {
     )
     fun observeUsageByDeviceSince(since: Long): Flow<List<DeviceUsageStat>>
 }
+
+@Dao
+interface VideoJobDao {
+    @Query("SELECT * FROM video_jobs WHERE status IN ('pending','running') ORDER BY createdAt ASC")
+    fun observeActive(): Flow<List<VideoJobEntity>>
+
+    @Query("SELECT * FROM video_jobs WHERE status IN ('pending','running') ORDER BY createdAt ASC")
+    suspend fun active(): List<VideoJobEntity>
+
+    @Query("SELECT * FROM video_jobs WHERE status IN ('pending','running') ORDER BY createdAt ASC")
+    fun activeBlocking(): List<VideoJobEntity>
+
+    @Query("SELECT * FROM video_jobs WHERE id = :id")
+    suspend fun byId(id: Long): VideoJobEntity?
+
+    @Insert
+    suspend fun insert(job: VideoJobEntity): Long
+
+    @Update
+    suspend fun update(job: VideoJobEntity)
+}

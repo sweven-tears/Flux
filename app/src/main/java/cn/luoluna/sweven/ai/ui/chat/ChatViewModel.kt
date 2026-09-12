@@ -35,6 +35,7 @@ import cn.luoluna.sweven.ai.data.repo.aggregateCapability
 import cn.luoluna.sweven.ai.data.repo.featuresOfHistory
 import cn.luoluna.sweven.ai.data.repo.intersectCapability
 import cn.luoluna.sweven.ai.server.Notifications
+import cn.luoluna.sweven.ai.server.VideoJobManager
 import cn.luoluna.sweven.ai.data.repo.isSelfGatewayUrl
 import cn.luoluna.sweven.ai.data.repo.orderCandidates
 import cn.luoluna.sweven.ai.net.AdvancedParams
@@ -135,6 +136,10 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
     private val router = ctx.modelRouter
     private val settings = ctx.settings
     private val smartExecutor = SmartRouteExecutor(client)
+
+    /** 进行中的视频生成任务数（聊天页「生成中」提示） */
+    val activeVideoJobs: StateFlow<Int> = VideoJobManager.get(app).observeActiveCount()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 0)
 
     private val currentId = MutableStateFlow<Long?>(null)
 
@@ -594,10 +599,10 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
     /** 按目标发起请求：生图模型走文生图分支；其余单模型直连；smartAi 走回退链；分组走组内切换 */
     private suspend fun startStreaming(convId: Long, target: ChatTarget) {
         when (target) {
-            is ChatTarget.Single -> if (target.picker.model.type == ModelType.IMAGE) {
-                generateImage(convId, target.picker)
-            } else {
-                streamSingle(convId, target.picker)
+            is ChatTarget.Single -> when {
+                target.picker.model.outputVideo -> generateVideo(convId, target.picker)
+                target.picker.model.type == ModelType.IMAGE -> generateImage(convId, target.picker)
+                else -> streamSingle(convId, target.picker)
             }
             ChatTarget.SmartAi -> streamSmart(convId)
             is ChatTarget.Group -> streamGroup(convId, target.group)
@@ -729,6 +734,44 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
      * 取会话最近一条用户消息作为提示词；生成中复用流式气泡位置显示占位，停止按钮可中断；
      * 成功落库一条带图助手消息（图片经压缩转 data URL，与用户附图同一存储形态）。
      */
+    /**
+     * 视频生成：目标模型 outputVideo=true 时的发送分支（仅 OpenAI 兼容任务式上游）。
+     * 提交后台任务后立即返回——生成慢（数分钟起），轮询在 [cn.luoluna.sweven.ai.server.VideoJobManager]
+     * 前台服务里进行且无硬超时；完成后以带视频的助手消息呈现并发通知，用户可随时离开页面。
+     */
+    private suspend fun generateVideo(convId: Long, picker: PickerModel) {
+        // 选择器数据是发送时刻的快照，落库前以最新状态复核厂商可用性
+        val provider = providerDao.byId(picker.provider.id)
+        if (provider == null || !provider.enabled) {
+            _error.value = ChatError("厂商「${picker.provider.alias}」已被停用，请到「厂商」页启用后再发送")
+            return
+        }
+        if (provider.protocol != ProviderProtocol.OPENAI) {
+            _error.value = ChatError("视频生成当前仅支持 OpenAI 兼容协议厂商，请检查「${picker.provider.alias}」的接口协议")
+            return
+        }
+        val key = router.activeKey(provider)
+        if (key == null || key.key.isBlank()) {
+            _error.value = ChatError("厂商「${picker.provider.alias}」未配置 API Key，请到「厂商」页添加")
+            return
+        }
+        val prompt = messageDao.forConversation(convId).lastOrNull { it.role == Role.USER }?.content
+        if (prompt.isNullOrBlank()) {
+            _error.value = ChatError("请先输入画面描述再生成视频")
+            return
+        }
+        _error.value = null
+        VideoJobManager.get(getApplication())
+            .submit(convId, provider, key.key, picker.model, prompt)
+            .onSuccess { _notice.value = "视频生成任务已提交，生成较慢可离开页面，完成后会通知你" }
+            .onFailure { e ->
+                _error.value = when (e) {
+                    is HttpApiException -> ChatError(e.message ?: "视频任务提交失败", e.httpCode, e.rawBody)
+                    else -> ChatError(e.message ?: "视频任务提交失败")
+                }
+            }
+    }
+
     private suspend fun generateImage(convId: Long, picker: PickerModel) {
         // 选择器数据是发送时刻的快照，落库前以最新状态复核厂商可用性
         val provider = providerDao.byId(picker.provider.id)

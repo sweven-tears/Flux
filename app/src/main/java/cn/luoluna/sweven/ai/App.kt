@@ -7,6 +7,7 @@ import cn.luoluna.sweven.ai.data.repo.ModelRouter
 import cn.luoluna.sweven.ai.net.ProviderClient
 import cn.luoluna.sweven.ai.server.DeviceAuthManager
 import cn.luoluna.sweven.ai.server.Notifications
+import cn.luoluna.sweven.ai.server.VideoJobManager
 
 class App : Application() {
 
@@ -23,5 +24,7 @@ class App : Application() {
     override fun onCreate() {
         super.onCreate()
         Notifications.ensureChannels(this)
+        // 恢复上次未完成的视频生成任务（进程被杀后重新拉起轮询与前台服务）
+        VideoJobManager.get(this).resumeAll()
     }
 }

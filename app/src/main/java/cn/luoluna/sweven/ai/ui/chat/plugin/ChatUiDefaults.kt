@@ -21,6 +21,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -120,6 +121,8 @@ import cn.luoluna.sweven.ai.ui.chat.MarkdownText
 import cn.luoluna.sweven.ai.ui.chat.ReasoningSection
 import cn.luoluna.sweven.ai.ui.chat.produceUriBitmap
 import cn.luoluna.sweven.ai.ui.chat.rememberDataUrlBitmap
+import cn.luoluna.sweven.ai.ui.chat.rememberVideoFrame
+import cn.luoluna.sweven.ai.ui.chat.FluxVideoPlayer
 import cn.luoluna.sweven.ai.ui.common.ConfirmDialog
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -1412,6 +1415,11 @@ object ChatUiDefaults {
 
     @Composable
     fun MessageImage(url: String, onClick: (androidx.compose.ui.graphics.ImageBitmap) -> Unit) {
+        // 视频消息（视频生成结果）：封面帧 + 播放角标，点击原位内嵌播放
+        if (MessageEntity.isVideo(url)) {
+            VideoBubble(url.removePrefix(MessageEntity.VIDEO_PREFIX))
+            return
+        }
         // 「我的创作」里被清理的图片：原位渲染占位块，告知资源已删除
         if (MessageEntity.isDeletedImage(url)) {
             Surface(
@@ -1457,9 +1465,62 @@ object ChatUiDefaults {
         }
     }
 
+    /** 视频消息气泡：封面帧（缺帧用占位）+ 播放角标，点击原位展开 media3 播放器 */
     @Composable
-    fun AttachmentThumb(uri: android.net.Uri, onRemove: () -> Unit) {
-        val context = LocalContext.current
+    private fun VideoBubble(path: String) {
+        var playing by remember(path) { mutableStateOf(false) }
+        val frame = rememberVideoFrame(path)
+        Box(
+            Modifier
+                .widthIn(max = 280.dp)
+                .clip(RoundedCornerShape(10.dp))
+                .then(if (playing) Modifier else Modifier.clickable { playing = true }),
+        ) {
+            if (playing) {
+                FluxVideoPlayer(
+                    path,
+                    Modifier
+                        .fillMaxWidth()
+                        .aspectRatio(frame?.let { it.width.toFloat() / it.height } ?: 16f / 9f),
+                )
+            } else {
+                if (frame != null) {
+                    Image(
+                        bitmap = frame,
+                        contentDescription = "视频封面",
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .aspectRatio(frame.width.toFloat() / frame.height),
+                    )
+                } else {
+                    Box(
+                        Modifier
+                            .fillMaxWidth()
+                            .aspectRatio(16f / 9f)
+                            .background(MaterialTheme.colorScheme.surfaceVariant),
+                    )
+                }
+                Box(
+                    Modifier
+                        .align(Alignment.Center)
+                        .size(44.dp)
+                        .background(Color(0x80000000), CircleShape)
+                        .padding(4.dp),
+                ) {
+                    Icon(
+                        Icons.Filled.PlayArrow,
+                        contentDescription = "播放视频",
+                        tint = Color.White,
+                        modifier = Modifier.align(Alignment.Center),
+                    )
+                }
+            }
+        }
+    }
+
+    @Composable
+    fun AttachmentThumb(uri: android.net.Uri, onRemove: () -> Unit) {        val context = LocalContext.current
         val bitmap = produceUriBitmap(context, uri).value
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
             Surface(shape = RoundedCornerShape(8.dp)) {

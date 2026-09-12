@@ -270,9 +270,14 @@ data class MessageEntity(
          * imagesJson 中「已被清理」的图片占位标记：从「我的创作」删除后原位替换 data URL，
          * 气泡原位渲染占位块；非 data: 前缀，天然不会被回传上游/保存相册/再添加为附件。
          */
-        const val DELETED_IMAGE = "flux-deleted"
+        const val DELETED_IMAGE = "flux-deleted"
 
         fun isDeletedImage(url: String): Boolean = url == DELETED_IMAGE
+
+        /** 视频消息条目前缀：`flux-video:<App 私有目录视频绝对路径>`（视频生成结果） */
+        const val VIDEO_PREFIX = "flux-video:"
+
+        fun isVideo(url: String): Boolean = url.startsWith(VIDEO_PREFIX)
 
         private val IMAGES_ADAPTER = ImagesAdapter
         fun imagesJsonOf(images: List<String>): String? =
@@ -284,6 +289,36 @@ private object ImagesAdapter {
     private const val SEP = "\u0001"
     fun encode(images: List<String>): String = images.joinToString(SEP)
     fun decode(json: String): List<String> = json.split(SEP).filter { it.isNotBlank() }
+}
+
+/**
+ * 视频生成任务：提交→轮询→下载的全生命周期落库（进程被杀后服务重启可恢复轮询）。
+ * 视频文件存 App 私有目录（filesDir/videos），消息与创作通过 imagesJson 的 `flux-video:<路径>` 前缀引用。
+ */
+@Entity(tableName = "video_jobs")
+data class VideoJobEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val conversationId: Long,
+    val providerId: Long,
+    val modelName: String,
+    val prompt: String,
+    /** 上游任务 id（提交成功后回填；提交即失败为 null） */
+    val upstreamJobId: String? = null,
+    /** pending / running / done / failed / cancelled */
+    val status: String,
+    /** 完成后生成的视频文件绝对路径 */
+    val videoPath: String? = null,
+    val error: String? = null,
+    val createdAt: Long = System.currentTimeMillis(),
+    val updatedAt: Long = System.currentTimeMillis(),
+) {
+    companion object {
+        const val STATUS_PENDING = "pending"
+        const val STATUS_RUNNING = "running"
+        const val STATUS_DONE = "done"
+        const val STATUS_FAILED = "failed"
+        const val STATUS_CANCELLED = "cancelled"
+    }
 }
 
 @Entity(tableName = "auth_devices")

@@ -119,4 +119,95 @@ object Notifications {
     fun cancelChatStatus(context: Context) {
         NotificationManagerCompat.from(context).cancel(ID_STREAM)
     }
+
+    // ---- 视频任务通知（前台服务常驻与完成/失败提醒共用同一槽位，进行中 → 结果原地替换） ----
+
+    fun videoNotificationId(jobId: Long): Int = 3000 + jobId.toInt()
+
+    private fun chatClickPending(context: Context, conversationId: Long?): PendingIntent {
+        val intent = Intent(context, MainActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP
+            putExtra(MainActivity.EXTRA_OPEN_CHAT, true)
+            if (conversationId != null) putExtra(MainActivity.EXTRA_OPEN_CHAT_CONVERSATION, conversationId)
+        }
+        // requestCode 掺入会话 id：Intent.filterEquals 不比较 extras，共用码会让多个会话的通知互相覆盖
+        return PendingIntent.getActivity(
+            context, 3 + (conversationId ?: 0L).toInt(), intent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
+    }
+
+    /** 生成中的任务通知：elapsedMin 为已等待分钟数；asking=true 加「继续等待」按钮（2 分钟询问窗）。「取消任务」常驻 */
+    fun notifyVideoProgress(
+        context: Context,
+        jobId: Long,
+        conversationId: Long,
+        modelName: String,
+        elapsedMin: Int,
+        asking: Boolean,
+    ) {
+        if (!hasPermission(context)) return
+        NotificationManagerCompat.from(context).notify(
+            videoNotificationId(jobId),
+            buildVideoProgress(context, jobId, conversationId, modelName, elapsedMin, asking),
+        )
+    }
+
+    fun buildVideoProgress(
+        context: Context,
+        jobId: Long,
+        conversationId: Long,
+        modelName: String,
+        elapsedMin: Int,
+        asking: Boolean,
+    ): Notification {
+        fun serviceAction(action: String, slot: Int): PendingIntent {
+            val intent = Intent(context, VideoJobService::class.java).apply {
+                this.action = action
+                putExtra(VideoJobService.EXTRA_JOB_ID, jobId)
+            }
+            // requestCode 掺入 jobId：同 action 不同任务必须是不同 PendingIntent，否则 extras 互相覆盖
+            return PendingIntent.getService(
+                context, (jobId.toInt() shl 2) or slot, intent,
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+            )
+        }
+        val builder = NotificationCompat.Builder(context, CHANNEL_CHAT)
+            .setSmallIcon(R.drawable.ic_stat_notify)
+            .setContentTitle(
+                if (asking) "视频仍在生成，继续等待吗？" else "视频生成中（已等待 $elapsedMin 分钟）",
+            )
+            .setContentText("$modelName · 点按通知可回到会话")
+            .setOngoing(true)
+            .setOnlyAlertOnce(true)
+            .setContentIntent(chatClickPending(context, conversationId))
+            .addAction(0, "取消任务", serviceAction(VideoJobService.ACTION_CANCEL_JOB, 1))
+        if (asking) {
+            builder.addAction(0, "继续等待", serviceAction(VideoJobService.ACTION_KEEP_WAITING, 2))
+        }
+        return builder.build()
+    }
+
+    /** 完成/失败提醒：autoCancel，点击回对应会话（槽位与进行中相同，原地替换） */
+    fun notifyVideoResult(
+        context: Context,
+        jobId: Long,
+        conversationId: Long,
+        success: Boolean,
+        text: String,
+    ) {
+        if (!hasPermission(context)) return
+        val builder = NotificationCompat.Builder(context, CHANNEL_CHAT)
+            .setSmallIcon(R.drawable.ic_stat_notify)
+            .setContentTitle(if (success) "视频已生成" else "视频生成失败")
+            .setContentText(text)
+            .setAutoCancel(true)
+            .setContentIntent(chatClickPending(context, conversationId))
+            .setCategory(NotificationCompat.CATEGORY_MESSAGE)
+        NotificationManagerCompat.from(context).notify(videoNotificationId(jobId), builder.build())
+    }
+
+    fun cancelVideoNotification(context: Context, jobId: Long) {
+        NotificationManagerCompat.from(context).cancel(videoNotificationId(jobId))
+    }
 }

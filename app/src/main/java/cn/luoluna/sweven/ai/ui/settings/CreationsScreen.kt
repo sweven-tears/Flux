@@ -25,6 +25,7 @@ import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.PhotoLibrary
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.SelectAll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -51,16 +52,18 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import cn.luoluna.sweven.ai.App
 import cn.luoluna.sweven.ai.data.db.MessageEntity
+import cn.luoluna.sweven.ai.ui.chat.FluxVideoPlayer
 import cn.luoluna.sweven.ai.ui.chat.ImagePreviewDialog
 import cn.luoluna.sweven.ai.ui.chat.rememberDataUrlBitmap
 import cn.luoluna.sweven.ai.ui.chat.rememberDataUrlThumb
 import cn.luoluna.sweven.ai.ui.chat.rememberGallerySaver
+import cn.luoluna.sweven.ai.ui.chat.rememberVideoFrame
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
-/** 网格中的一件创作：助手消息 imagesJson 里的一张图（视频预留 data:video/ 前缀形态） */
+/** 网格中的一件创作：助手消息 imagesJson 里的一张图/一个视频（视频为 flux-video: 文件路径前缀） */
 private data class CreationItem(
     val messageId: Long,
     val index: Int,
@@ -69,7 +72,8 @@ private data class CreationItem(
     val modelName: String?,
 ) {
     val key: String get() = "${messageId}_$index"
-    val isVideo: Boolean get() = url.startsWith("data:video/")
+    val isVideo: Boolean get() = MessageEntity.isVideo(url)
+    val videoPath: String? get() = if (isVideo) url.removePrefix(MessageEntity.VIDEO_PREFIX) else null
 }
 
 private val timeFmt = SimpleDateFormat("MM-dd HH:mm", Locale.getDefault())
@@ -90,11 +94,15 @@ fun CreationsScreen(onBack: () -> Unit) {
         .collectAsStateWithLifecycle(emptyList())
     val saveToGallery = rememberGallerySaver()
 
-    // 展开为网格项：一张图一项；已清理的占位标记不再收录
+    // 展开为网格项：一张图/一个视频一项；已清理的占位标记不再收录
     val items = remember(messages) {
         messages.flatMap { m ->
             m.images.mapIndexedNotNull { idx, url ->
-                if (url.startsWith("data:")) CreationItem(m.id, idx, url, m.createdAt, m.modelName) else null
+                if (url.startsWith("data:") || MessageEntity.isVideo(url)) {
+                    CreationItem(m.id, idx, url, m.createdAt, m.modelName)
+                } else {
+                    null
+                }
             }
         }
     }
@@ -186,7 +194,7 @@ fun CreationsScreen(onBack: () -> Unit) {
                         tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
                     )
                     Text(
-                        if (tab == 2) "暂无视频创作（视频生成即将支持）" else "还没有创作，去聊天页用生图模型生成第一张图吧",
+                        if (tab == 2) "暂无视频创作，去聊天页用视频生成模型试试" else "还没有创作，去聊天页用生图模型生成第一张图吧",
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.padding(top = 12.dp),
@@ -225,11 +233,25 @@ fun CreationsScreen(onBack: () -> Unit) {
         }
     }
 
-    // 大图预览：进入时按 key 找当前项（删除后自动关闭），位图解码完成再弹
+    // 大图/视频预览：进入时按 key 找当前项（删除后自动关闭）；视频用内嵌播放器，图片解码完成再弹
     previewKey?.let { key ->
         val item = filtered.firstOrNull { it.key == key }
         if (item == null) {
             previewKey = null
+        } else if (item.isVideo) {
+            AlertDialog(
+                onDismissRequest = { previewKey = null },
+                confirmButton = {
+                    TextButton(onClick = { previewKey = null }) { Text("关闭") }
+                },
+                title = { Text(item.modelName ?: "视频") },
+                text = {
+                    FluxVideoPlayer(
+                        item.videoPath ?: "",
+                        Modifier.fillMaxWidth().aspectRatio(16f / 9f),
+                    )
+                },
+            )
         } else {
             val bitmap = rememberDataUrlBitmap(item.url).value
             if (bitmap != null) {
@@ -254,12 +276,21 @@ fun CreationsScreen(onBack: () -> Unit) {
                     confirmDelete = false
                     exitSelection()
                     scope.launch {
-                        // 按消息分组，把对应位置的 data URL 原位替换为已清理标记
+                        // 按消息分组，把对应位置的原条目（data URL / 视频文件）原位替换为已清理标记
                         targets.groupBy { it.messageId }.forEach { (mid, parts) ->
                             val msg = messages.firstOrNull { it.id == mid } ?: return@forEach
                             val imgs = msg.images.toMutableList()
                             parts.forEach { p ->
-                                if (p.index in imgs.indices) imgs[p.index] = MessageEntity.DELETED_IMAGE
+                                if (p.index in imgs.indices) {
+                                    val old = imgs[p.index]
+                                    // 视频清理时同步删除私有目录里的文件（体积大，不留孤儿）
+                                    if (MessageEntity.isVideo(old)) {
+                                        runCatching {
+                                            java.io.File(old.removePrefix(MessageEntity.VIDEO_PREFIX)).delete()
+                                        }
+                                    }
+                                    imgs[p.index] = MessageEntity.DELETED_IMAGE
+                                }
                             }
                             messageDao.update(msg.copy(imagesJson = MessageEntity.imagesJsonOf(imgs)))
                         }
@@ -281,7 +312,9 @@ private fun CreationThumb(
     onClick: () -> Unit,
     onLongClick: () -> Unit,
 ) {
-    val bitmap = rememberDataUrlThumb(item.url).value
+    // 视频取封面帧（视频文件无法用 data URL 解码），失败显示占位
+    val videoFrame = if (item.isVideo) rememberVideoFrame(item.videoPath ?: "") else null
+    val bitmap = if (item.isVideo) videoFrame else rememberDataUrlThumb(item.url).value
     Box(
         Modifier
             .aspectRatio(1f)
@@ -295,6 +328,18 @@ private fun CreationThumb(
                 contentDescription = null,
                 contentScale = ContentScale.Crop,
                 modifier = Modifier.fillMaxSize(),
+            )
+        }
+        if (item.isVideo) {
+            Icon(
+                Icons.Filled.PlayArrow,
+                contentDescription = "视频",
+                tint = MaterialTheme.colorScheme.onSurface,
+                modifier = Modifier
+                    .align(Alignment.Center)
+                    .clip(CircleShape)
+                    .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.7f))
+                    .padding(4.dp),
             )
         }
         if (selecting) {

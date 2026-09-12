@@ -131,3 +131,26 @@ fun produceUriBitmap(context: Context, uri: Uri): State<ImageBitmap?> =
         }
     }
 
+
+/** 视频封面帧：取首帧降采样为 ImageBitmap；文件缺失/解码失败为 null（渲染占位块） */
+@Composable
+fun rememberVideoFrame(path: String): ImageBitmap? =
+    produceState<ImageBitmap?>(initialValue = null, path) {
+        value = withContext(Dispatchers.IO) {
+            runCatching {
+                val retriever = android.media.MediaMetadataRetriever()
+                retriever.setDataSource(path)
+                val frame = retriever.getFrameAtTime(0L, android.media.MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
+                retriever.release()
+                // 封面帧缩到 480px 宽即可，避免长视频首帧过大
+                val maxW = 480
+                val scaled = if (frame != null && frame.width > maxW) {
+                    val h = frame.height * maxW / frame.width
+                    android.graphics.Bitmap.createScaledBitmap(frame, maxW, h, true)
+                } else {
+                    frame
+                }
+                scaled?.asImageBitmap()
+            }.getOrNull()
+        }
+    }.value

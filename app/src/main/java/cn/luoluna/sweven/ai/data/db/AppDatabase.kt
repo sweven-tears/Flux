@@ -21,8 +21,9 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         FolderEntity::class,
         PresetEntity::class,
         RequestLogEntity::class,
+        VideoJobEntity::class,
     ],
-    version = 14,
+    version = 15,
     exportSchema = false,
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -38,6 +39,7 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun folderDao(): FolderDao
     abstract fun presetDao(): PresetDao
     abstract fun requestLogDao(): RequestLogDao
+    abstract fun videoJobDao(): VideoJobDao
 
     companion object {
         /** v1 → v2：新增文件夹、预设对话表；会话表增加 folderId / systemPrompt */
@@ -199,12 +201,24 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        /** v14 → v15：新增视频生成任务表（提交/轮询/下载生命周期落库） */
+        private val MIGRATION_14_15 = object : Migration(14, 15) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `video_jobs` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, " +
+                        "`conversationId` INTEGER NOT NULL, `providerId` INTEGER NOT NULL, `modelName` TEXT NOT NULL, " +
+                        "`prompt` TEXT NOT NULL, `upstreamJobId` TEXT, `status` TEXT NOT NULL, " +
+                        "`videoPath` TEXT, `error` TEXT, `createdAt` INTEGER NOT NULL, `updatedAt` INTEGER NOT NULL)"
+                )
+            }
+        }
+
         fun build(context: Context): AppDatabase =
             Room.databaseBuilder(context, AppDatabase::class.java, "flux.db")
                 .addMigrations(
                     MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7,
                     MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12,
-                    MIGRATION_12_13, MIGRATION_13_14,
+                    MIGRATION_12_13, MIGRATION_13_14, MIGRATION_14_15,
                 )
                 .fallbackToDestructiveMigration()
                 .build()

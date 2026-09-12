@@ -2,6 +2,7 @@ package cn.luoluna.sweven.ai.ui.provider
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.basicMarquee
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -49,6 +50,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -140,6 +142,8 @@ fun SmartRouteScreen(onBack: () -> Unit) {
     var showCategoryView by remember { mutableStateOf(false) }
     var showAddGroup by remember { mutableStateOf(false) }
     var showParamsSheet by remember { mutableStateOf(false) }
+    // 分组添加成员半窗的目标分组
+    var addMembersGroup by remember { mutableStateOf<SmartRouteGroupEntity?>(null) }
     var deleteGroupTarget by remember { mutableStateOf<SmartRouteGroupEntity?>(null) }
     // 短板明细半窗目标分组；「调整能力」打开模型编辑器的目标模型
     var gapSheetGroup by remember { mutableStateOf<SmartRouteGroupEntity?>(null) }
@@ -336,6 +340,14 @@ fun SmartRouteScreen(onBack: () -> Unit) {
                                 onRemove = {
                                     scope.launch { app.database.smartRouteMemberDao().delete(member) }
                                 },
+                                modifier = Modifier
+                                    .padding(start = 24.dp)
+                                    .animateItem(),
+                            )
+                        }
+                        item(key = "m_add_${group.id}") {
+                            AddMemberRow(
+                                onClick = { addMembersGroup = group },
                                 modifier = Modifier
                                     .padding(start = 24.dp)
                                     .animateItem(),
@@ -636,6 +648,33 @@ fun SmartRouteScreen(onBack: () -> Unit) {
             onConfirm = {
                 scope.launch { app.database.smartRouteGroupDao().delete(group) }
                 deleteGroupTarget = null
+            },
+        )
+    }
+
+    // 分组添加成员半窗：同族匹配预选 + 全量可勾，确认后追加到组内末尾
+    addMembersGroup?.let { g ->
+        AddGroupMembersSheet(
+            group = g,
+            providers = providers,
+            models = models,
+            existingMembers = members.filter { it.groupId == g.id },
+            onDismiss = { addMembersGroup = null },
+            onConfirm = { selected ->
+                scope.launch {
+                    val base = members.filter { it.groupId == g.id }.maxOfOrNull { it.sortOrder } ?: -1
+                    app.database.smartRouteMemberDao().insertAll(
+                        selected.mapIndexed { i, m ->
+                            SmartRouteMemberEntity(
+                                groupId = g.id,
+                                providerId = m.providerId,
+                                modelName = m.name,
+                                sortOrder = base + 1 + i,
+                            )
+                        }
+                    )
+                    addMembersGroup = null
+                }
             },
         )
     }
@@ -1705,6 +1744,238 @@ private fun CategoryViewSheet(
                     }
                 }
             }
+        }
+    }
+}
+
+/** 成员列表末尾的「添加成员」入口行 */
+@Composable
+private fun AddMemberRow(onClick: () -> Unit, modifier: Modifier = Modifier) {
+    Surface(
+        shape = RoundedCornerShape(10.dp),
+        color = MaterialTheme.colorScheme.surface,
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+        modifier = modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(10.dp))
+            .clickable(onClick = onClick),
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+        ) {
+            Icon(
+                Icons.Filled.Add,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary,
+            )
+            Text(
+                "添加成员",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.padding(start = 6.dp),
+            )
+        }
+    }
+}
+
+/**
+ * 分组添加成员：上半区「同族匹配」= 归组身份键命中的未入组模型（默认预选，一键补齐）；
+ * 下半区「全部模型」= 可搜索/按厂商过滤的完整候选，手动勾选任意模型入组（假模型/特殊命名兜底）。
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun AddGroupMembersSheet(
+    group: SmartRouteGroupEntity,
+    providers: List<ProviderEntity>,
+    models: List<ModelEntity>,
+    existingMembers: List<SmartRouteMemberEntity>,
+    onDismiss: () -> Unit,
+    onConfirm: (List<ModelEntity>) -> Unit,
+) {
+    var query by remember { mutableStateOf("") }
+    var providerFilter by remember { mutableStateOf<String?>(null) }
+
+    val enabledProviderIds = providers.filter { it.enabled }.map { it.id }.toSet()
+    val eligible = models.filter {
+        (it.type == ModelType.CHAT || it.outputImage) && it.providerId in enabledProviderIds
+    }
+    val existingKeys = existingMembers.map { it.providerId to it.modelName }.toSet()
+    val candidates = eligible.filter { (it.providerId to it.name) !in existingKeys }
+    // 同族匹配（按归组身份键，含备注匹配）：默认预选
+    val matched = ModelIdGrouper.membersOf(group.groupKey, candidates)
+    val matchedKeys = matched.map { it.providerId to it.name }.toSet()
+    var checked by remember { mutableStateOf(matchedKeys) }
+
+    val providerAliases = candidates.mapNotNull { m ->
+        providers.firstOrNull { it.id == m.providerId }?.alias
+    }.distinct()
+    val q = normalizeModelId(query)
+    fun pass(m: ModelEntity): Boolean {
+        val alias = providers.firstOrNull { it.id == m.providerId }?.alias
+        return (providerFilter == null || alias == providerFilter) &&
+            (q.isEmpty() || normalizeModelId("${m.name} ${m.alias.orEmpty()}").contains(q))
+    }
+    val matchedFiltered = matched.filter { pass(it) }
+    val others = candidates
+        .filter { (it.providerId to it.name) !in matchedKeys }
+        .filter { pass(it) }
+
+    ModalBottomSheet(onDismissRequest = onDismiss) {
+        Column(Modifier.padding(horizontal = 16.dp)) {
+            Text(
+                "添加成员 · ${group.routeName}",
+                style = MaterialTheme.typography.titleMedium,
+            )
+            Text(
+                "同族匹配的模型已预选，确认即一并加入；也可在全部模型里手动勾选任意模型入组" +
+                    "（成员顺序即组内切换优先级，入组后可在成员列表长按拖动调整）。",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(top = 2.dp),
+            )
+            OutlinedTextField(
+                value = query,
+                onValueChange = { query = it },
+                placeholder = { Text("搜索模型") },
+                singleLine = true,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 8.dp),
+            )
+            if (providerAliases.size > 1) {
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .horizontalScroll(rememberScrollState())
+                        .padding(bottom = 8.dp),
+                ) {
+                    FilterChip(
+                        selected = providerFilter == null,
+                        onClick = { providerFilter = null },
+                        label = { Text("全部厂商") },
+                    )
+                    providerAliases.forEach { alias ->
+                        FilterChip(
+                            selected = providerFilter == alias,
+                            onClick = { providerFilter = if (providerFilter == alias) null else alias },
+                            label = { Text(alias, maxLines = 1) },
+                        )
+                    }
+                }
+            }
+        }
+        if (matchedFiltered.isEmpty() && others.isEmpty()) {
+            Column(
+                Modifier.fillMaxWidth().padding(32.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+            ) {
+                Text(
+                    if (candidates.isEmpty()) "没有可添加的模型：候选需为启用中的 chat 或图像生成模型，且尚未入组"
+                    else "没有匹配的模型",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        } else {
+            LazyColumn(Modifier.fillMaxWidth().heightIn(max = 420.dp)) {
+                if (matchedFiltered.isNotEmpty()) {
+                    item(key = "sec_matched") {
+                        Text(
+                            "同族匹配（已预选 ${matched.size} 个）",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.padding(start = 16.dp, top = 8.dp, bottom = 2.dp),
+                        )
+                    }
+                    items(matchedFiltered, key = { "s_${it.providerId}_${it.name}" }) { m ->
+                        MemberCheckRow(
+                            model = m,
+                            providers = providers,
+                            checked = checked,
+                            onToggle = { v ->
+                                val k = m.providerId to m.name
+                                checked = if (v) checked + k else checked - k
+                            },
+                        )
+                    }
+                }
+                if (others.isNotEmpty()) {
+                    item(key = "sec_all") {
+                        Text(
+                            "全部模型",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.padding(start = 16.dp, top = 8.dp, bottom = 2.dp),
+                        )
+                    }
+                    items(others, key = { "a_${it.providerId}_${it.name}" }) { m ->
+                        MemberCheckRow(
+                            model = m,
+                            providers = providers,
+                            checked = checked,
+                            onToggle = { v ->
+                                val k = m.providerId to m.name
+                                checked = if (v) checked + k else checked - k
+                            },
+                        )
+                    }
+                }
+                item(key = "footer") { Spacer(Modifier.height(8.dp)) }
+            }
+        }
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 12.dp),
+            horizontalArrangement = Arrangement.End,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            TextButton(onClick = onDismiss) { Text("取消") }
+            Spacer(Modifier.width(8.dp))
+            Button(
+                onClick = { onConfirm(candidates.filter { (it.providerId to it.name) in checked }) },
+                enabled = checked.isNotEmpty(),
+            ) {
+                Text(if (checked.isEmpty()) "添加所选" else "添加所选（${checked.size}）")
+            }
+        }
+    }
+}
+
+@Composable
+private fun MemberCheckRow(
+    model: ModelEntity,
+    providers: List<ProviderEntity>,
+    checked: Set<Pair<Long, String>>,
+    onToggle: (Boolean) -> Unit,
+) {
+    val p = providers.firstOrNull { it.id == model.providerId }
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp),
+    ) {
+        Checkbox(
+            checked = (model.providerId to model.name) in checked,
+            onCheckedChange = onToggle,
+        )
+        Column(Modifier.weight(1f).padding(vertical = 6.dp)) {
+            Text(
+                "${p?.alias ?: "?"} / ${model.alias?.takeIf { it.isNotBlank() } ?: model.name}",
+                style = MaterialTheme.typography.bodySmall,
+                maxLines = 1,
+                modifier = Modifier.basicMarquee(),
+            )
+            Text(
+                model.name,
+                style = MaterialTheme.typography.labelSmall,
+                fontFamily = FontFamily.Monospace,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                modifier = Modifier.basicMarquee(),
+            )
+            ModelBadgesRow(model, Modifier.padding(top = 2.dp))
         }
     }
 }

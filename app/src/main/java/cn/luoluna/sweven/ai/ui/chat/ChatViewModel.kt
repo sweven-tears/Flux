@@ -390,6 +390,9 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
 
     private data class StreamStats(val usage: UsageInfo?, val ttftMs: Long?, val totalMs: Long?)
 
+    /** 聊天页是否前台可见（ChatScreen 按 ON_RESUME/ON_PAUSE 上报）。声明须在 init 之前（init 里被 combine 引用） */
+    val pageVisible = MutableStateFlow(true)
+
     init {
         viewModelScope.launch {
             val latest = conversationDao.observeAll().first().firstOrNull()
@@ -404,9 +407,6 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
 
     /** 离开页面多久后发「正在回复」提醒 */
     private val AWAY_NOTIFY_DELAY_MS = 15_000L
-
-    /** 聊天页是否前台可见（ChatScreen 按 ON_RESUME/ON_PAUSE 上报） */
-    val pageVisible = MutableStateFlow(true)
 
     private var awayNotifyJob: Job? = null
 

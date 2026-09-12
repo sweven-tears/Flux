@@ -17,8 +17,10 @@ import cn.luoluna.sweven.ai.R
 
 object Notifications {
     const val CHANNEL_LAN = "lan_server"
+    const val CHANNEL_CHAT = "chat_status"
     const val ID_SERVER = 2001
     const val ID_PENDING_DEVICE = 2002
+    const val ID_STREAM = 2003
 
     fun ensureChannels(context: Context) {
         val manager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
@@ -28,6 +30,12 @@ object Notifications {
             NotificationManager.IMPORTANCE_LOW,
         ).apply { description = "聚合路由服务运行状态与设备授权提醒" }
         manager.createNotificationChannel(channel)
+        val chatChannel = NotificationChannel(
+            CHANNEL_CHAT,
+            "聊天助手",
+            NotificationManager.IMPORTANCE_DEFAULT,
+        ).apply { description = "离开聊天页时的回复进度提醒与视频生成通知" }
+        manager.createNotificationChannel(chatChannel)
     }
 
     fun hasPermission(context: Context): Boolean =
@@ -76,5 +84,39 @@ object Notifications {
             .setCategory(NotificationCompat.CATEGORY_MESSAGE)
         context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         NotificationManagerCompat.from(context).notify(ID_PENDING_DEVICE, builder.build())
+    }
+
+    /**
+     * 聊天流式状态通知（同一 ID 先后发「正在回复 / 已完成」完成更新）：
+     * 进行中 ongoing + setOnlyAlertOnce（首次提醒即可），完成 autoCancel 可点击回聊天页。
+     */
+    fun notifyChatStatus(context: Context, done: Boolean, conversationId: Long?, text: String) {
+        if (!hasPermission(context)) return
+        val intent = Intent(context, MainActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP
+            putExtra(MainActivity.EXTRA_OPEN_CHAT, true)
+            if (conversationId != null) putExtra(MainActivity.EXTRA_OPEN_CHAT_CONVERSATION, conversationId)
+        }
+        val pending = PendingIntent.getActivity(
+            context, 2, intent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
+        val builder = NotificationCompat.Builder(context, CHANNEL_CHAT)
+            .setSmallIcon(R.drawable.ic_stat_notify)
+            .setContentTitle(if (done) "回复已完成" else "正在回复…")
+            .setContentText(text)
+            .setContentIntent(pending)
+            .setCategory(NotificationCompat.CATEGORY_MESSAGE)
+        if (done) {
+            builder.setAutoCancel(true)
+        } else {
+            builder.setOngoing(true).setOnlyAlertOnce(true)
+        }
+        NotificationManagerCompat.from(context).notify(ID_STREAM, builder.build())
+    }
+
+    /** 撤销聊天流式状态通知（回到聊天页时） */
+    fun cancelChatStatus(context: Context) {
+        NotificationManagerCompat.from(context).cancel(ID_STREAM)
     }
 }

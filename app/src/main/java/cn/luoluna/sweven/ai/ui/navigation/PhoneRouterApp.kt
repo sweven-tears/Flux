@@ -17,6 +17,9 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.navigation.NavGraph.Companion.findStartDestination
 import androidx.navigation.NavType
@@ -52,14 +55,31 @@ object Routes {
 private val TOP_ROUTES = setOf(Routes.CHAT, Routes.PROVIDERS, Routes.LAN)
 
 @Composable
-fun PhoneRouterApp(openLanTick: Int) {
+fun PhoneRouterApp(
+    openLanTick: Int,
+    openChatTick: Int = 0,
+    openChatConversation: Long? = null,
+) {
     val navController = rememberNavController()
     val backStackEntry by navController.currentBackStackEntryAsState()
     val currentRoute = backStackEntry?.destination?.route
+    // 通知点击要打开的会话，ChatScreen 消费后置空
+    var pendingChatConversation by remember { mutableStateOf<Long?>(null) }
 
     LaunchedEffect(openLanTick) {
         if (openLanTick > 0) {
             navController.navigate(Routes.LAN) {
+                popUpTo(navController.graph.findStartDestination().id) { saveState = true }
+                launchSingleTop = true
+                restoreState = true
+            }
+        }
+    }
+
+    LaunchedEffect(openChatTick) {
+        if (openChatTick > 0) {
+            pendingChatConversation = openChatConversation
+            navController.navigate(Routes.CHAT) {
                 popUpTo(navController.graph.findStartDestination().id) { saveState = true }
                 launchSingleTop = true
                 restoreState = true
@@ -117,6 +137,8 @@ fun PhoneRouterApp(openLanTick: Int) {
                 ChatScreen(
                     onGoProviders = { gotoTab(Routes.PROVIDERS) },
                     onOpenSettings = { navController.navigate(Routes.SETTINGS) },
+                    pendingConversationId = pendingChatConversation,
+                    onConsumePendingConversation = { pendingChatConversation = null },
                 )
             }
             composable(Routes.PROVIDERS) {

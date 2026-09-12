@@ -1,6 +1,9 @@
 package cn.luoluna.sweven.ai.ui.chat
 
+import android.Manifest
+import android.os.Build
 import android.widget.Toast
+import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
@@ -30,11 +33,13 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberDrawerState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -46,9 +51,12 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Row
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import cn.luoluna.sweven.ai.App
+import cn.luoluna.sweven.ai.server.Notifications
 import cn.luoluna.sweven.ai.data.db.ConversationEntity
 import cn.luoluna.sweven.ai.data.db.FolderEntity
 import cn.luoluna.sweven.ai.data.db.MessageEntity
@@ -77,6 +85,8 @@ import kotlinx.coroutines.launch
 fun ChatScreen(
     onGoProviders: () -> Unit,
     onOpenSettings: () -> Unit,
+    pendingConversationId: Long? = null,
+    onConsumePendingConversation: () -> Unit = {},
     vm: ChatViewModel = viewModel(),
 ) {
     val context = LocalContext.current
@@ -133,6 +143,42 @@ fun ChatScreen(
 
     var pickerOpen by remember { mutableStateOf(false) }
     var pluginPickerOpen by remember { mutableStateOf(false) }
+
+    // 通知点击带回的会话跳转：切到目标会话并消费
+    LaunchedEffect(pendingConversationId) {
+        pendingConversationId?.let {
+            vm.selectConversation(it)
+            onConsumePendingConversation()
+        }
+    }
+
+    // 页面可见性上报：离开页面且生成中 15 秒 → 通知提醒（ChatViewModel.syncAwayNotify）
+    val activity = context as? ComponentActivity
+    DisposableEffect(activity) {
+        val observer = LifecycleEventObserver { _, event ->
+            when (event) {
+                Lifecycle.Event.ON_RESUME -> vm.pageVisible.value = true
+                Lifecycle.Event.ON_PAUSE -> vm.pageVisible.value = false
+                else -> Unit
+            }
+        }
+        activity?.lifecycle?.addObserver(observer)
+        onDispose { activity?.lifecycle?.removeObserver(observer) }
+    }
+
+    // 首次发消息时申请通知权限（回复提醒/视频完成通知依赖，每进程只问一次）
+    var notifPermissionAsked by rememberSaveable { mutableStateOf(false) }
+    val notifPermissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission(),
+    ) {}
+    fun ensureNotifPermission() {
+        if (notifPermissionAsked) return
+        notifPermissionAsked = true
+        if (Build.VERSION.SDK_INT >= 33 && !Notifications.hasPermission(context)) {
+            notifPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+        }
+    }
+
     var attachments by remember { mutableStateOf(listOf<android.net.Uri>()) }
     var input by remember { mutableStateOf("") }
     var detailMessage by remember { mutableStateOf<MessageEntity?>(null) }
@@ -266,6 +312,7 @@ fun ChatScreen(
             )
         },
         send = {
+            ensureNotifPermission()
             focusManager.clearFocus()
             val editing = editingMessage
             val text = input

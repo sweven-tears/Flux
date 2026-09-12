@@ -16,6 +16,8 @@ import cn.luoluna.sweven.ai.ui.theme.PhoneRouterTheme
 class MainActivity : ComponentActivity() {
 
     private val openLanTick = mutableStateOf(0)
+    private val openChatTick = mutableStateOf(0)
+    private val openChatConversation = mutableStateOf<Long?>(null)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -25,7 +27,13 @@ class MainActivity : ComponentActivity() {
         setContent {
             PhoneRouterTheme {
                 val openLan by openLanTick
-                PhoneRouterApp(openLanTick = openLan)
+                val openChat by openChatTick
+                val openChatConv by openChatConversation
+                PhoneRouterApp(
+                    openLanTick = openLan,
+                    openChatTick = openChat,
+                    openChatConversation = openChatConv,
+                )
             }
         }
     }
@@ -39,6 +47,11 @@ class MainActivity : ComponentActivity() {
         if (intent?.getBooleanExtra(EXTRA_OPEN_LAN, false) == true) {
             openLanTick.value += 1
         }
+        if (intent?.getBooleanExtra(EXTRA_OPEN_CHAT, false) == true) {
+            openChatConversation.value =
+                intent.getLongExtra(EXTRA_OPEN_CHAT_CONVERSATION, -1L).takeIf { it > 0 }
+            openChatTick.value += 1
+        }
     }
 
     private fun autoStartLanIfNeeded() {
@@ -50,5 +63,7 @@ class MainActivity : ComponentActivity() {
 
     companion object {
         const val EXTRA_OPEN_LAN = "open_lan"
+        const val EXTRA_OPEN_CHAT = "open_chat"
+        const val EXTRA_OPEN_CHAT_CONVERSATION = "open_chat_conversation"
     }
 }

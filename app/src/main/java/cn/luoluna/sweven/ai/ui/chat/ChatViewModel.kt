@@ -34,6 +34,7 @@ import cn.luoluna.sweven.ai.data.repo.SmartRouteExecutor
 import cn.luoluna.sweven.ai.data.repo.aggregateCapability
 import cn.luoluna.sweven.ai.data.repo.featuresOfHistory
 import cn.luoluna.sweven.ai.data.repo.intersectCapability
+import cn.luoluna.sweven.ai.server.Notifications
 import cn.luoluna.sweven.ai.data.repo.isSelfGatewayUrl
 import cn.luoluna.sweven.ai.data.repo.orderCandidates
 import cn.luoluna.sweven.ai.net.AdvancedParams
@@ -388,6 +389,60 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             val latest = conversationDao.observeAll().first().firstOrNull()
             if (latest != null) currentId.value = latest.id
+        }
+        // 离开聊天页 + 生成中 15 秒 → 发提醒通知；回到页面撤销；流式结束时更新为已完成
+        viewModelScope.launch {
+            combine(_streaming, pageVisible) { streaming, visible -> streaming to visible }
+                .collect { (streaming, visible) -> syncAwayNotify(streaming, visible) }
+        }
+    }
+
+    /** 离开页面多久后发「正在回复」提醒 */
+    private val AWAY_NOTIFY_DELAY_MS = 15_000L
+
+    /** 聊天页是否前台可见（ChatScreen 按 ON_RESUME/ON_PAUSE 上报） */
+    val pageVisible = MutableStateFlow(true)
+
+    private var awayNotifyJob: Job? = null
+
+    @Volatile
+    private var streamNotified = false
+
+    private fun syncAwayNotify(streaming: Boolean, visible: Boolean) {
+        val app = getApplication<Application>()
+        if (visible) {
+            awayNotifyJob?.cancel()
+            awayNotifyJob = null
+            if (streamNotified) {
+                streamNotified = false
+                Notifications.cancelChatStatus(app)
+            }
+            return
+        }
+        if (!streaming || awayNotifyJob?.isActive == true) return
+        awayNotifyJob = viewModelScope.launch {
+            delay(AWAY_NOTIFY_DELAY_MS)
+            if (!_streaming.value || pageVisible.value) return@launch
+            streamNotified = true
+            Notifications.notifyChatStatus(
+                app, done = false, conversationId = currentId.value,
+                text = "正在后台生成回复，完成后提醒你",
+            )
+        }
+    }
+
+    /** 流式结束（完成/停止/丢弃）共用收尾：离开页面且已提醒过 → 通知更新为已完成 */
+    private fun onStreamEndedForNotify() {
+        if (!streamNotified) return
+        streamNotified = false
+        val app = getApplication<Application>()
+        if (pageVisible.value) {
+            Notifications.cancelChatStatus(app)
+        } else {
+            Notifications.notifyChatStatus(
+                app, done = true, conversationId = currentId.value,
+                text = "点击查看回复",
+            )
         }
     }
 
@@ -957,6 +1012,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
     private suspend fun finishStreaming(convId: Long, publisher: StreamPublisher, failed: ChatError?) {
         publisher.publish(force = true)
         _streaming.value = false
+        onStreamEndedForNotify()
         val finalContent = _streamingText.value
         val finalReasoning = _streamingReasoning.value.trim().takeIf { it.isNotEmpty() }
         _streamingText.value = ""
@@ -993,6 +1049,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         _streamingReasoning.value = ""
         activeStreamModel = null
         takeStreamStats()
+        onStreamEndedForNotify()
     }
 
     /**
@@ -1119,6 +1176,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         _generatingImage.value = false
         _streamingText.value = ""
         _streamingReasoning.value = ""
+        onStreamEndedForNotify()
         if (partial.isNotEmpty() || partialReasoning != null) {
             viewModelScope.launch {
                 val convId = currentId.value ?: return@launch
@@ -1182,6 +1240,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         _generatingImage.value = false
         _streamingText.value = ""
         _streamingReasoning.value = ""
+        onStreamEndedForNotify()
         if (partial.isNotEmpty() || partialReasoning != null) {
             val convId = currentId.value
             if (convId != null) {

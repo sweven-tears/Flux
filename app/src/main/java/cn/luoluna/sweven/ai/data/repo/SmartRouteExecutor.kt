@@ -258,6 +258,8 @@ fun isSelfGatewayUrl(baseUrl: String, lanPort: Int): Boolean {
     if (url.port != lanPort) return false
     val host = url.host.removePrefix("[").removeSuffix("]")
     if (host == "localhost" || host == "127.0.0.1" || host == "::1") return true
+    // mDNS 主机名（flux.local 及自定义前缀 <label>.flux.local）同样指向本机网关
+    if (host == "flux.local" || host.endsWith(".flux.local")) return true
     return host in localInterfaceAddresses()
 }
 

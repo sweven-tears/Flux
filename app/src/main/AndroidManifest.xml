@@ -8,6 +8,8 @@
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <!-- WifiLock 需要的锁权限 -->
     <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <!-- mDNS 组播收发（flux.local 广播）需要 MulticastLock -->
+    <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
     <!-- 局域网网关后台稳定运行：发起「忽略电池优化」系统弹窗 -->
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
     <!-- 保存图片到相册：仅 API ≤ 28 需要（29+ 走 MediaStore 相对路径免权限） -->

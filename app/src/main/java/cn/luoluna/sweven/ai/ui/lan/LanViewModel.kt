@@ -24,6 +24,12 @@ class LanViewModel(app: Application) : AndroidViewModel(app) {
     val lanEnabled: StateFlow<Boolean> = settings.lanEnabled
     val lanPort: StateFlow<Int> = settings.lanPort
     val lanSmartAiEnabled: StateFlow<Boolean> = settings.lanSmartAiEnabled
+
+    /** mDNS 主机名前缀（null = 默认 flux.local） */
+    val lanHostnameLabel: StateFlow<String?> = settings.lanHostnameLabel
+
+    /** mDNS 实际广播的主机名（冲突自动改名后以此为准） */
+    val mdnsHost: StateFlow<String?> = ServerState.mdnsHost
     val running: StateFlow<Boolean> = ServerState.running
     val serverError: StateFlow<String?> = ServerState.lastError
 
@@ -62,6 +68,11 @@ class LanViewModel(app: Application) : AndroidViewModel(app) {
             context.stopService(Intent(context, LanService::class.java))
             ContextCompat.startForegroundService(context, LanService.startIntent(context))
         }
+    }
+
+    /** 修改 mDNS 主机名前缀（空 = 恢复默认 flux.local）；服务内监听变更自动重注册，无需重启 */
+    fun setHostnameLabel(label: String?) {
+        settings.setLanHostnameLabel(label)
     }
 
     fun approve(deviceId: String) = viewModelScope.launch {

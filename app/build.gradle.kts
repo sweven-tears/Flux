@@ -84,6 +84,7 @@ dependencies {
     implementation(libs.kotlinx.serialization.json)
     implementation(libs.ktor.server.core)
     implementation(libs.ktor.server.netty)
+    implementation(libs.jmdns)
     implementation(libs.media3.exoplayer)
     implementation(libs.media3.ui)
 }

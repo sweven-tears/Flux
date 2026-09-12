@@ -4,6 +4,10 @@ import android.app.Service
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
+import android.net.ConnectivityManager
+import android.net.Network
+import android.net.NetworkCapabilities
+import android.net.NetworkRequest
 import android.net.wifi.WifiManager
 import android.os.Build
 import android.os.IBinder
@@ -11,13 +15,22 @@ import androidx.core.app.ServiceCompat
 import cn.luoluna.sweven.ai.App
 import cn.luoluna.sweven.ai.data.repo.ModelRouter
 import cn.luoluna.sweven.ai.net.ProviderClient
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.drop
+import kotlinx.coroutines.launch
 
 /** 服务器运行状态，供 UI 观察 */
 object ServerState {
     val running = MutableStateFlow(false)
     val activePort = MutableStateFlow(0)
     val lastError = MutableStateFlow<String?>(null)
+
+    /** mDNS 实际广播的主机名（如 flux.local；无 Wi-Fi 或未生效为 null） */
+    val mdnsHost = MutableStateFlow<String?>(null)
 }
 
 object ServerRunner {
@@ -68,12 +81,19 @@ object ServerRunner {
 class LanService : Service() {
 
     private var wifiLock: WifiManager.WifiLock? = null
+    private var multicastLock: WifiManager.MulticastLock? = null
+    private var netCallback: ConnectivityManager.NetworkCallback? = null
+
+    /** 供 mDNS 主机名变更监听；随服务销毁取消 */
+    private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onCreate() {
         super.onCreate()
         Notifications.ensureChannels(this)
+        observeHostnameChanges()
+        watchLanNetworks()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -93,13 +113,62 @@ class LanService : Service() {
         )
         ServerRunner.start(applicationContext, port)
         acquireWifiLock()
+        acquireMulticastLock()
+        startMdns()
         return START_STICKY
     }
 
     override fun onDestroy() {
+        serviceScope.cancel()
+        MdnsAdvertiser.stop()
+        releaseMulticastLock()
+        unregisterNetworkWatch()
         releaseWifiLock()
         ServerRunner.stop()
         super.onDestroy()
+    }
+
+    private fun startMdns() {
+        val app = application as App
+        MdnsAdvertiser.start(app.settings.lanHostnameLabel.value, ServerState.activePort.value)
+    }
+
+    /** 主机名前缀变更时仅重注册 mDNS，不动 HTTP 服务器（不掉 SSE 连接） */
+    private fun observeHostnameChanges() {
+        val app = application as App
+        serviceScope.launch {
+            app.settings.lanHostnameLabel.drop(1).collect {
+                MdnsAdvertiser.start(it, ServerState.activePort.value)
+            }
+        }
+    }
+
+    /** Wi-Fi 断开/重连后重广播（IP 可能变化）；是否真的重注册由 MdnsAdvertiser 按签名去重 */
+    private fun watchLanNetworks() {
+        if (netCallback != null) return
+        val cm = getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager ?: return
+        val request = NetworkRequest.Builder()
+            .addTransportType(NetworkCapabilities.TRANSPORT_WIFI)
+            .addTransportType(NetworkCapabilities.TRANSPORT_ETHERNET)
+            .build()
+        val callback = object : ConnectivityManager.NetworkCallback() {
+            override fun onAvailable(network: Network) {
+                startMdns()
+            }
+
+            override fun onLost(network: Network) {
+                startMdns()
+            }
+        }
+        runCatching { cm.registerNetworkCallback(request, callback) }
+            .onSuccess { netCallback = callback }
+    }
+
+    private fun unregisterNetworkWatch() {
+        val callback = netCallback ?: return
+        netCallback = null
+        val cm = getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager ?: return
+        runCatching { cm.unregisterNetworkCallback(callback) }
     }
 
     /**
@@ -128,6 +197,28 @@ class LanService : Service() {
             runCatching { if (lock.isHeld) lock.release() }
         }
         wifiLock = null
+    }
+
+    /**
+     * mDNS 走 UDP 组播（224.0.0.251），部分机型默认过滤组播入包，
+     * 持 MulticastLock 才能收到局域网内的 mDNS 查询。
+     */
+    private fun acquireMulticastLock() {
+        if (multicastLock != null) return
+        val wm = applicationContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager ?: return
+        multicastLock = runCatching {
+            wm.createMulticastLock("Flux:Mdns").apply {
+                setReferenceCounted(false)
+                acquire()
+            }
+        }.getOrNull()
+    }
+
+    private fun releaseMulticastLock() {
+        multicastLock?.let { lock ->
+            runCatching { if (lock.isHeld) lock.release() }
+        }
+        multicastLock = null
     }
 
     companion object {

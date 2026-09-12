@@ -208,6 +208,8 @@ class LanServer(
 
     private fun infoJson(): String = buildJsonObject {
         put("name", "Flux")
+        // mDNS 生效时告知客户端主机名，可直接用 http://<host>:端口/v1 访问
+        ServerState.mdnsHost.value?.let { put("mdns", it) }
         put("object", "phone_router_info")
         put("model_format", "厂商别名/模型名")
         put("auth", "首次使用需在 Flux App 内批准设备（请求头 X-Device-Id 可选）")

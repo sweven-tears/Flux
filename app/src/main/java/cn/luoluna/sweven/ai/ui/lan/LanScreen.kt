@@ -53,6 +53,7 @@ import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import cn.luoluna.sweven.ai.data.AppSettings
 import cn.luoluna.sweven.ai.data.db.AuthDeviceEntity
 import cn.luoluna.sweven.ai.data.repo.SmartAi
 import cn.luoluna.sweven.ai.ui.common.MonoFont
@@ -80,13 +81,20 @@ fun LanScreen(
     val smartAiEnabled by vm.lanSmartAiEnabled.collectAsStateWithLifecycle()
     val running by vm.running.collectAsStateWithLifecycle()
     val serverError by vm.serverError.collectAsStateWithLifecycle()
+    val lanHostnameLabel by vm.lanHostnameLabel.collectAsStateWithLifecycle()
+    val mdnsHost by vm.mdnsHost.collectAsStateWithLifecycle()
     val pending by vm.pendingDevices.collectAsStateWithLifecycle()
     val authorized by vm.authorizedDevices.collectAsStateWithLifecycle()
     val blocked by vm.blockedDevices.collectAsStateWithLifecycle()
 
     val ips = remember { vm.lanIps() }
     var portDialog by remember { mutableStateOf(false) }
+    var hostnameDialog by remember { mutableStateOf(false) }
     var renameTarget by remember { mutableStateOf<AuthDeviceEntity?>(null) }
+
+    /** 配置的 mDNS 主机名：自定义前缀 → <前缀>.flux.local，默认 flux.local */
+    val mdnsName = lanHostnameLabel?.let { "$it.${AppSettings.DEFAULT_LAN_HOST}.local" }
+        ?: "${AppSettings.DEFAULT_LAN_HOST}.local"
 
     // 电池优化豁免：ON_RESUME 时刷新，从系统弹窗/设置页返回后立即更新
     var batteryIgnored by remember { mutableStateOf(true) }
@@ -171,6 +179,19 @@ fun LanScreen(
                             }
                         }
                     }
+                    mdnsHost?.let { host ->
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(
+                                "http://$host:$lanPort/v1",
+                                style = MaterialTheme.typography.bodySmall,
+                                fontFamily = MonoFont,
+                                modifier = Modifier.weight(1f),
+                            )
+                            TextButton(onClick = { copyText(context, "http://$host:$lanPort/v1") }) {
+                                Text("复制")
+                            }
+                        }
+                    }
                     if (ips.isEmpty()) {
                         Text(
                             "未获取到局域网 IP，请确认已连接 Wi-Fi",
@@ -185,6 +206,17 @@ fun LanScreen(
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text("服务端口", style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
                     TextButton(onClick = { portDialog = true }) { Text("$lanPort  修改") }
+                }
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text("mDNS 主机名", style = MaterialTheme.typography.bodyMedium)
+                        Text(
+                            "支持 mDNS 的设备可直接用主机名访问，改后立即生效",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    TextButton(onClick = { hostnameDialog = true }) { Text("$mdnsName  修改") }
                 }
                 // smartAi 聚合模型对局域网客户端的开放开关（即时生效）
                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -288,6 +320,7 @@ fun LanScreen(
                     buildString {
                         append("1. 手机与客户端设备连同一个 Wi-Fi\n")
                         append("2. 客户端 Base URL 填上方地址（如 http://192.168.1.5:$lanPort/v1）\n")
+                        append("   支持 mDNS 的设备（iOS/macOS/Win10+）可直接填 http://$mdnsName:$lanPort/v1\n")
                         append("3. API Key 随意填写（如 sk-phone），真正的鉴权是设备授权\n")
                         append("4. 模型名称格式：厂商别名/模型名，完整列表见 GET /v1/models\n")
                         append("5. 新设备首次访问会产生「待授权申请」，在上方批准后即可使用\n")
@@ -347,6 +380,29 @@ fun LanScreen(
             onConfirm = { name ->
                 vm.setDeviceLabel(device.deviceId, name)
                 renameTarget = null
+            },
+        )
+    }
+
+    if (hostnameDialog) {
+        cn.luoluna.sweven.ai.ui.common.TextFieldDialog(
+            title = "自定义 mDNS 主机名",
+            initial = lanHostnameLabel.orEmpty(),
+            onDismiss = { hostnameDialog = false },
+            onValidate = { input ->
+                val v = input.trim().lowercase()
+                when {
+                    // 空输入 = 恢复默认 flux.local
+                    v.isEmpty() -> null
+                    v.length > 63 -> "前缀最长 63 个字符"
+                    !v.matches(Regex("^[a-z0-9]([a-z0-9-]*[a-z0-9])?$")) ->
+                        "仅支持小写字母、数字、中划线，须以字母或数字开头结尾"
+                    else -> null
+                }
+            },
+            onConfirm = { input ->
+                vm.setHostnameLabel(input.trim().lowercase().takeIf { it.isNotEmpty() })
+                hostnameDialog = false
             },
         )
     }

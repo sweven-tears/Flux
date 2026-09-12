@@ -13,6 +13,11 @@ class AppSettings(context: Context) {
     private val _lanPort = MutableStateFlow(prefs.getInt(KEY_LAN_PORT, DEFAULT_PORT))
     val lanPort: StateFlow<Int> = _lanPort
 
+    /** mDNS 主机名前缀：null = 默认广播 flux.local；如 "home" 则广播 home.flux.local */
+    private val _lanHostnameLabel =
+        MutableStateFlow(prefs.getString(KEY_LAN_HOSTNAME, null)?.takeIf { it.isNotBlank() })
+    val lanHostnameLabel: StateFlow<String?> = _lanHostnameLabel
+
     // 0 为无效值；-1 表示智能路由 smartAi（聚合模型，无真实厂商）
     private val _lastModelProviderId =
         MutableStateFlow(prefs.getLong(KEY_LAST_MODEL_PROVIDER, 0L).takeIf { it != 0L })
@@ -72,6 +77,13 @@ class AppSettings(context: Context) {
     fun setLanPort(port: Int) {
         prefs.edit().putInt(KEY_LAN_PORT, port).apply()
         _lanPort.value = port
+    }
+
+    /** 前缀清洗为小写，空白恢复默认；格式校验在 UI 层 */
+    fun setLanHostnameLabel(label: String?) {
+        val v = label?.trim()?.lowercase()?.takeIf { it.isNotEmpty() }
+        prefs.edit().putString(KEY_LAN_HOSTNAME, v).apply()
+        _lanHostnameLabel.value = v
     }
 
     fun setLastModel(providerId: Long, modelName: String) {
@@ -162,6 +174,9 @@ class AppSettings(context: Context) {
 
     companion object {
         const val DEFAULT_PORT = 8787
+
+        /** mDNS 默认主机名（flux.local）；自定义前缀为 <前缀>.flux.local */
+        const val DEFAULT_LAN_HOST = "flux"
         const val DEFAULT_SMART_FIRST_TOKEN_TIMEOUT = 30
         const val DEFAULT_SMART_ROUTE_MAX_ROUNDS = 3
         const val DEFAULT_SMART_FAST_FIRST_TOKEN = 2000
@@ -170,6 +185,7 @@ class AppSettings(context: Context) {
         const val DEFAULT_SMART_COOLDOWN_SECONDS = 60
         private const val KEY_LAN_ENABLED = "lan_enabled"
         private const val KEY_LAN_PORT = "lan_port"
+        private const val KEY_LAN_HOSTNAME = "lan_hostname_label"
         private const val KEY_LAST_MODEL_PROVIDER = "last_model_provider_id"
         private const val KEY_LAST_MODEL_NAME = "last_model_name"
         private const val KEY_SMART_FIRST_TOKEN_TIMEOUT = "smart_first_token_timeout_seconds"

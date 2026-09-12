@@ -12,6 +12,7 @@ okhttp = "4.9.3"
 kotlinxSerialization = "1.7.3"
 ktor = "2.3.12"
 media3 = "1.5.1"
+jmdns = "3.6.3"
 
 [libraries]
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
@@ -31,6 +32,7 @@ okhttp = { group = "com.squareup.okhttp3", name = "okhttp", version.ref = "okhtt
 kotlinx-serialization-json = { group = "org.jetbrains.kotlinx", name = "kotlinx-serialization-json", version.ref = "kotlinxSerialization" }
 ktor-server-core = { group = "io.ktor", name = "ktor-server-core", version.ref = "ktor" }
 ktor-server-netty = { group = "io.ktor", name = "ktor-server-netty", version.ref = "ktor" }
+jmdns = { group = "org.jmdns", name = "jmdns", version.ref = "jmdns" }
 media3-exoplayer = { group = "androidx.media3", name = "media3-exoplayer", version.ref = "media3" }
 media3-ui = { group = "androidx.media3", name = "media3-ui", version.ref = "media3" }
 

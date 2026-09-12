@@ -120,6 +120,7 @@ import cn.luoluna.sweven.ai.ui.chat.MarkdownText
 import cn.luoluna.sweven.ai.ui.chat.ReasoningSection
 import cn.luoluna.sweven.ai.ui.chat.produceUriBitmap
 import cn.luoluna.sweven.ai.ui.chat.rememberDataUrlBitmap
+import cn.luoluna.sweven.ai.ui.common.ConfirmDialog
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -1132,14 +1133,27 @@ object ChatUiDefaults {
         onMore: () -> Unit,
         copyEnabled: Boolean = true,
     ) {
+        // 重新生成会删除其后回复（或助手消息自身），不可逆，先弹确认
+        var pendingRegenerate by remember { mutableStateOf(false) }
         Row(
             horizontalArrangement = if (alignEnd) Arrangement.End else Arrangement.Start,
             verticalAlignment = Alignment.CenterVertically,
             modifier = Modifier.fillMaxWidth(),
         ) {
             SmallMessageAction(Icons.Filled.ContentCopy, "复制", enabled && copyEnabled, onCopy)
-            SmallMessageAction(Icons.Filled.Refresh, "重新生成", enabled, onRegenerate)
+            SmallMessageAction(Icons.Filled.Refresh, "重新生成", enabled) { pendingRegenerate = true }
             SmallMessageAction(Icons.Filled.MoreVert, "更多", enabled, onMore)
+        }
+        if (pendingRegenerate) {
+            ConfirmDialog(
+                title = "重新生成",
+                text = "将删除该消息之后的回复并重新请求，当前未完成的内容会被丢弃。确定？",
+                onDismiss = { pendingRegenerate = false },
+                onConfirm = {
+                    pendingRegenerate = false
+                    onRegenerate()
+                },
+            )
         }
     }
 

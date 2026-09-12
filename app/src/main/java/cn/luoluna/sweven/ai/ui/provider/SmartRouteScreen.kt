@@ -138,6 +138,7 @@ fun SmartRouteScreen(onBack: () -> Unit) {
     var showAddModels by remember { mutableStateOf(false) }
     var showCategoryView by remember { mutableStateOf(false) }
     var showAddGroup by remember { mutableStateOf(false) }
+    var showParamsSheet by remember { mutableStateOf(false) }
     var deleteGroupTarget by remember { mutableStateOf<SmartRouteGroupEntity?>(null) }
     // 短板明细半窗目标分组；「调整能力」打开模型编辑器的目标模型
     var gapSheetGroup by remember { mutableStateOf<SmartRouteGroupEntity?>(null) }
@@ -225,6 +226,14 @@ fun SmartRouteScreen(onBack: () -> Unit) {
                 options = listOf("路由分组", "聚合模型"),
                 pagerState = pagerState,
                 onSelect = { scope.launch { pagerState.animateScrollToPage(it) } },
+                modifier = Modifier.padding(horizontal = 12.dp),
+            )
+            Spacer(Modifier.height(8.dp))
+            // 两分段共用的通用参数（响应模式/超时/冷却/轮巡对路由分组与聚合模型同样生效）
+            RouteParamsSummaryCard(
+                summary = "${SmartModes.labelOf(responseMode)} · 首字${timeoutSeconds}s · " +
+                    "轮巡${maxRounds}轮 · 冷却${cooldownThreshold}次/${cooldownSeconds}s",
+                onEdit = { showParamsSheet = true },
                 modifier = Modifier.padding(horizontal = 12.dp),
             )
             Spacer(Modifier.height(8.dp))
@@ -358,62 +367,13 @@ fun SmartRouteScreen(onBack: () -> Unit) {
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             modifier = Modifier.padding(top = 4.dp),
                         )
-                        HorizontalDivider(Modifier.padding(vertical = 10.dp))
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Column(Modifier.weight(1f)) {
-                                Text("响应模式（本机聊天）", style = MaterialTheme.typography.bodyMedium)
-                                Text(
-                                    "局域网设备的模式已迁至「局域网 → 已授权设备」页按设备单独设置",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                )
-                            }
-                            TextButton(onClick = { showModeDialog = true }) {
-                                Text("${SmartModes.labelOf(responseMode)}  修改")
-                            }
-                        }
-                        if (responseMode == SmartModes.FAST) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Column(Modifier.weight(1f)) {
-                                    Text("极速首字超时", style = MaterialTheme.typography.bodyMedium)
-                                    Text(
-                                        "首轮门槛，超时候选只记「慢」，下轮放宽后仍会尝试",
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    )
-                                }
-                                TextButton(onClick = { showFastEdit = true }) { Text("${fastMs}ms  修改") }
-                            }
-                        }
-                        if (responseMode == SmartModes.LEISURE) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Text("随缘首字超时", style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
-                                TextButton(onClick = { showLeisureEdit = true }) { Text("$leisureSeconds 秒  修改") }
-                            }
-                        }
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text("聊天档超时", style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
-                            TextButton(onClick = { showTimeoutEdit = true }) { Text("$timeoutSeconds 秒  修改") }
-                        }
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text("轮巡次数", style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
-                            TextButton(onClick = { showRoundsEdit = true }) { Text("$maxRounds 轮  修改") }
-                        }
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Column(Modifier.weight(1f)) {
-                                Text("冷却阈值", style = MaterialTheme.typography.bodyMedium)
-                                Text(
-                                    "候选连续失败达到次数后进入冷却，排序时垫底兜底",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                )
-                            }
-                            TextButton(onClick = { showCooldownThresholdEdit = true }) { Text("$cooldownThreshold 次  修改") }
-                        }
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text("冷却时长", style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
-                            TextButton(onClick = { showCooldownSecondsEdit = true }) { Text("$cooldownSeconds 秒  修改") }
-                        }
+                        Text(
+                            "响应模式、首字超时与冷却等参数对本页与「路由分组」同样生效，" +
+                                "在顶部「路由参数」统一修改。",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(top = 8.dp),
+                        )
                     }
                 }
             }
@@ -599,6 +559,25 @@ fun SmartRouteScreen(onBack: () -> Unit) {
             providers = providers,
             models = models,
             onDismiss = { showCategoryView = false },
+        )
+    }
+    if (showParamsSheet) {
+        RouteParamsSheet(
+            responseMode = responseMode,
+            fastMs = fastMs,
+            leisureSeconds = leisureSeconds,
+            timeoutSeconds = timeoutSeconds,
+            maxRounds = maxRounds,
+            cooldownThreshold = cooldownThreshold,
+            cooldownSeconds = cooldownSeconds,
+            onDismiss = { showParamsSheet = false },
+            onEditMode = { showModeDialog = true },
+            onEditFast = { showFastEdit = true },
+            onEditLeisure = { showLeisureEdit = true },
+            onEditTimeout = { showTimeoutEdit = true },
+            onEditRounds = { showRoundsEdit = true },
+            onEditCooldownThreshold = { showCooldownThresholdEdit = true },
+            onEditCooldownSeconds = { showCooldownSecondsEdit = true },
         )
     }
     if (showAddModels) {
@@ -810,6 +789,129 @@ private fun SmartRouteRow(
                     tint = MaterialTheme.colorScheme.outlineVariant,
                     modifier = Modifier.reorderHandle(reorderState, entry.id),
                 )
+            }
+        }
+    }
+}
+
+/** 两分段共用的路由参数摘要卡：一行摘要 + 「修改」打开参数半窗 */
+@Composable
+private fun RouteParamsSummaryCard(
+    summary: String,
+    onEdit: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Card(modifier) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable(onClick = onEdit)
+                .padding(horizontal = 12.dp, vertical = 10.dp),
+        ) {
+            Column(Modifier.weight(1f)) {
+                Text("路由参数", style = MaterialTheme.typography.titleSmall)
+                Text(
+                    summary,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            TextButton(onClick = onEdit) { Text("修改") }
+        }
+    }
+}
+
+/** 路由参数半窗：响应模式/各档首字超时/轮巡/冷却集中编辑（对本机聊天与局域网的分组、聚合模型同时生效） */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun RouteParamsSheet(
+    responseMode: String,
+    fastMs: Int,
+    leisureSeconds: Int,
+    timeoutSeconds: Int,
+    maxRounds: Int,
+    cooldownThreshold: Int,
+    cooldownSeconds: Int,
+    onDismiss: () -> Unit,
+    onEditMode: () -> Unit,
+    onEditFast: () -> Unit,
+    onEditLeisure: () -> Unit,
+    onEditTimeout: () -> Unit,
+    onEditRounds: () -> Unit,
+    onEditCooldownThreshold: () -> Unit,
+    onEditCooldownSeconds: () -> Unit,
+) {
+    ModalBottomSheet(onDismissRequest = onDismiss) {
+        Column(
+            Modifier
+                .fillMaxWidth()
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = 16.dp)
+                .padding(bottom = 24.dp),
+        ) {
+            Text("路由参数", style = MaterialTheme.typography.titleMedium)
+            Text(
+                "对本机聊天与局域网网关的路由分组、聚合模型同时生效；" +
+                    "局域网设备的响应模式在「局域网 → 已授权设备」页按设备单独设置。",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(top = 4.dp, bottom = 8.dp),
+            )
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text("响应模式（本机聊天）", style = MaterialTheme.typography.bodyMedium)
+                    Text(
+                        "极速/聊天/随缘三档，决定等待首个字输出多久就切换候选",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                TextButton(onClick = onEditMode) {
+                    Text("${SmartModes.labelOf(responseMode)}  修改")
+                }
+            }
+            if (responseMode == SmartModes.FAST) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text("极速首字超时", style = MaterialTheme.typography.bodyMedium)
+                        Text(
+                            "首轮门槛，超时候选只记「慢」，下轮放宽后仍会尝试",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    TextButton(onClick = onEditFast) { Text("${fastMs}ms  修改") }
+                }
+            }
+            if (responseMode == SmartModes.LEISURE) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("随缘首字超时", style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
+                    TextButton(onClick = onEditLeisure) { Text("$leisureSeconds 秒  修改") }
+                }
+            }
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("聊天档超时", style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
+                TextButton(onClick = onEditTimeout) { Text("$timeoutSeconds 秒  修改") }
+            }
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("轮巡次数", style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
+                TextButton(onClick = onEditRounds) { Text("$maxRounds 轮  修改") }
+            }
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text("冷却阈值", style = MaterialTheme.typography.bodyMedium)
+                    Text(
+                        "候选连续失败达到次数后进入冷却，排序时垫底兜底",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                TextButton(onClick = onEditCooldownThreshold) { Text("$cooldownThreshold 次  修改") }
+            }
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("冷却时长", style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
+                TextButton(onClick = onEditCooldownSeconds) { Text("$cooldownSeconds 秒  修改") }
             }
         }
     }

@@ -34,6 +34,7 @@ import androidx.compose.ui.unit.dp
 import cn.luoluna.sweven.ai.data.db.ModelEntity
 import cn.luoluna.sweven.ai.data.db.SmartRouteGroupEntity
 import cn.luoluna.sweven.ai.data.repo.SmartAggregateCapability
+import cn.luoluna.sweven.ai.data.repo.SmartAi
 import cn.luoluna.sweven.ai.ui.common.ModelBadgesRow
 import cn.luoluna.sweven.ai.ui.common.paramsSummary
 
@@ -185,7 +186,7 @@ fun ModelPickerSheet(
                                 modifier = Modifier.padding(end = 8.dp),
                             )
                             Column(Modifier.weight(1f).padding(vertical = 6.dp)) {
-                                Text("smartAi", style = MaterialTheme.typography.bodyMedium)
+                                Text(SmartAi.MODEL_NAME, style = MaterialTheme.typography.bodyMedium)
                                 Text(
                                     buildList {
                                         add("智能路由")

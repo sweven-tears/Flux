@@ -53,6 +53,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import cn.luoluna.sweven.ai.data.SmartModes
 import cn.luoluna.sweven.ai.data.db.AuthDeviceEntity
+import cn.luoluna.sweven.ai.data.repo.SmartAi
 import cn.luoluna.sweven.ai.ui.common.MonoFont
 import cn.luoluna.sweven.ai.ui.common.SectionCard
 import java.text.SimpleDateFormat
@@ -187,9 +188,9 @@ fun LanScreen(
                 // smartAi 聚合模型对局域网客户端的开放开关（即时生效）
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Column(Modifier.weight(1f)) {
-                        Text("开放 smartAi 聚合模型", style = MaterialTheme.typography.bodyMedium)
+                        Text("开放 ${SmartAi.MODEL_NAME} 聚合模型", style = MaterialTheme.typography.bodyMedium)
                         Text(
-                            "客户端请求 model=smartAi 时按智能路由候选顺序自动回退",
+                            "客户端请求 model=${SmartAi.MODEL_NAME} 时按智能路由候选顺序自动回退",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
@@ -279,7 +280,7 @@ fun LanScreen(
                         append("4. 模型名称格式：厂商别名/模型名，完整列表见 GET /v1/models\n")
                         append("5. 新设备首次访问会产生「待授权申请」，在上方批准后即可使用\n")
                         append("6. 客户端可携带请求头 X-Device-Id 自定义设备标识\n")
-                        append("7. 已授权设备可单独设置响应模式（极速/聊天/随缘），smartAi 请求按设备生效")
+                        append("7. 已授权设备可单独设置响应模式（极速/聊天/随缘），${SmartAi.MODEL_NAME} 请求按设备生效")
                     },
                     style = MaterialTheme.typography.bodySmall,
                     fontFamily = FontFamily.SansSerif,

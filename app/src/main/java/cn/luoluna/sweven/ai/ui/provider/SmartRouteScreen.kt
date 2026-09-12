@@ -66,6 +66,7 @@ import cn.luoluna.sweven.ai.data.db.SmartRouteEntity
 import cn.luoluna.sweven.ai.data.db.SmartRouteGroupEntity
 import cn.luoluna.sweven.ai.data.db.SmartRouteMemberEntity
 import cn.luoluna.sweven.ai.data.repo.ModelIdGrouper
+import cn.luoluna.sweven.ai.data.repo.SmartAi
 import cn.luoluna.sweven.ai.data.repo.SmartHealth
 import cn.luoluna.sweven.ai.data.repo.aggregateCapability
 import cn.luoluna.sweven.ai.ui.common.ConfirmDialog
@@ -205,9 +206,9 @@ fun SmartRouteScreen(onBack: () -> Unit) {
             item(key = "intro") {
                 Card {
                     Column(Modifier.fillMaxWidth().padding(16.dp)) {
-                        Text("聚合模型 smartAi", style = MaterialTheme.typography.titleMedium)
+                        Text("聚合模型 ${SmartAi.MODEL_NAME}", style = MaterialTheme.typography.titleMedium)
                         Text(
-                            "把候选模型整合成一个 smartAi。按下方顺序依次尝试：某模型失败或超时无输出，" +
+                            "把候选模型整合成一个 ${SmartAi.MODEL_NAME}。按下方顺序依次尝试：某模型失败或超时无输出，" +
                                 "自动切换下一个；已开始输出后失败则不再切换。整条候选链轮巡 $maxRounds 轮仍全部失败，" +
                                 "才提示全部候选不可用。极速模式首轮只把请求发给实测速度达标的候选（超时候选只记「慢」），" +
                                 "一轮无成功再放宽到聊天档；连续失败的候选进入冷却垫底。",
@@ -365,7 +366,7 @@ fun SmartRouteScreen(onBack: () -> Unit) {
                     ) {
                         Text("还没有候选模型", style = MaterialTheme.typography.titleSmall)
                         Text(
-                            "添加模型后即可在聊天中选择 smartAi",
+                            "添加模型后即可在聊天中选择 ${SmartAi.MODEL_NAME}",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             modifier = Modifier.padding(top = 4.dp, bottom = 8.dp),
@@ -376,7 +377,7 @@ fun SmartRouteScreen(onBack: () -> Unit) {
             } else {
                 item(key = "list_header") {
                     Text(
-                        "smartAi 回退顺序（长按拖动排序，左滑条目可禁用/移除）",
+                        "${SmartAi.MODEL_NAME} 回退顺序（长按拖动排序，左滑条目可禁用/移除）",
                         style = MaterialTheme.typography.labelMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.padding(horizontal = 4.dp),

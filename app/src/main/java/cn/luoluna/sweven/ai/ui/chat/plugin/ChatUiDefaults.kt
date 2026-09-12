@@ -111,6 +111,7 @@ import cn.luoluna.sweven.ai.data.db.ConversationEntity
 import cn.luoluna.sweven.ai.data.db.MessageEntity
 import cn.luoluna.sweven.ai.data.db.PresetEntity
 import cn.luoluna.sweven.ai.data.db.Role
+import cn.luoluna.sweven.ai.data.repo.SmartAi
 import cn.luoluna.sweven.ai.net.ThinkingDepth
 import cn.luoluna.sweven.ai.ui.chat.ChatError
 import cn.luoluna.sweven.ai.ui.chat.ConversationHit
@@ -394,7 +395,7 @@ object ChatUiDefaults {
                     ) {
                         Text(
                             when {
-                                env.isSmartAi -> "smartAi"
+                                env.isSmartAi -> SmartAi.MODEL_NAME
                                 env.currentGroup != null -> env.currentGroup.routeName
                                 env.currentPicker != null -> env.currentPicker.displayId
                                 else -> "选择模型"

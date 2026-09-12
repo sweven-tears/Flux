@@ -276,7 +276,7 @@ class LanServer(
                     put(
                         "phone_router",
                         buildJsonObject {
-                            put("display", "smartAi（智能路由聚合）")
+                            put("display", "${SmartAi.MODEL_NAME}（智能路由聚合）")
                             put("type", "chat")
                             put("input", modalities(agg.inputText, agg.inputImage, agg.inputVideo))
                             put("output", modalities(agg.outputText, agg.outputImage, agg.outputVideo))
@@ -530,17 +530,17 @@ class LanServer(
         val stream = streamFlagOf(rawBody)
         val aggregateId = SmartAi.MODEL_NAME
         if (!settings.lanSmartAiEnabled.value) {
-            logRequest(device, aggregateId, null, stream, startedAt, null, false, "smartAi 未开放")
+            logRequest(device, aggregateId, null, stream, startedAt, null, false, "${SmartAi.MODEL_NAME} 未开放")
             respondOpenAiError(
                 HttpStatusCode.NotFound,
-                "smartAi 未开放：请在 Flux App 的「局域网」页面开启 smartAi 聚合模型",
+                "${SmartAi.MODEL_NAME} 未开放：请在 Flux App 的「局域网」页面开启 smartAi 聚合模型",
             )
             return
         }
         val routes = smartRouteDao.all().filter { it.enabled }
         if (routes.isEmpty()) {
-            logRequest(device, aggregateId, null, stream, startedAt, null, false, "smartAi 没有启用的候选模型")
-            respondOpenAiError(HttpStatusCode.NotFound, "smartAi 没有启用的候选模型，请先在「智能路由」中配置")
+            logRequest(device, aggregateId, null, stream, startedAt, null, false, "${SmartAi.MODEL_NAME} 没有启用的候选模型")
+            respondOpenAiError(HttpStatusCode.NotFound, "${SmartAi.MODEL_NAME} 没有启用的候选模型，请先在「智能路由」中配置")
             return
         }
         val messages = rawBody["messages"] as? JsonArray

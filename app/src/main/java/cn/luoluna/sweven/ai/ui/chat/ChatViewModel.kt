@@ -750,7 +750,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
     private suspend fun streamSmart(convId: Long) {
         val routes = smartRouteDao.all().filter { it.enabled }
         if (routes.isEmpty()) {
-            _error.value = ChatError("smartAi 没有启用的候选模型，请到「局域网」页右上角 → 智能路由配置")
+            _error.value = ChatError("${SmartAi.MODEL_NAME} 没有启用的候选模型，请到「局域网」页右上角 → 智能路由配置")
             return
         }
         val conversation = conversationDao.byId(convId)
@@ -780,7 +780,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
             bucketOf = { SmartHealth.bucket(it.first.providerId, it.first.modelName, now) },
         ).map { it.first }
         if (candidates.isEmpty()) {
-            _error.value = ChatError("smartAi 的候选模型均不可用（缺少 API Key、已被删除或厂商已停用）")
+            _error.value = ChatError("${SmartAi.MODEL_NAME} 的候选模型均不可用（缺少 API Key、已被删除或厂商已停用）")
             return
         }
         launchSmartCollect(convId, candidates)

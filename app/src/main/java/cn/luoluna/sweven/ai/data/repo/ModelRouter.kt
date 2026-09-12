@@ -34,7 +34,7 @@ data class ModelRoute(
 /** 智能路由聚合模型 smartAi：会话/设置中以哨兵 providerId 标识 */
 object SmartAi {
     const val PROVIDER_ID = -1L
-    const val MODEL_NAME = "smartAi"
+    const val MODEL_NAME = "flux-auto"
     val pair: Pair<Long, String> get() = PROVIDER_ID to MODEL_NAME
 }
 

@@ -303,6 +303,16 @@ interface MessageDao {
     @Insert
     suspend fun insert(m: MessageEntity): Long
 
+    @Update
+    suspend fun update(m: MessageEntity)
+
+    /** 我的创作：全部带图的助手消息（新→旧），页面侧再按 data: 前缀滤掉已清理的占位标记 */
+    @Query(
+        "SELECT * FROM messages WHERE role = 'assistant' AND imagesJson IS NOT NULL " +
+            "AND imagesJson != '' ORDER BY createdAt DESC"
+    )
+    fun observeCreations(): Flow<List<MessageEntity>>
+
     /** 会话内首条命中搜索词的消息内容，供搜索结果展示命中片段 */
     @Query(
         "SELECT content FROM messages WHERE conversationId = :conversationId " +

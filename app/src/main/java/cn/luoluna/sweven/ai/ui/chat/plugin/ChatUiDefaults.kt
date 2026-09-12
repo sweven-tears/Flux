@@ -50,6 +50,7 @@ import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Face
 import androidx.compose.material.icons.filled.Folder
+import androidx.compose.material.icons.filled.HideImage
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.Lightbulb
@@ -1395,6 +1396,33 @@ object ChatUiDefaults {
 
     @Composable
     fun MessageImage(url: String, onClick: (androidx.compose.ui.graphics.ImageBitmap) -> Unit) {
+        // 「我的创作」里被清理的图片：原位渲染占位块，告知资源已删除
+        if (MessageEntity.isDeletedImage(url)) {
+            Surface(
+                shape = RoundedCornerShape(10.dp),
+                color = MaterialTheme.colorScheme.surfaceVariant,
+            ) {
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.Center,
+                    modifier = Modifier.size(140.dp),
+                ) {
+                    Icon(
+                        Icons.Filled.HideImage,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+                        modifier = Modifier.size(28.dp),
+                    )
+                    Text(
+                        "资源已被清理",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+                        modifier = Modifier.padding(top = 6.dp),
+                    )
+                }
+            }
+            return
+        }
         val bitmap = rememberDataUrlBitmap(url).value
         Surface(shape = RoundedCornerShape(10.dp)) {
             if (bitmap != null) {

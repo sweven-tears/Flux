@@ -96,6 +96,27 @@ fun rememberDataUrlBitmap(url: String?): State<ImageBitmap?> = produceState<Imag
     }
 }
 
+/** 解码 data URL 缩略图（inSampleSize 降采样到 maxDim 内，创作网格等列表场景防 OOM） */
+@Composable
+fun rememberDataUrlThumb(url: String?, maxDim: Int = 384): State<ImageBitmap?> =
+    produceState<ImageBitmap?>(null, url) {
+        value = null
+        if (url.isNullOrBlank() || !url.startsWith("data:")) return@produceState
+        value = withContext(Dispatchers.IO) {
+            runCatching {
+                val base64 = url.substringAfter("base64,", "")
+                if (base64.isEmpty()) return@runCatching null
+                val bytes = Base64.decode(base64, Base64.DEFAULT)
+                val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
+                var sample = 1
+                while (maxOf(bounds.outWidth, bounds.outHeight) / (sample * 2) >= maxDim) sample *= 2
+                val opts = BitmapFactory.Options().apply { inSampleSize = sample }
+                BitmapFactory.decodeByteArray(bytes, 0, bytes.size, opts)?.asImageBitmap()
+            }.getOrNull()
+        }
+    }
+
 /** 解码本地 content:// 图片用于展示（待发送附件） */
 @Composable
 fun produceUriBitmap(context: Context, uri: Uri): State<ImageBitmap?> =

@@ -222,6 +222,14 @@ data class MessageEntity(
         } ?: emptyList()
 
     companion object {
+        /**
+         * imagesJson 中「已被清理」的图片占位标记：从「我的创作」删除后原位替换 data URL，
+         * 气泡原位渲染占位块；非 data: 前缀，天然不会被回传上游/保存相册/再添加为附件。
+         */
+        const val DELETED_IMAGE = "flux-deleted"
+
+        fun isDeletedImage(url: String): Boolean = url == DELETED_IMAGE
+
         private val IMAGES_ADAPTER = ImagesAdapter
         fun imagesJsonOf(images: List<String>): String? =
             if (images.isEmpty()) null else ImagesAdapter.encode(images)

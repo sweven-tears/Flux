@@ -1,8 +1,5 @@
 package cn.luoluna.sweven.ai.ui.chat
 
-import android.Manifest
-import android.content.pm.PackageManager
-import android.os.Build
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
@@ -49,7 +46,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Row
-import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import cn.luoluna.sweven.ai.App
@@ -153,43 +149,8 @@ fun ChatScreen(
     // 待发送的 data URL 附件（助手生图「添加到对话」等，已是 data URL，发送时不再压缩）
     var attachmentDataUrls by remember { mutableStateOf(listOf<String>()) }
 
-    // 保存图片到相册：API ≤ 28 需先申请存储权限，授权后自动继续保存
-    var pendingGallerySave by remember { mutableStateOf<List<String>?>(null) }
-    fun toastSaveResult(result: MediaSaver.SaveResult) {
-        val msg = when {
-            result.failed == 0 && result.saved > 0 -> "已保存到相册"
-            result.saved > 0 -> "已保存 ${result.saved} 张，失败 ${result.failed} 张"
-            else -> "保存失败"
-        }
-        Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
-    }
-    val galleryPermission = rememberLauncherForActivityResult(
-        ActivityResultContracts.RequestPermission()
-    ) { granted ->
-        val urls = pendingGallerySave
-        pendingGallerySave = null
-        if (granted && !urls.isNullOrEmpty()) {
-            scope.launch { toastSaveResult(MediaSaver.saveDataUrls(context, urls)) }
-        } else if (!granted) {
-            Toast.makeText(context, "未授予存储权限，无法保存到相册", Toast.LENGTH_SHORT).show()
-        }
-    }
-    fun saveToGallery(urls: List<String>) {
-        val targets = urls.filter { it.startsWith("data:") }
-        if (targets.isEmpty()) {
-            Toast.makeText(context, "没有可保存的图片", Toast.LENGTH_SHORT).show()
-            return
-        }
-        val needPermission = Build.VERSION.SDK_INT <= Build.VERSION_CODES.P &&
-            ContextCompat.checkSelfPermission(context, Manifest.permission.WRITE_EXTERNAL_STORAGE) !=
-            PackageManager.PERMISSION_GRANTED
-        if (needPermission) {
-            pendingGallerySave = targets
-            galleryPermission.launch(Manifest.permission.WRITE_EXTERNAL_STORAGE)
-        } else {
-            scope.launch { toastSaveResult(MediaSaver.saveDataUrls(context, targets)) }
-        }
-    }
+    // 保存图片到相册（内部处理 API ≤ 28 的存储权限申请）
+    val saveToGallery = rememberGallerySaver()
 
     val searchQuery by vm.searchQuery.collectAsStateWithLifecycle()
     val searchResults by vm.searchResults.collectAsStateWithLifecycle()

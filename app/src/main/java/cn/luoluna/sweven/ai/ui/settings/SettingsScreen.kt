@@ -14,6 +14,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -51,7 +52,7 @@ private val backupTimeFmt = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefau
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun SettingsScreen(onBack: () -> Unit) {
+fun SettingsScreen(onBack: () -> Unit, onOpenCreations: () -> Unit) {
     val context = LocalContext.current
     val settings = remember { (context.applicationContext as App).settings }
     val backup = remember { BackupManager(context.applicationContext as App) }
@@ -162,6 +163,28 @@ fun SettingsScreen(onBack: () -> Unit) {
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
+            }
+            SectionCard(title = "我的创作") {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable(onClick = onOpenCreations),
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text("图像与视频", style = MaterialTheme.typography.bodyMedium)
+                        Text(
+                            "集中查看、保存到相册或清理每次 AI 创作；清理后聊天原位显示「资源已被清理」占位",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    Icon(
+                        Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
             }
             SectionCard(title = "关于") {
                 Text("Flux", style = MaterialTheme.typography.titleMedium)

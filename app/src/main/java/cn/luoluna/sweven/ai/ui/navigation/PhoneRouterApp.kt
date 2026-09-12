@@ -32,6 +32,7 @@ import cn.luoluna.sweven.ai.ui.provider.AddProviderScreen
 import cn.luoluna.sweven.ai.ui.provider.ProviderDetailScreen
 import cn.luoluna.sweven.ai.ui.provider.ProviderListScreen
 import cn.luoluna.sweven.ai.ui.provider.SmartRouteScreen
+import cn.luoluna.sweven.ai.ui.settings.CreationsScreen
 import cn.luoluna.sweven.ai.ui.settings.SettingsScreen
 
 object Routes {
@@ -43,6 +44,7 @@ object Routes {
     const val REQUEST_LOG = "request_log"
     const val LAN = "lan"
     const val SETTINGS = "settings"
+    const val CREATIONS = "creations"
 }
 
 private val TOP_ROUTES = setOf(Routes.CHAT, Routes.PROVIDERS, Routes.LAN)
@@ -159,6 +161,12 @@ fun PhoneRouterApp(openLanTick: Int) {
             }
             composable(Routes.SETTINGS) {
                 SettingsScreen(
+                    onBack = { navController.popBackStack() },
+                    onOpenCreations = { navController.navigate(Routes.CREATIONS) },
+                )
+            }
+            composable(Routes.CREATIONS) {
+                CreationsScreen(
                     onBack = { navController.popBackStack() },
                 )
             }

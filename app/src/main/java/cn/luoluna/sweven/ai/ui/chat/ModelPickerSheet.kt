@@ -1,5 +1,6 @@
 package cn.luoluna.sweven.ai.ui.chat
 
+import androidx.compose.foundation.basicMarquee
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -224,7 +225,12 @@ fun ModelPickerSheet(
                                 modifier = Modifier.padding(end = 8.dp),
                             )
                             Column(Modifier.weight(1f).padding(vertical = 6.dp)) {
-                                Text(group.routeName, style = MaterialTheme.typography.bodyMedium)
+                                Text(
+                                    group.routeName,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    maxLines = 1,
+                                    modifier = Modifier.basicMarquee(),
+                                )
                                 Text(
                                     "路由分组 · 同族模型跨厂商自动切换",
                                     style = MaterialTheme.typography.labelSmall,
@@ -263,18 +269,20 @@ fun ModelPickerSheet(
                                 .widthIn(max = 320.dp)
                                 .padding(vertical = 6.dp)
                         ) {
-                            Text(
-                                row.item.displayId + if (row.item.enabled) "" else "（已禁用）",
-                                style = MaterialTheme.typography.bodyMedium,
-                                maxLines = 1,
-                            )
-                            if (row.item.model.alias?.isNotBlank() == true) {
                                 Text(
-                                    row.item.aggregateId,
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    row.item.displayId + if (row.item.enabled) "" else "（已禁用）",
+                                    style = MaterialTheme.typography.bodyMedium,
                                     maxLines = 1,
+                                    modifier = Modifier.basicMarquee(),
                                 )
+                            if (row.item.model.alias?.isNotBlank() == true) {
+                                    Text(
+                                        row.item.aggregateId,
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        maxLines = 1,
+                                        modifier = Modifier.basicMarquee(),
+                                    )
                             }
                             ModelBadgesRow(row.item.model, Modifier.padding(top = 2.dp))
                             paramsSummary(row.item.model)?.let {

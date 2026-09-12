@@ -1,6 +1,7 @@
 package cn.luoluna.sweven.ai.ui.provider
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.basicMarquee
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -745,6 +746,10 @@ private fun SmartRouteRow(
                         Text(
                             "${provider?.alias ?: "?"} / $displayName",
                             style = MaterialTheme.typography.bodyMedium,
+                            maxLines = 1,
+                            modifier = Modifier
+                                .weight(1f, fill = false)
+                                .basicMarquee(),
                         )
                         if (!entry.enabled) {
                             Text(
@@ -774,6 +779,7 @@ private fun SmartRouteRow(
                         fontFamily = FontFamily.Monospace,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         maxLines = 1,
+                        modifier = Modifier.basicMarquee(),
                     )
                     if (health.firstTokenEwmaMs != null) {
                         Text(
@@ -1143,6 +1149,8 @@ private fun GroupGapSheet(
                             Text(
                                 "${p?.alias ?: "?"} / ${m.alias?.takeIf { it.isNotBlank() } ?: m.name}",
                                 style = MaterialTheme.typography.bodyMedium,
+                                maxLines = 1,
+                                modifier = Modifier.basicMarquee(),
                             )
                             Text(
                                 m.name,
@@ -1150,6 +1158,7 @@ private fun GroupGapSheet(
                                 fontFamily = FontFamily.Monospace,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 maxLines = 1,
+                                modifier = Modifier.basicMarquee(),
                             )
                         }
                         TextButton(onClick = { onEditModel(m) }) { Text("调整能力") }
@@ -1225,6 +1234,10 @@ private fun RouteMemberRow(
                         Text(
                             "${provider?.alias ?: "?"} / $displayName",
                             style = MaterialTheme.typography.bodyMedium,
+                            maxLines = 1,
+                            modifier = Modifier
+                                .weight(1f, fill = false)
+                                .basicMarquee(),
                         )
                         if (!member.enabled) {
                             Text(
@@ -1254,6 +1267,7 @@ private fun RouteMemberRow(
                         fontFamily = FontFamily.Monospace,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         maxLines = 1,
+                        modifier = Modifier.basicMarquee(),
                     )
                     if (model != null) {
                         ModelBadgesRow(model, Modifier.padding(top = 2.dp))
@@ -1341,6 +1355,8 @@ private fun AddGroupSheet(
                                 "flux-$key",
                                 style = MaterialTheme.typography.bodyMedium,
                                 fontFamily = FontFamily.Monospace,
+                                maxLines = 1,
+                                modifier = Modifier.basicMarquee(),
                             )
                             Text(
                                 "${groupModels.size} 个同族模型" + if (byRemark) " · 含备注匹配" else "",
@@ -1365,7 +1381,10 @@ private fun AddGroupSheet(
                     style = MaterialTheme.typography.titleSmall,
                     fontFamily = FontFamily.Monospace,
                     color = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.padding(top = 12.dp),
+                    maxLines = 1,
+                    modifier = Modifier
+                        .padding(top = 12.dp)
+                        .basicMarquee(),
                 )
                 Text(
                     "${groupMembers.size} 个成员，按下方顺序作为组内切换优先级",
@@ -1399,6 +1418,8 @@ private fun AddGroupSheet(
                             Text(
                                 "${p?.alias ?: "?"} / ${m.alias?.takeIf { it.isNotBlank() } ?: m.name}",
                                 style = MaterialTheme.typography.bodyMedium,
+                                maxLines = 1,
+                                modifier = Modifier.basicMarquee(),
                             )
                             Text(
                                 m.name,
@@ -1406,6 +1427,7 @@ private fun AddGroupSheet(
                                 fontFamily = FontFamily.Monospace,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 maxLines = 1,
+                                modifier = Modifier.basicMarquee(),
                             )
                             ModelBadgesRow(m, Modifier.padding(top = 2.dp))
                         }
@@ -1536,6 +1558,7 @@ private fun AddCandidatesSheet(
                                     ?.let { "${it}（${row.model.name}）" } ?: row.model.name,
                                 style = MaterialTheme.typography.bodySmall,
                                 maxLines = 1,
+                                modifier = Modifier.basicMarquee(),
                             )
                             ModelBadgesRow(row.model, Modifier.padding(top = 2.dp))
                         }
@@ -1659,6 +1682,8 @@ private fun CategoryViewSheet(
                             Text(
                                 "${e.provider?.alias ?: "?"} / $displayName",
                                 style = MaterialTheme.typography.bodySmall,
+                                maxLines = 1,
+                                modifier = Modifier.basicMarquee(),
                             )
                             Text(
                                 e.entry.modelName,
@@ -1666,6 +1691,7 @@ private fun CategoryViewSheet(
                                 fontFamily = FontFamily.Monospace,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 maxLines = 1,
+                                modifier = Modifier.basicMarquee(),
                             )
                             e.model?.let { ModelBadgesRow(it, Modifier.padding(top = 2.dp)) }
                         }

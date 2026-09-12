@@ -251,7 +251,8 @@ fun SmartRouteScreen(onBack: () -> Unit) {
                     Column(Modifier.weight(1f)) {
                         Text("路由分组", style = MaterialTheme.typography.titleSmall)
                         Text(
-                            "同族模型（跨厂商/版本号）聚为一组，对外暴露为 flux-模型名，组内自动切换",
+                            "同族模型（跨厂商/版本号）聚为一组，对外暴露为 flux-模型名，组内自动切换；" +
+                                "有备注（别名）的模型优先按备注归组",
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
@@ -1220,7 +1221,12 @@ private fun AddGroupSheet(
 
             if (selectedKey == null) {
                 suggestions.forEach { key ->
-                    val count = ModelIdGrouper.membersOf(key, eligible).size
+                    val groupModels = ModelIdGrouper.membersOf(key, eligible)
+                    // 是否有成员靠备注（别名）归组：别名基名命中而 id 基名不命中
+                    val byRemark = groupModels.any { m ->
+                        val aliasKey = m.alias?.takeIf { it.isNotBlank() }?.let { ModelIdGrouper.baseKey(it) }
+                        aliasKey == key && ModelIdGrouper.baseKey(m.name) != key
+                    }
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
                         modifier = Modifier
@@ -1235,7 +1241,7 @@ private fun AddGroupSheet(
                                 fontFamily = FontFamily.Monospace,
                             )
                             Text(
-                                "$count 个同族模型",
+                                "${groupModels.size} 个同族模型" + if (byRemark) " · 含备注匹配" else "",
                                 style = MaterialTheme.typography.labelSmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )

@@ -154,13 +154,15 @@ class VideoJobManager private constructor(private val context: Context) {
         throw (lastError ?: ApiException("没有可用的视频接口形态"))
     }
 
-    /** 进程/服务重启后恢复未完成任务（提交中断、无上游 id 的行标记失败） */
-    fun resumeAll() {
+    /** 进程/服务重启后恢复未完成任务（提交中断、无上游 id 的行标记失败）。[onDone] 带回是否存在活跃任务 */
+    fun resumeAll(onDone: ((Boolean) -> Unit)? = null) {
         scope.launch {
+            var hasJobs = false
             val pending = dao.active()
             pending.forEach { job ->
                 if (job.upstreamJobId != null) {
                     startPolling(job.id)
+                    hasJobs = true
                 } else {
                     dao.update(
                         job.copy(
@@ -171,7 +173,8 @@ class VideoJobManager private constructor(private val context: Context) {
                     )
                 }
             }
-            if (pending.isNotEmpty()) ensureService()
+            if (hasJobs) ensureService()
+            onDone?.invoke(hasJobs)
         }
     }
 
@@ -231,7 +234,10 @@ class VideoJobManager private constructor(private val context: Context) {
     }
 
     private fun ensureService() {
-        ContextCompat.startForegroundService(context, Intent(context, VideoJobService::class.java))
+        // 后台启动 FGS 受系统限制（App 被系统拉起时可能被拒），失败则等下次前台时机再恢复
+        runCatching {
+            ContextCompat.startForegroundService(context, Intent(context, VideoJobService::class.java))
+        }
     }
 
     private fun startPolling(jobId: Long) {
@@ -430,18 +436,24 @@ class VideoJobService : Service() {
             ACTION_CANCEL_JOB -> manager.cancel(intent.getLongExtra(EXTRA_JOB_ID, -1L))
             ACTION_KEEP_WAITING -> manager.onKeepWaiting(intent.getLongExtra(EXTRA_JOB_ID, -1L))
         }
-        manager.resumeAll()
-        if (!manager.hasActiveJobs()) {
-            ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
-            stopSelf()
-            return START_NOT_STICKY
-        }
-        // 前台通知取最早一个活跃任务的槽位（轮询循环会按任务持续更新同 ID）
-        val first = manager.firstActiveForForeground()
+        // startForegroundService 必须立刻 startForeground（主线程不能碰数据库，先给占位通知）
         ServiceCompat.startForeground(
-            this, first.first, first.second,
+            this, Notifications.ID_VIDEO_FOREGROUND, Notifications.buildVideoForegroundPlaceholder(this),
             if (Build.VERSION.SDK_INT >= 29) ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC else 0,
         )
+        manager.resumeAll { hasJobs ->
+            if (!hasJobs) {
+                ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
+                stopSelf()
+            } else {
+                // 用最早任务的进度通知替换占位（异步查库，不占主线程）
+                val pair = manager.firstActiveForForeground()
+                ServiceCompat.startForeground(
+                    this, pair.first, pair.second,
+                    if (Build.VERSION.SDK_INT >= 29) ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC else 0,
+                )
+            }
+        }
         return START_STICKY
     }
 

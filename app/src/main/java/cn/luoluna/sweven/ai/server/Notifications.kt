@@ -22,6 +22,9 @@ object Notifications {
     const val ID_PENDING_DEVICE = 2002
     const val ID_STREAM = 2003
 
+    /** 视频前台服务的占位/聚合槽位（各任务进度在 3000+jobId 槽位） */
+    const val ID_VIDEO_FOREGROUND = 2005
+
     fun ensureChannels(context: Context) {
         val manager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         val channel = NotificationChannel(
@@ -210,4 +213,13 @@ object Notifications {
     fun cancelVideoNotification(context: Context, jobId: Long) {
         NotificationManagerCompat.from(context).cancel(videoNotificationId(jobId))
     }
+
+    /** 前台服务启动瞬间的占位通知（必须在主线程同步给出，任务详情随后异步替换） */
+    fun buildVideoForegroundPlaceholder(context: Context): Notification =
+        NotificationCompat.Builder(context, CHANNEL_CHAT)
+            .setSmallIcon(R.drawable.ic_stat_notify)
+            .setContentTitle("视频任务服务运行中")
+            .setOngoing(true)
+            .setOnlyAlertOnce(true)
+            .build()
 }

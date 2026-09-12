@@ -43,6 +43,54 @@ fun aggregateCapability(models: List<ModelEntity>): SmartAggregateCapability {
     return cap
 }
 
+/**
+ * 路由分组对外能力：成员能力交集（木桶短板口径）——某项能力全员都支持才对外声明，
+ * 保证其他端按 /v1/models 声明调用时，请求落到组内任一成员都可用。
+ * 实际路由仍由运行时严格模态过滤兜底（带图请求只走支持图像的成员）。
+ */
+fun intersectCapability(models: List<ModelEntity>): SmartAggregateCapability {
+    if (models.isEmpty()) return aggregateCapability(models)
+    var cap = SmartAggregateCapability(
+        inputText = models.all { it.inputText },
+        inputImage = models.all { it.inputImage },
+        inputVideo = models.all { it.inputVideo },
+        outputText = models.all { it.outputText },
+        outputImage = models.all { it.outputImage },
+        outputVideo = models.all { it.outputVideo },
+        tools = models.all { it.capabilityTools },
+        reasoning = models.all { it.capabilityReasoning },
+    )
+    // 与并集同款兜底：交集后模态全空（异常数据）时回退文本，避免他端拿到空 input/output
+    if (!cap.inputText && !cap.inputImage && !cap.inputVideo) cap = cap.copy(inputText = true)
+    if (!cap.outputText && !cap.outputImage && !cap.outputVideo) cap = cap.copy(outputText = true)
+    return cap
+}
+
+/** 一项能力的短板：有成员支持但并非全员支持时该项被拖出交集，lacking 为拖后腿（不支持该项）的成员 */
+data class CapabilityGap(
+    val label: String,
+    val lacking: List<ModelEntity>,
+)
+
+/** 逐项找出组内能力的短板成员（全员都不支持的项不算短板——没有可通过禁用成员回升的空间） */
+fun capabilityGaps(models: List<ModelEntity>): List<CapabilityGap> {
+    if (models.size < 2) return emptyList()
+    val dims = listOf(
+        "文本输入" to { m: ModelEntity -> m.inputText },
+        "图像输入" to { m: ModelEntity -> m.inputImage },
+        "视频输入" to { m: ModelEntity -> m.inputVideo },
+        "文本输出" to { m: ModelEntity -> m.outputText },
+        "图像输出" to { m: ModelEntity -> m.outputImage },
+        "视频输出" to { m: ModelEntity -> m.outputVideo },
+        "工具调用" to { m: ModelEntity -> m.capabilityTools },
+        "推理" to { m: ModelEntity -> m.capabilityReasoning },
+    )
+    return dims.mapNotNull { (label, get) ->
+        val lacking = models.filter { !get(it) }
+        if (lacking.isNotEmpty() && lacking.size < models.size) CapabilityGap(label, lacking) else null
+    }
+}
+
 /** 一次请求对候选能力的期望，用于候选排序（只排序不过滤，能力标记是启发式的） */
 data class SmartRequestFeatures(
     val needsImageInput: Boolean = false,

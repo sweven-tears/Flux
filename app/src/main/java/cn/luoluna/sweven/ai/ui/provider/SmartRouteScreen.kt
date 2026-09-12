@@ -65,10 +65,12 @@ import cn.luoluna.sweven.ai.data.db.ProviderEntity
 import cn.luoluna.sweven.ai.data.db.SmartRouteEntity
 import cn.luoluna.sweven.ai.data.db.SmartRouteGroupEntity
 import cn.luoluna.sweven.ai.data.db.SmartRouteMemberEntity
+import cn.luoluna.sweven.ai.data.repo.CapabilityGap
 import cn.luoluna.sweven.ai.data.repo.ModelIdGrouper
 import cn.luoluna.sweven.ai.data.repo.SmartAi
 import cn.luoluna.sweven.ai.data.repo.SmartHealth
-import cn.luoluna.sweven.ai.data.repo.aggregateCapability
+import cn.luoluna.sweven.ai.data.repo.capabilityGaps
+import cn.luoluna.sweven.ai.data.repo.intersectCapability
 import cn.luoluna.sweven.ai.ui.common.ConfirmDialog
 import cn.luoluna.sweven.ai.ui.common.ModelBadgesRow
 import cn.luoluna.sweven.ai.ui.common.ModeSelectDialog
@@ -128,6 +130,9 @@ fun SmartRouteScreen(onBack: () -> Unit) {
     var showCategoryView by remember { mutableStateOf(false) }
     var showAddGroup by remember { mutableStateOf(false) }
     var deleteGroupTarget by remember { mutableStateOf<SmartRouteGroupEntity?>(null) }
+    // 短板明细半窗目标分组；「调整能力」打开模型编辑器的目标模型
+    var gapSheetGroup by remember { mutableStateOf<SmartRouteGroupEntity?>(null) }
+    var editGapModel by remember { mutableStateOf<ModelEntity?>(null) }
     // 路由分组：组卡片展开状态（默认收起）
     var expandedGroups by remember { mutableStateOf(setOf<Long>()) }
 
@@ -305,15 +310,24 @@ fun SmartRouteScreen(onBack: () -> Unit) {
                     )
                 }
             } else {
+                val enabledProviderIds = providers.filter { it.enabled }.map { it.id }.toSet()
                 groups.forEach { group ->
                     val groupMembers = members.filter { it.groupId == group.id }
+                    // 短板口径只统计「启用且厂商未停用」的成员——被禁成员不参与交集，也不拖低短板
+                    val activePairs = groupMembers
+                        .filter { it.enabled && it.providerId in enabledProviderIds }
+                        .mapNotNull { m ->
+                            models.firstOrNull { it.providerId == m.providerId && it.name == m.modelName }
+                                ?.let { m to it }
+                        }
+                    val gaps = capabilityGaps(activePairs.map { it.second })
                     item(key = "g${group.id}") {
                         RouteGroupCard(
                             group = group,
                             memberCount = groupMembers.size,
-                            memberModels = groupMembers.mapNotNull { m ->
-                                models.firstOrNull { it.providerId == m.providerId && it.name == m.modelName }
-                            },
+                            memberModels = activePairs.map { it.second },
+                            gapText = gaps.takeIf { it.isNotEmpty() }?.let { gapLine(it, providers) },
+                            onShowGaps = { gapSheetGroup = group },
                             expanded = group.id in expandedGroups,
                             onToggleExpand = {
                                 expandedGroups = if (group.id in expandedGroups) {
@@ -338,6 +352,7 @@ fun SmartRouteScreen(onBack: () -> Unit) {
                                 member = member,
                                 providers = providers,
                                 models = models,
+                                gaps = gaps,
                                 reorderState = reorderState,
                                 isOpen = openSwipeKey == "m${member.id}",
                                 onOpenChange = { open -> openSwipeKey = if (open) "m${member.id}" else null },
@@ -596,6 +611,48 @@ fun SmartRouteScreen(onBack: () -> Unit) {
             },
         )
     }
+
+    // 分组短板明细半窗（禁用成员后 gaps 随 Flow 即时重算）
+    gapSheetGroup?.let { g ->
+        val enabledProviderIds = providers.filter { it.enabled }.map { it.id }.toSet()
+        val groupMembers = members.filter { it.groupId == g.id }
+        val activePairs = groupMembers
+            .filter { it.enabled && it.providerId in enabledProviderIds }
+            .mapNotNull { m ->
+                models.firstOrNull { it.providerId == m.providerId && it.name == m.modelName }
+                    ?.let { m to it }
+            }
+        GroupGapSheet(
+            group = g,
+            gaps = capabilityGaps(activePairs.map { it.second }),
+            members = groupMembers,
+            providers = providers,
+            onDismiss = { gapSheetGroup = null },
+            onEditModel = { m ->
+                editGapModel = m
+                gapSheetGroup = null
+            },
+            onDisableMember = { m ->
+                scope.launch { app.database.smartRouteMemberDao().update(m.copy(enabled = false)) }
+            },
+        )
+    }
+
+    // 短板成员「调整能力」：复用模型编辑器改能力标记
+    editGapModel?.let { m ->
+        ModelEditorSheet(
+            providerId = m.providerId,
+            isGeminiPreset = providers.firstOrNull { it.id == m.providerId }?.presetId == "gemini",
+            existing = m,
+            onDismiss = { editGapModel = null },
+            onSave = { nm ->
+                scope.launch {
+                    app.database.modelDao().update(nm)
+                    editGapModel = null
+                }
+            },
+        )
+    }
 }
 
 /** 可加入智能路由的候选：启用中的 chat 模型或具备图像输出能力的模型（如 Gemini 图像生成），且尚未在列表里 */
@@ -716,6 +773,8 @@ private fun RouteGroupCard(
     group: SmartRouteGroupEntity,
     memberCount: Int,
     memberModels: List<ModelEntity>,
+    gapText: String?,
+    onShowGaps: () -> Unit,
     expanded: Boolean,
     onToggleExpand: () -> Unit,
     isOpen: Boolean,
@@ -782,6 +841,16 @@ private fun RouteGroupCard(
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
+                    if (gapText != null) {
+                        Text(
+                            "短板：$gapText",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.error,
+                            modifier = Modifier
+                                .clickable(onClick = onShowGaps)
+                                .padding(top = 2.dp),
+                        )
+                    }
                 }
                 Icon(
                     if (expanded) Icons.Filled.KeyboardArrowUp else Icons.Filled.KeyboardArrowDown,
@@ -793,28 +862,114 @@ private fun RouteGroupCard(
     }
 }
 
-/** 分组摘要：N 个成员 · 文图→文图（能力并集）；图像输入能力不一致时追加提醒 */
+/** 分组摘要：N 个成员 · 文图→文图（启用成员能力交集，短板口径） */
 private fun groupSummary(memberCount: Int, memberModels: List<ModelEntity>): String {
-    val cap = aggregateCapability(memberModels)
+    val cap = intersectCapability(memberModels)
     fun mods(text: Boolean, image: Boolean, video: Boolean) = buildList {
         if (text) add("文")
         if (image) add("图")
         if (video) add("视")
     }.joinToString("").ifEmpty { "—" }
-    val base = "$memberCount 个成员 · " +
+    return "$memberCount 个成员 · " +
         "${mods(cap.inputText, cap.inputImage, cap.inputVideo)}→" +
         mods(cap.outputText, cap.outputImage, cap.outputVideo)
-    // 组内图像输入能力不一致：带图请求只会路由到支持图像的成员（严格过滤）
-    val mixedImageInput = memberModels.map { it.inputImage }.distinct().size > 1
-    return if (mixedImageInput) "$base · 图像输入不一致（带图仅走支持成员）" else base
 }
 
-/** 分组成员行：侧滑 禁用/启用、移除；长按手柄组内拖序（仅同组换位） */
+/** 卡片短板一行：图像输入←硅基/v3 · 工具调用←OpenAI/ds */
+private fun gapLine(gaps: List<CapabilityGap>, providers: List<ProviderEntity>): String =
+    gaps.joinToString(" · ") { gap ->
+        gap.label + "←" + gap.lacking.joinToString("、") { m ->
+            val p = providers.firstOrNull { it.id == m.providerId }
+            "${p?.alias ?: "?"}/${m.alias?.takeIf { it.isNotBlank() } ?: m.name}"
+        }
+    }
+
+/** 分组短板明细半窗：逐项能力列出拖后腿的成员，可直接禁用成员或打开模型编辑器补齐能力 */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun GroupGapSheet(
+    group: SmartRouteGroupEntity,
+    gaps: List<CapabilityGap>,
+    members: List<SmartRouteMemberEntity>,
+    providers: List<ProviderEntity>,
+    onDismiss: () -> Unit,
+    onEditModel: (ModelEntity) -> Unit,
+    onDisableMember: (SmartRouteMemberEntity) -> Unit,
+) {
+    ModalBottomSheet(onDismissRequest = onDismiss) {
+        Column(
+            Modifier
+                .fillMaxWidth()
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = 16.dp)
+                .padding(bottom = 24.dp),
+        ) {
+            Text("短板明细 · ${group.routeName}", style = MaterialTheme.typography.titleMedium)
+            Text(
+                "对外能力取启用成员的交集：某项只有全员支持才会声明。" +
+                    "禁用短板成员或点「调整能力」补齐后，交集自动回升。",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(top = 4.dp),
+            )
+            if (gaps.isEmpty()) {
+                Text(
+                    "没有短板：启用成员能力一致，对外按成员能力声明",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(top = 12.dp),
+                )
+            }
+            gaps.forEach { gap ->
+                Text(
+                    gap.label,
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.error,
+                    modifier = Modifier.padding(top = 12.dp),
+                )
+                gap.lacking.forEach { m ->
+                    val p = providers.firstOrNull { it.id == m.providerId }
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 2.dp),
+                    ) {
+                        Column(Modifier.weight(1f)) {
+                            Text(
+                                "${p?.alias ?: "?"} / ${m.alias?.takeIf { it.isNotBlank() } ?: m.name}",
+                                style = MaterialTheme.typography.bodyMedium,
+                            )
+                            Text(
+                                m.name,
+                                style = MaterialTheme.typography.labelSmall,
+                                fontFamily = FontFamily.Monospace,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1,
+                            )
+                        }
+                        TextButton(onClick = { onEditModel(m) }) { Text("调整能力") }
+                        TextButton(
+                            onClick = {
+                                members.firstOrNull {
+                                    it.providerId == m.providerId && it.modelName == m.name
+                                }?.let(onDisableMember)
+                            },
+                        ) { Text("禁用", color = MaterialTheme.colorScheme.error) }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/** 分组成员行：侧滑 禁用/启用、移除；长按手柄组内拖序（仅同组换位）；属于短板时标注缺项 */
 @Composable
 private fun RouteMemberRow(
     member: SmartRouteMemberEntity,
     providers: List<ProviderEntity>,
     models: List<ModelEntity>,
+    gaps: List<CapabilityGap>,
     reorderState: ReorderState,
     isOpen: Boolean,
     onOpenChange: (Boolean) -> Unit,
@@ -826,6 +981,12 @@ private fun RouteMemberRow(
     val model = models.firstOrNull { it.providerId == member.providerId && it.name == member.modelName }
     val displayName = model?.alias?.takeIf { it.isNotBlank() } ?: member.modelName
     val health = SmartHealth.info(member.providerId, member.modelName)
+    // 该成员拖低了哪些能力项（仅启用成员参与短板计算）
+    val gapLabels = if (member.enabled && model != null) {
+        gaps.filter { model in it.lacking }.map { it.label }
+    } else {
+        emptyList()
+    }
 
     SwipeRevealActions(
         modifier = modifier.reorderDragged(reorderState, "m${member.id}"),
@@ -871,6 +1032,13 @@ private fun RouteMemberRow(
                         if (member.enabled && health.cooling) {
                             Text(
                                 "  冷却中",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.error,
+                            )
+                        }
+                        if (gapLabels.isNotEmpty()) {
+                            Text(
+                                "  短板·缺${gapLabels.joinToString("、")}",
                                 style = MaterialTheme.typography.labelSmall,
                                 color = MaterialTheme.colorScheme.error,
                             )
@@ -996,9 +1164,15 @@ private fun AddGroupSheet(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(top = 2.dp),
                 )
-                if (groupMembers.map { it.inputImage }.distinct().size > 1) {
+                val previewGaps = capabilityGaps(groupMembers)
+                if (previewGaps.isNotEmpty()) {
                     Text(
-                        "成员图像输入能力不一致：带图请求只会路由到支持图像的成员",
+                        "能力不一致（交集口径下该项不对外声明）：" + previewGaps.joinToString("；") { gap ->
+                            gap.label + "：" + gap.lacking.joinToString("、") { m ->
+                                val p = providers.firstOrNull { it.id == m.providerId }
+                                "${p?.alias ?: "?"}/${m.alias?.takeIf { it.isNotBlank() } ?: m.name}"
+                            } + " 不支持"
+                        },
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.error,
                         modifier = Modifier.padding(top = 4.dp),

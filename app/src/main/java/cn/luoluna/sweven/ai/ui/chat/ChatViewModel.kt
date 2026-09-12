@@ -33,6 +33,7 @@ import cn.luoluna.sweven.ai.data.repo.SmartPolicy
 import cn.luoluna.sweven.ai.data.repo.SmartRouteExecutor
 import cn.luoluna.sweven.ai.data.repo.aggregateCapability
 import cn.luoluna.sweven.ai.data.repo.featuresOfHistory
+import cn.luoluna.sweven.ai.data.repo.intersectCapability
 import cn.luoluna.sweven.ai.data.repo.isSelfGatewayUrl
 import cn.luoluna.sweven.ai.data.repo.orderCandidates
 import cn.luoluna.sweven.ai.net.AdvancedParams
@@ -245,7 +246,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                 ?: last?.let { (pid, name) -> resolve(pid, name) }
         }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
 
-    /** 当前分组目标的能力并集（附件/思考按钮显隐依据）；非分组目标为 null */
+    /** 当前分组目标的能力交集（短板口径，与对外报告一致；附件/思考按钮显隐依据）；非分组目标为 null */
     val currentGroupCapability: StateFlow<SmartAggregateCapability?> =
         combine(
             currentTarget,
@@ -255,7 +256,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         ) { target, members, models, providers ->
             val g = (target as? ChatTarget.Group)?.group ?: return@combine null
             val enabledProviders = providers.filter { it.enabled }.map { it.id }.toSet()
-            aggregateCapability(
+            intersectCapability(
                 members.filter { it.groupId == g.id && it.enabled && it.providerId in enabledProviders }
                     .mapNotNull { m -> models.firstOrNull { it.providerId == m.providerId && it.name == m.modelName } },
             )

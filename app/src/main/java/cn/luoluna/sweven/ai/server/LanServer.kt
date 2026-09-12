@@ -21,6 +21,7 @@ import cn.luoluna.sweven.ai.data.repo.SmartHealth
 import cn.luoluna.sweven.ai.data.repo.SmartPolicy
 import cn.luoluna.sweven.ai.data.repo.aggregateCapability
 import cn.luoluna.sweven.ai.data.repo.featuresOfRequestBody
+import cn.luoluna.sweven.ai.data.repo.intersectCapability
 import cn.luoluna.sweven.ai.data.repo.isSelfGatewayUrl
 import cn.luoluna.sweven.ai.data.repo.orderCandidates
 import cn.luoluna.sweven.ai.data.repo.pickFastRound
@@ -286,7 +287,7 @@ class LanServer(
                 }
             )
         }
-        // 路由分组：启用且至少有一个可用成员的分组以 flux-<groupKey> 对外暴露（能力取成员并集）
+        // 路由分组：启用且至少有一个可用成员的分组以 flux-<groupKey> 对外暴露（能力取成员交集，短板口径）
         val groups = smartRouteGroupDao.all().filter { it.enabled }
         if (groups.isNotEmpty()) {
             val allMembers = smartRouteMemberDao.all()
@@ -295,7 +296,7 @@ class LanServer(
                     .filter { it.groupId == g.id && it.enabled && it.providerId in providers }
                     .mapNotNull { modelDao.find(it.providerId, it.modelName) }
                 if (memberModels.isEmpty()) return@forEach
-                val agg = aggregateCapability(memberModels)
+                val agg = intersectCapability(memberModels)
                 data.add(
                     buildJsonObject {
                         put("id", g.routeName)

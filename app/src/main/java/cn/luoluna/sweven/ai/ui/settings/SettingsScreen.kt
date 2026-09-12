@@ -128,6 +128,7 @@ fun SettingsScreen(onBack: () -> Unit, onOpenCreations: () -> Unit) {
             Modifier
                 .fillMaxSize()
                 .padding(padding)
+                .padding(horizontal = 12.dp)
                 .verticalScroll(rememberScrollState()),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {

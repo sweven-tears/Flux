@@ -4,6 +4,7 @@ import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.widget.Toast
+import androidx.compose.foundation.basicMarquee
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -602,10 +603,22 @@ private fun ModelRowCard(
             ) {
                 Column(Modifier.weight(1f)) {
                     Text(
-                        model.alias?.takeIf { it.isNotBlank() }?.let { alias -> "$alias（${model.name}）" }
-                            ?: model.name + if (!model.enabled) "（已停用）" else "",
+                        model.alias?.takeIf { it.isNotBlank() } ?: model.name,
                         style = MaterialTheme.typography.bodyMedium,
+                        maxLines = 1,
+                        modifier = Modifier.basicMarquee(),
                     )
+                    // 有别名时模型 id 退居第二行（小字浅色），超长可跑马灯
+                    if (model.alias?.isNotBlank() == true) {
+                        Text(
+                            model.name,
+                            style = MaterialTheme.typography.labelSmall,
+                            fontFamily = FontFamily.Monospace,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            modifier = Modifier.basicMarquee(),
+                        )
+                    }
                     ModelBadgesRow(model, Modifier.padding(top = 2.dp))
                     paramsSummary(model)?.let {
                         Text(

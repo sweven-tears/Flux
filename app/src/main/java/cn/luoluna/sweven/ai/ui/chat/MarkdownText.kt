@@ -36,6 +36,7 @@ import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.LinkAnnotation
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextLinkStyles
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -282,6 +283,7 @@ private sealed interface Preview {
 fun MarkdownText(
     text: String,
     modifier: Modifier = Modifier,
+    style: TextStyle = MaterialTheme.typography.bodyMedium,
 ) {
     val context = LocalContext.current
     var preview by remember { mutableStateOf<Preview?>(null) }
@@ -290,7 +292,7 @@ fun MarkdownText(
     Column(modifier = modifier, verticalArrangement = Arrangement.spacedBy(6.dp)) {
         blocks.forEach { block ->
             when (block) {
-                is MdBlock.Text -> MarkdownParagraph(block.content) { raw ->
+                is MdBlock.Text -> MarkdownParagraph(block.content, style) { raw ->
                     val url = normalizeUrl(raw)
                     if (url.startsWith("http://", true) || url.startsWith("https://", true)) {
                         preview = Preview.Web(url)
@@ -322,10 +324,10 @@ fun MarkdownText(
 private const val ASYNC_PARSE_THRESHOLD = 2_000
 
 @Composable
-private fun MarkdownParagraph(content: String, onOpenUrl: (String) -> Unit) {
+private fun MarkdownParagraph(content: String, style: TextStyle, onOpenUrl: (String) -> Unit) {
     if (content.length <= ASYNC_PARSE_THRESHOLD) {
         val annotated = remember(content) { renderMarkdown(content, onOpenUrl) }
-        Text(annotated, style = MaterialTheme.typography.bodyMedium)
+        Text(annotated, style = style)
     } else {
         val annotated by produceState<AnnotatedString?>(null, content) {
             value = withContext(Dispatchers.Default) { renderMarkdown(content, onOpenUrl) }
@@ -333,7 +335,7 @@ private fun MarkdownParagraph(content: String, onOpenUrl: (String) -> Unit) {
         Text(
             // 解析完成前先按原文展示，避免气泡高度跳变
             annotated ?: AnnotatedString(content),
-            style = MaterialTheme.typography.bodyMedium,
+            style = style,
         )
     }
 }

@@ -291,10 +291,9 @@ object MonoChatUiPlugin : ChatUiPlugin {
                                 if (!message.reasoning.isNullOrBlank()) {
                                     ReasoningSection(message.reasoning, inProgress = false)
                                 }
-                                Text(
+                                MarkdownText(
                                     message.content,
                                     style = MaterialTheme.typography.bodyMedium.copy(fontFamily = mono),
-                                    color = MaterialTheme.colorScheme.onSurface,
                                 )
                             }
                         }
@@ -348,7 +347,7 @@ object MonoChatUiPlugin : ChatUiPlugin {
                             ReasoningSection(reasoning, inProgress = content.isEmpty())
                         }
                         if (content.isNotEmpty()) {
-                            Text(
+                            MarkdownText(
                                 content + " ▍",
                                 style = MaterialTheme.typography.bodyMedium.copy(fontFamily = FontFamily.Monospace),
                             )
@@ -359,127 +358,4 @@ object MonoChatUiPlugin : ChatUiPlugin {
         }
     }
 
-    override val inputBar: (@Composable (ChatUiEnv) -> Unit) = { env ->
-        Column(Modifier.fillMaxWidth()) {
-            env.contextEstimateText?.let { text ->
-                Text(
-                    text = text,
-                    style = MaterialTheme.typography.labelSmall.copy(fontFamily = FontFamily.Monospace),
-                    color = when (env.contextEstimateLevel) {
-                        2 -> MaterialTheme.colorScheme.error
-                        1 -> MaterialTheme.colorScheme.tertiary
-                        else -> MaterialTheme.colorScheme.onSurfaceVariant
-                    },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 12.dp, vertical = 2.dp),
-                )
-            }
-            if (env.editingMessage != null) {
-                Surface(
-                    color = MaterialTheme.colorScheme.secondaryContainer,
-                    shape = RoundedCornerShape(4.dp),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 8.dp, vertical = 4.dp),
-                ) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        modifier = Modifier.padding(start = 10.dp),
-                    ) {
-                        Text(
-                            "编辑中，发送将替换原消息",
-                            style = MaterialTheme.typography.labelMedium.copy(fontFamily = FontFamily.Monospace),
-                            color = MaterialTheme.colorScheme.onSecondaryContainer,
-                            modifier = Modifier.weight(1f),
-                        )
-                        IconButton(onClick = env.cancelEditing) {
-                            Icon(Icons.Filled.Close, contentDescription = "取消编辑")
-                        }
-                    }
-                }
-            }
-            env.renderAttachmentRow()
-            Row(
-                verticalAlignment = Alignment.Bottom,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 8.dp, vertical = 6.dp),
-            ) {
-                if (env.showReasoning) {
-                    androidx.compose.foundation.layout.Box {
-                        var thinkMenuOpen by remember { mutableStateOf(false) }
-                        IconButton(onClick = { thinkMenuOpen = true }) {
-                            Icon(
-                                Icons.Filled.Psychology,
-                                contentDescription = "思考深度",
-                                tint = if (env.effectiveThinkingDepth != ThinkingDepth.OFF) {
-                                    MaterialTheme.colorScheme.primary
-                                } else {
-                                    MaterialTheme.colorScheme.onSurfaceVariant
-                                },
-                            )
-                        }
-                        DropdownMenu(
-                            expanded = thinkMenuOpen,
-                            onDismissRequest = { thinkMenuOpen = false },
-                        ) {
-                            ThinkingDepth.LABELS.forEach { (value, label) ->
-                                DropdownMenuItem(
-                                    text = { Text(label) },
-                                    leadingIcon = {
-                                        if (env.effectiveThinkingDepth == value) {
-                                            Icon(
-                                                Icons.Filled.Check,
-                                                contentDescription = null,
-                                                modifier = Modifier.padding(end = 0.dp),
-                                            )
-                                        }
-                                    },
-                                    onClick = {
-                                        env.vm.setThinkingDepth(value)
-                                        thinkMenuOpen = false
-                                    },
-                                )
-                            }
-                        }
-                    }
-                }
-                if (env.showImageInput) {
-                    IconButton(onClick = env.pickImages) {
-                        Icon(Icons.Filled.Add, contentDescription = "添加图片")
-                    }
-                }
-                OutlinedTextField(
-                    value = env.input,
-                    onValueChange = env.onInputChange,
-                    modifier = Modifier.weight(1f),
-                    placeholder = {
-                        Text(
-                            "输入消息…",
-                            style = MaterialTheme.typography.bodyMedium.copy(fontFamily = FontFamily.Monospace),
-                        )
-                    },
-                    textStyle = MaterialTheme.typography.bodyMedium.copy(fontFamily = FontFamily.Monospace),
-                    shape = RoundedCornerShape(4.dp),
-                    maxLines = 5,
-                )
-                Spacer(Modifier.width(6.dp))
-                    if (env.streaming) {
-                        FilledIconButton(
-                            onClick = { env.vm.onStopTap() },
-                        colors = IconButtonDefaults.filledIconButtonColors(
-                            containerColor = MaterialTheme.colorScheme.errorContainer,
-                        ),
-                    ) { Icon(Icons.Filled.Close, contentDescription = "停止") }
-                } else {
-                    FilledIconButton(
-                        onClick = env.send,
-                        enabled = env.input.isNotBlank() || env.attachments.isNotEmpty() ||
-                            env.editAttachments.isNotEmpty(),
-                    ) { Icon(Icons.AutoMirrored.Filled.Send, contentDescription = "发送") }
-                }
-            }
-        }
-    }
 }

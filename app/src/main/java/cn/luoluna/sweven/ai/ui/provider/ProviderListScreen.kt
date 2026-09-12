@@ -19,8 +19,8 @@ import androidx.compose.material.icons.filled.Build
 import androidx.compose.material.icons.filled.DragIndicator
 import androidx.compose.material3.Card
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
@@ -81,12 +81,14 @@ fun ProviderListScreen(
 
     Scaffold(
         topBar = {
-            TopAppBar(title = { Text("模型厂商") })
-        },
-        floatingActionButton = {
-            FloatingActionButton(onClick = onAdd) {
-                Icon(Icons.Filled.Add, contentDescription = "添加厂商")
-            }
+            TopAppBar(
+                title = { Text("模型厂商") },
+                actions = {
+                    IconButton(onClick = onAdd) {
+                        Icon(Icons.Filled.Add, contentDescription = "添加厂商")
+                    }
+                },
+            )
         },
     ) { padding ->
         if (display.isEmpty()) {

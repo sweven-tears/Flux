@@ -104,6 +104,11 @@ data class ModelEntity(
     val frequencyPenalty: Double? = null,
     /** 上下文窗口（tokens）：聊天页用量显示与超长自动截断的依据；null = 未知（不截断） */
     val contextWindow: Int? = null,
+    /**
+     * 视频接口形态（VideoAdapters 注册表里的 shapeId：sora/agnes/kling/minimax/runway/veo）。
+     * 首次视频提交探测成功后写回，此后该模型免探测；null = 尚未探测。
+     */
+    val videoApiShape: String? = null,
     val remark: String? = null,
     /** 手动拖拽排序权重，小者在前；同值按 name */
     val sortOrder: Int = 0,

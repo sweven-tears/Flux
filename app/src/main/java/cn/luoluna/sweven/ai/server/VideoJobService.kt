@@ -14,8 +14,14 @@ import cn.luoluna.sweven.ai.data.db.ModelEntity
 import cn.luoluna.sweven.ai.data.db.ProviderEntity
 import cn.luoluna.sweven.ai.data.db.Role
 import cn.luoluna.sweven.ai.data.db.VideoJobEntity
+import cn.luoluna.sweven.ai.net.ApiException
 import cn.luoluna.sweven.ai.net.HttpApiException
 import cn.luoluna.sweven.ai.net.parseCustomHeaders
+import cn.luoluna.sweven.ai.net.video.VideoAdapters
+import cn.luoluna.sweven.ai.net.video.VideoApiAdapter
+import cn.luoluna.sweven.ai.net.video.VideoRequestContext
+import cn.luoluna.sweven.ai.net.video.VideoTask
+import cn.luoluna.sweven.ai.net.video.downloadVideoBytes
 import java.io.File
 import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.CoroutineScope
@@ -25,18 +31,24 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
-import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlin.coroutines.coroutineContext
+import kotlinx.coroutines.isActive
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonObject
 
+/** LAN 网关任务的会话哨兵：无聊天会话（客户端轮询获知结果，不落消息不发通知） */
+internal const val VIDEO_JOB_NO_CONVERSATION = 0L
+
 /**
- * 视频生成任务管理器（App 级单例）：提交落库 → 10s 轮询 → 下载 mp4 → 落助手消息 → 通知。
- * **无硬超时**：一直轮询直到上游返回终态（completed/failed）或用户主动取消；
- * 每等待满 10 分钟把通知换成「继续等待吗？」询问（2 分钟无操作默认继续还原常规通知），
- * 「取消任务」按钮常驻。轮询在自有 scope 里跑，进程被杀后由服务/App 启动恢复。
+ * 视频生成任务管理器（App 级单例）：适配器层编排者。
+ * 提交时按模型记忆的接口形态（ModelEntity.videoApiShape）直发，未记忆则按协议提示逐形态探测并
+ * **写回模型行终身免探测**；轮询 10s 无硬超时——直到上游终态或用户取消；
+ * 每等待满 10 分钟把通知换成「继续等待吗？」询问（2 分钟无操作默认继续），「取消任务」按钮常驻；
+ * 完成下载 mp4 存私有目录、落 `flux-video:` 助手消息（LAN 任务 conversationId=0 哨兵除外）。
+ * 进程被杀后由服务/App 启动恢复未完成任务。
  */
 class VideoJobManager private constructor(private val context: Context) {
 
@@ -44,6 +56,9 @@ class VideoJobManager private constructor(private val context: Context) {
     private val dao = app.database.videoJobDao()
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val polling = ConcurrentHashMap<Long, Job>()
+
+    /** jobId → 提交命中的接口形态（重启后从模型行恢复） */
+    private val jobShapes = ConcurrentHashMap<Long, String>()
 
     /** 「继续等待」信号：用户点通知按钮后由服务写入，轮询循环读取后复位询问窗 */
     private val keepSignals = ConcurrentHashMap<Long, Boolean>()
@@ -72,8 +87,10 @@ class VideoJobManager private constructor(private val context: Context) {
     fun hasActiveJobs(): Boolean = polling.isNotEmpty()
 
     /**
-     * 提交视频生成任务（挂起等待提交结果，由聊天页调用）：
-     * 成功落 running 任务并启动轮询与前台服务；失败落 failed 行并把错误抛回调用方。
+     * 提交视频生成任务（App 内聊天与局域网网关共用，挂起等待提交结果）：
+     * 探测/复用接口形态 → 落 running 任务 → 启动轮询与前台服务；失败落 failed 行把错误抛回调用方。
+     * [extraBody] 为调用方附加参数（局域网请求透传的 size/seconds 等），与模型 customBody 合并（调用方优先）。
+     * 成功返回任务行 id（局域网以 `flux-<id>` 对外）。
      */
     suspend fun submit(
         conversationId: Long,
@@ -81,14 +98,10 @@ class VideoJobManager private constructor(private val context: Context) {
         apiKey: String,
         model: ModelEntity,
         prompt: String,
-    ): Result<Unit> = runCatching {
-        val headers = parseCustomHeaders(model.customHeaders)
-        val extraBody = model.customBody?.takeIf { it.isNotBlank() }?.let {
-            runCatching { Json.parseToJsonElement(it).jsonObject }.getOrNull()
-        }
-        val upstreamId = app.providerClient.submitVideo(
-            provider.baseUrl, apiKey, model.name, prompt, headers, extraBody,
-        ).getOrThrow()
+        extraBody: JsonObject? = null,
+    ): Result<Long> = runCatching {
+        val ctx = buildContext(provider, apiKey, model, prompt, extraBody)
+        val (shape, upstreamId) = resolveShapeAndSubmit(ctx, model)
         val id = dao.insert(
             VideoJobEntity(
                 conversationId = conversationId,
@@ -99,8 +112,10 @@ class VideoJobManager private constructor(private val context: Context) {
                 status = VideoJobEntity.STATUS_RUNNING,
             ),
         )
+        jobShapes[id] = shape
         startPolling(id)
         ensureService()
+        id
     }.onFailure { e ->
         dao.insert(
             VideoJobEntity(
@@ -112,6 +127,31 @@ class VideoJobManager private constructor(private val context: Context) {
                 error = e.message ?: "提交失败",
             ),
         )
+    }
+
+    /** 探测/复用接口形态并提交：模型已记忆直发；否则按协议提示逐形态试，成功即写回模型行 */
+    private suspend fun resolveShapeAndSubmit(
+        ctx: VideoRequestContext,
+        model: ModelEntity,
+    ): Pair<String, String> {
+        val preferred = VideoAdapters.byId(model.videoApiShape)
+        val order = (listOfNotNull(preferred) + VideoAdapters.probeOrder(ctx.protocol)).distinct()
+        var lastError: Throwable? = null
+        for (adapter in order) {
+            val r = adapter.submit(ctx)
+            val key = r.getOrNull()
+            if (key != null) {
+                if (model.id > 0) {
+                    val row = app.database.modelDao().find(model.providerId, model.name)
+                    if (row != null && row.videoApiShape != adapter.shapeId) {
+                        app.database.modelDao().update(row.copy(videoApiShape = adapter.shapeId))
+                    }
+                }
+                return adapter.shapeId to key
+            }
+            lastError = r.exceptionOrNull() ?: lastError
+        }
+        throw (lastError ?: ApiException("没有可用的视频接口形态"))
     }
 
     /** 进程/服务重启后恢复未完成任务（提交中断、无上游 id 的行标记失败） */
@@ -135,7 +175,7 @@ class VideoJobManager private constructor(private val context: Context) {
         }
     }
 
-    /** 用户取消（通知按钮）：停轮询、尽力取消上游、清通知 */
+    /** 用户取消（通知按钮/局域网客户端不可取消）：停轮询、尽力取消上游、清通知 */
     fun cancel(jobId: Long) {
         scope.launch {
             val job = dao.byId(jobId) ?: return@launch
@@ -151,18 +191,23 @@ class VideoJobManager private constructor(private val context: Context) {
             polling.remove(jobId)?.cancel()
             val provider = app.database.providerDao().byId(job.providerId)
             val key = provider?.let { app.modelRouter.activeKey(it) }?.key
-            if (provider != null && key != null && job.upstreamJobId != null) {
-                // 尽力通知上游取消，失败忽略（无硬超时语义下上游自然终态也不影响本地）
+            val model = provider?.let { app.database.modelDao().find(it.id, job.modelName) }
+            val shape = jobShapes[jobId] ?: model?.videoApiShape
+            val adapter = VideoAdapters.byId(shape)
+            if (provider != null && key != null && job.upstreamJobId != null && adapter != null) {
+                // 尽力通知上游取消（不支持取消的形态是 no-op）
                 runCatching {
-                    app.providerClient.cancelVideo(
-                        provider.baseUrl, key, job.upstreamJobId,
-                        parseCustomHeaders(app.database.modelDao().find(provider.id, job.modelName)?.customHeaders),
-                    )
+                    adapter.cancel(buildContext(provider, key, model ?: defaultModel(provider, job), job.prompt), job.upstreamJobId)
                 }
             }
-            Notifications.cancelVideoNotification(context, jobId)
+            if (job.conversationId != VIDEO_JOB_NO_CONVERSATION) {
+                Notifications.cancelVideoNotification(context, jobId)
+            }
         }
     }
+
+    private fun defaultModel(provider: ProviderEntity, job: VideoJobEntity) =
+        ModelEntity(providerId = provider.id, name = job.modelName)
 
     /** 用户点「继续等待」：复位询问窗并顺延到下一个 10 分钟节点 */
     fun onKeepWaiting(jobId: Long) {
@@ -194,6 +239,32 @@ class VideoJobManager private constructor(private val context: Context) {
         polling[jobId] = scope.launch { pollLoop(jobId) }
     }
 
+    private fun buildContext(
+        provider: ProviderEntity,
+        apiKey: String,
+        model: ModelEntity,
+        prompt: String,
+        callExtra: JsonObject? = null,
+    ): VideoRequestContext {
+        val modelExtra = model.customBody?.takeIf { it.isNotBlank() }?.let {
+            runCatching { Json.parseToJsonElement(it).jsonObject }.getOrNull()
+        }
+        val merged = when {
+            modelExtra == null -> callExtra
+            callExtra == null -> modelExtra
+            else -> JsonObject(modelExtra + callExtra) // 调用方参数覆盖模型 customBody 同名键
+        }
+        return VideoRequestContext(
+            baseUrl = provider.baseUrl,
+            apiKey = apiKey,
+            model = model.name,
+            headers = parseCustomHeaders(model.customHeaders),
+            protocol = provider.protocol,
+            prompt = prompt,
+            extraBody = merged,
+        )
+    }
+
     private suspend fun pollLoop(jobId: Long) {
         try {
             var waitedMs = 0L
@@ -203,7 +274,7 @@ class VideoJobManager private constructor(private val context: Context) {
                 if (job.status != VideoJobEntity.STATUS_PENDING && job.status != VideoJobEntity.STATUS_RUNNING) {
                     return
                 }
-                val upstreamId = job.upstreamIdOrThrow()
+                val upstreamId = job.upstreamJobId ?: return
                 val provider = app.database.providerDao().byId(job.providerId)
                 if (provider == null || !provider.enabled) {
                     failJob(job, "厂商已删除或停用")
@@ -214,11 +285,16 @@ class VideoJobManager private constructor(private val context: Context) {
                     failJob(job, "厂商缺少 API Key")
                     return
                 }
-                val headers = parseCustomHeaders(
-                    app.database.modelDao().find(provider.id, job.modelName)?.customHeaders,
-                )
+                val model = app.database.modelDao().find(provider.id, job.modelName)
+                    ?: ModelEntity(providerId = provider.id, name = job.modelName)
+                val ctx = buildContext(provider, key, model, job.prompt)
+                val shape = jobShapes[jobId] ?: model.videoApiShape?.also { jobShapes[jobId] = it }
+                val adapter: VideoApiAdapter = VideoAdapters.byId(shape) ?: run {
+                    failJob(job, "缺少视频接口形态（请重新发起任务）")
+                    return
+                }
 
-                val task = app.providerClient.queryVideo(provider.baseUrl, key, upstreamId, headers)
+                val task: Result<VideoTask> = adapter.query(ctx, upstreamId)
                 when {
                     // 任务不存在（404）为终态；其余查询抖动不终止——无硬超时，继续轮询
                     task.isFailure && task.exceptionOrNull() is HttpApiException &&
@@ -228,9 +304,9 @@ class VideoJobManager private constructor(private val context: Context) {
                     }
                     task.isSuccess -> {
                         val t = task.getOrThrow()
-                        when (normalizeStatus(t.status)) {
+                        when (t.status) {
                             "completed" -> {
-                                completeJob(job, provider, key, headers, upstreamId)
+                                completeJob(job, adapter, ctx, t, upstreamId)
                                 return
                             }
                             "failed" -> {
@@ -259,10 +335,12 @@ class VideoJobManager private constructor(private val context: Context) {
                 }
                 val asking = askedAtMs > 0 && System.currentTimeMillis() - askedAtMs < ASK_WINDOW_MS
                 if (askedAtMs > 0 && !asking) askedAtMs = -1L
-                Notifications.notifyVideoProgress(
-                    context, jobId, job.conversationId, job.modelName,
-                    (waitedMs / 60_000).toInt(), asking,
-                )
+                if (job.conversationId != VIDEO_JOB_NO_CONVERSATION) {
+                    Notifications.notifyVideoProgress(
+                        context, jobId, job.conversationId, job.modelName,
+                        (waitedMs / 60_000).toInt(), asking,
+                    )
+                }
             }
         } finally {
             polling.remove(jobId)
@@ -272,25 +350,18 @@ class VideoJobManager private constructor(private val context: Context) {
         }
     }
 
-    private fun VideoJobEntity.upstreamIdOrThrow(): String =
-        upstreamJobId ?: error("缺少上游任务 id")
-
-    /** queued/running/in_progress/pending → running；completed/success → completed；failed/error → failed */
-    private fun normalizeStatus(raw: String): String = when (raw.lowercase()) {
-        "completed", "succeeded", "success" -> "completed"
-        "failed", "error", "cancelled", "canceled" -> "failed"
-        else -> "running"
-    }
-
     private suspend fun completeJob(
         job: VideoJobEntity,
-        provider: ProviderEntity,
-        apiKey: String,
-        headers: Map<String, String>,
+        adapter: VideoApiAdapter,
+        ctx: VideoRequestContext,
+        task: VideoTask,
         upstreamId: String,
     ) {
         val now = System.currentTimeMillis()
-        val bytes = app.providerClient.downloadVideo(provider.baseUrl, apiKey, upstreamId, headers).getOrNull()
+        // 提取到的成品 URL 优先直下（裸下→鉴权重试）；无 URL 回落适配器自己的下载（如 Sora /content）
+        val authMode = if (adapter.shapeId == "veo") "goog" else "bearer"
+        var bytes: ByteArray? = task.videoUrl?.let { downloadVideoBytes(it, ctx.apiKey, authMode).getOrNull() }
+        if (bytes == null) bytes = adapter.download(ctx, upstreamId, task).getOrNull()
         if (bytes == null) {
             failJob(job, "视频下载失败")
             return
@@ -305,6 +376,7 @@ class VideoJobManager private constructor(private val context: Context) {
                 updatedAt = now,
             ),
         )
+        if (job.conversationId == VIDEO_JOB_NO_CONVERSATION) return // LAN 任务：客户端轮询，不落消息不发通知
         // 落一条只带视频的助手消息（flux-video: 前缀引用文件，与图片同一渲染/清理通道）
         app.database.messageDao().insert(
             MessageEntity(
@@ -331,6 +403,7 @@ class VideoJobManager private constructor(private val context: Context) {
                 updatedAt = System.currentTimeMillis(),
             ),
         )
+        if (job.conversationId == VIDEO_JOB_NO_CONVERSATION) return
         Notifications.notifyVideoResult(
             context, job.id, job.conversationId,
             success = false, text = "${job.modelName}：$error",

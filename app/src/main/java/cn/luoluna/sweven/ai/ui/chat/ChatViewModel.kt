@@ -735,19 +735,16 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
      * 成功落库一条带图助手消息（图片经压缩转 data URL，与用户附图同一存储形态）。
      */
     /**
-     * 视频生成：目标模型 outputVideo=true 时的发送分支（仅 OpenAI 兼容任务式上游）。
-     * 提交后台任务后立即返回——生成慢（数分钟起），轮询在 [cn.luoluna.sweven.ai.server.VideoJobManager]
-     * 前台服务里进行且无硬超时；完成后以带视频的助手消息呈现并发通知，用户可随时离开页面。
+     * 视频生成：目标模型 outputVideo=true 时的发送分支。
+     * 接口形态由适配器层探测/模型记忆决定（sora/agnes/kling/minimax/runway/veo），
+     * 提交后台任务后立即返回——生成慢（数分钟起），轮询在前台服务里进行且无硬超时；
+     * 完成后以带视频的助手消息呈现并发通知，用户可随时离开页面。
      */
     private suspend fun generateVideo(convId: Long, picker: PickerModel) {
         // 选择器数据是发送时刻的快照，落库前以最新状态复核厂商可用性
         val provider = providerDao.byId(picker.provider.id)
         if (provider == null || !provider.enabled) {
             _error.value = ChatError("厂商「${picker.provider.alias}」已被停用，请到「厂商」页启用后再发送")
-            return
-        }
-        if (provider.protocol != ProviderProtocol.OPENAI) {
-            _error.value = ChatError("视频生成当前仅支持 OpenAI 兼容协议厂商，请检查「${picker.provider.alias}」的接口协议")
             return
         }
         val key = router.activeKey(provider)

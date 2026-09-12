@@ -157,6 +157,8 @@ fun parseErrorMessage(httpCode: Int, body: String?): String {
             val msg = obj.stringAt("error", "message")
                 ?: obj.stringAt("error")
                 ?: obj.stringAt("message")
+                ?: obj.stringAt("detail", "message")
+                ?: obj.stringAt("detail")
             if (!msg.isNullOrBlank()) return "HTTP $httpCode: $msg"
         } catch (_: Exception) {
         }

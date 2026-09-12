@@ -14,6 +14,8 @@ import cn.luoluna.sweven.ai.data.db.SmartRouteDao
 import cn.luoluna.sweven.ai.data.db.SmartRouteGroupDao
 import cn.luoluna.sweven.ai.data.db.SmartRouteGroupEntity
 import cn.luoluna.sweven.ai.data.db.SmartRouteMemberDao
+import cn.luoluna.sweven.ai.data.db.VideoJobDao
+import cn.luoluna.sweven.ai.data.db.VideoJobEntity
 import cn.luoluna.sweven.ai.data.repo.ModelRouter
 import cn.luoluna.sweven.ai.data.repo.RouteGroupTarget
 import cn.luoluna.sweven.ai.data.repo.SmartAi
@@ -49,6 +51,7 @@ import io.ktor.server.netty.Netty
 import io.ktor.server.netty.NettyApplicationCall
 import io.ktor.server.plugins.origin
 import io.ktor.server.request.receiveText
+import io.ktor.server.response.respondBytes
 import io.ktor.server.response.respondBytesWriter
 import io.ktor.server.response.respondText
 import io.ktor.server.routing.get
@@ -70,6 +73,7 @@ import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.put
+import java.io.File
 import java.net.InetSocketAddress
 import kotlin.coroutines.coroutineContext
 
@@ -91,6 +95,9 @@ class LanServer(
     private val smartRouteMemberDao: SmartRouteMemberDao,
     private val settings: AppSettings,
     private val logDao: RequestLogDao,
+    /** 视频生成（Sora 兼容 /v1/videos）：任务管理器与任务表 */
+    private val videoJobs: VideoJobManager,
+    private val videoJobDao: VideoJobDao,
     @Suppress("unused") private val authDao: AuthDeviceDao,
 ) {
 
@@ -183,6 +190,19 @@ class LanServer(
                 val device = call.authorize() ?: return@post
                 call.handleChatCompletion(device)
             }
+            // 视频生成（Sora 兼容形态）：POST /v1/videos 创建 → GET /v1/videos/{id} 轮询 → /content 下载
+            post("/v1/videos") {
+                if (call.authorize() == null) return@post
+                call.handleVideoCreate()
+            }
+            get("/v1/videos/{id}") {
+                if (call.authorize() == null) return@get
+                call.respondVideoStatus(call.parameters["id"].orEmpty())
+            }
+            get("/v1/videos/{id}/content") {
+                if (call.authorize() == null) return@get
+                call.respondVideoContent(call.parameters["id"].orEmpty())
+            }
         }
     }
 
@@ -192,11 +212,19 @@ class LanServer(
         put("model_format", "厂商别名/模型名")
         put("auth", "首次使用需在 Flux App 内批准设备（请求头 X-Device-Id 可选）")
         put(
+            "video_format",
+            "视频生成（Sora 兼容）：POST /v1/videos {\"model\":\"厂商别名/模型名\",\"prompt\":\"...\"} " +
+                "→ 轮询 GET /v1/videos/{id} 至 completed → GET /v1/videos/{id}/content 下载 mp4",
+        )
+        put(
             "endpoints",
             JsonArray(
                 listOf(
                     kotlinx.serialization.json.JsonPrimitive("GET /v1/models"),
                     kotlinx.serialization.json.JsonPrimitive("POST /v1/chat/completions"),
+                    kotlinx.serialization.json.JsonPrimitive("POST /v1/videos"),
+                    kotlinx.serialization.json.JsonPrimitive("GET /v1/videos/{id}"),
+                    kotlinx.serialization.json.JsonPrimitive("GET /v1/videos/{id}/content"),
                 )
             ),
         )
@@ -925,6 +953,142 @@ class LanServer(
             )
         }.toString()
         respondText(body, ContentType.Application.Json, status)
+    }
+
+    // ---- 视频生成（Sora 兼容形态）：网关统一对外，内部按模型路由到对应厂商适配器 ----
+
+    private fun lanJobIdOf(idParam: String): Long? =
+        idParam.removePrefix("flux-").takeIf { it != idParam }?.toLongOrNull()
+
+    /** 创建视频任务：model=「厂商别名/模型名」（裸模型名需唯一），其余字段透传给上游适配器 */
+    private suspend fun ApplicationCall.handleVideoCreate() {
+        val body: JsonObject = try {
+            ChatJson.json.parseToJsonElement(receiveText()).jsonObject
+        } catch (e: Exception) {
+            respondOpenAiError(HttpStatusCode.BadRequest, "请求体不是合法 JSON: ${e.message}")
+            return
+        }
+        val modelId = body.stringAt("model")
+        val prompt = body.stringAt("prompt")
+        if (modelId.isNullOrBlank() || prompt.isNullOrBlank()) {
+            respondOpenAiError(HttpStatusCode.BadRequest, "model 与 prompt 必填（model 格式：厂商别名/模型名）")
+            return
+        }
+        val providers = providerDao.all().filter { it.enabled }.associateBy { it.id }
+        val target: Pair<ProviderEntity, ModelEntity>? = if ('/' in modelId) {
+            val alias = modelId.substringBefore('/').trim()
+            val name = modelId.substringAfter('/').trim()
+            val p = providerDao.byAlias(alias)?.takeIf { it.enabled }
+            val m = p?.let { modelDao.find(it.id, name) }
+            if (p != null && m != null) p to m else null
+        } else {
+            val matches = modelDao.observeEnabled().first()
+                .filter { it.name == modelId && it.outputVideo }
+                .mapNotNull { m -> providers[m.providerId]?.let { it to m } }
+            if (matches.size > 1) {
+                respondOpenAiError(
+                    HttpStatusCode.BadRequest,
+                    "模型名「$modelId」在多个厂商存在，请用「厂商别名/模型名」格式（候选：" +
+                        matches.joinToString("、") { "${it.first.alias}/${it.second.name}" } + "）",
+                )
+                return
+            }
+            matches.firstOrNull()
+        }
+        val (provider, model) = target ?: run {
+            respondOpenAiError(
+                HttpStatusCode.NotFound,
+                "视频模型「$modelId」不存在：须为已启用厂商下标记了视频输出（outputVideo）的模型",
+            )
+            return
+        }
+        if (!model.outputVideo) {
+            respondOpenAiError(HttpStatusCode.BadRequest, "「${provider.alias}/${model.name}」未标记视频输出能力，不能用于视频生成")
+            return
+        }
+        val key = router.activeKey(provider)
+        if (key == null || key.key.isBlank()) {
+            respondOpenAiError(HttpStatusCode.BadRequest, "厂商「${provider.alias}」尚未配置 API Key")
+            return
+        }
+        val extras = JsonObject(body.filterKeys { it != "model" && it != "prompt" })
+        val jobId = videoJobs.submit(
+            conversationId = VIDEO_JOB_NO_CONVERSATION,
+            provider = provider,
+            apiKey = key.key,
+            model = model,
+            prompt = prompt,
+            extraBody = extras.takeIf { it.isNotEmpty() },
+        )
+        jobId.fold(
+            onSuccess = { id ->
+                respondText(
+                    buildJsonObject {
+                        put("id", "flux-$id")
+                        put("object", "video")
+                        put("status", "queued")
+                        put("model", modelId)
+                        put("created_at", System.currentTimeMillis() / 1000)
+                    }.toString(),
+                    ContentType.Application.Json,
+                )
+            },
+            onFailure = { e ->
+                respondOpenAiError(HttpStatusCode.BadGateway, "视频任务提交失败：${e.message ?: e.javaClass.simpleName}")
+            },
+        )
+    }
+
+    /** 轮询任务状态（映射为 Sora 状态词表） */
+    private suspend fun ApplicationCall.respondVideoStatus(idParam: String) {
+        val jobId = lanJobIdOf(idParam) ?: run {
+            respondOpenAiError(HttpStatusCode.NotFound, "视频任务不存在（id 格式：flux-<数字>）")
+            return
+        }
+        val job = videoJobDao.byId(jobId) ?: run {
+            respondOpenAiError(HttpStatusCode.NotFound, "视频任务不存在")
+            return
+        }
+        val status = when (job.status) {
+            VideoJobEntity.STATUS_PENDING -> "queued"
+            VideoJobEntity.STATUS_RUNNING -> "in_progress"
+            VideoJobEntity.STATUS_DONE -> "completed"
+            else -> "failed"
+        }
+        respondText(
+            buildJsonObject {
+                put("id", "flux-${job.id}")
+                put("object", "video")
+                put("status", status)
+                put("model", job.modelName)
+                put("created_at", job.createdAt / 1000)
+                job.error?.let { put("error", it) }
+            }.toString(),
+            ContentType.Application.Json,
+        )
+    }
+
+    /** 下载成品视频（完成后流式回本地 mp4 文件） */
+    private suspend fun ApplicationCall.respondVideoContent(idParam: String) {
+        val jobId = lanJobIdOf(idParam) ?: run {
+            respondOpenAiError(HttpStatusCode.NotFound, "视频任务不存在（id 格式：flux-<数字>）")
+            return
+        }
+        val job = videoJobDao.byId(jobId) ?: run {
+            respondOpenAiError(HttpStatusCode.NotFound, "视频任务不存在")
+            return
+        }
+        val path = job.videoPath
+        if (job.status != VideoJobEntity.STATUS_DONE || path == null) {
+            respondOpenAiError(HttpStatusCode.NotFound, "任务尚未完成或无可用视频（当前状态：${job.status}）")
+            return
+        }
+        val file = File(path)
+        if (!file.exists()) {
+            respondOpenAiError(HttpStatusCode.NotFound, "视频文件已被清理")
+            return
+        }
+        respondBytes(file.readBytes(), ContentType("video", "mp4"))
     }
 }
 

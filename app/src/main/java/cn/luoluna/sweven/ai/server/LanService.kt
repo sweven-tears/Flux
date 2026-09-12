@@ -39,6 +39,8 @@ object ServerRunner {
             smartRouteMemberDao = app.database.smartRouteMemberDao(),
             settings = app.settings,
             logDao = app.database.requestLogDao(),
+            videoJobs = VideoJobManager.get(context),
+            videoJobDao = app.database.videoJobDao(),
             authDao = app.database.authDeviceDao(),
         )
         server = s

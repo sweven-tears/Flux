@@ -32,7 +32,11 @@ venv/
 
 # IDE
 .idea/
+.zed/
 *.swp
+
+# 本机 Android SDK 路径（由 Android Studio 自动生成）
+local.properties
 
 # 临时文件
 *.tmp
@@ -43,3 +47,9 @@ venv/
 
 # 构建出的 APK 产物
 *.apk
+
+# 本地调试脚本与设计文档（仅本地留存，备份见 phoneRouter-backup/）
+/mock_server.py
+/proxy_server.py
+/relay_server.py
+/docs/

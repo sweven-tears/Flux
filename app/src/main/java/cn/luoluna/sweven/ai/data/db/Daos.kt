@@ -481,6 +481,9 @@ interface VideoJobDao {
     @Query("SELECT * FROM video_jobs WHERE status IN ('pending','running') ORDER BY createdAt ASC")
     fun activeBlocking(): List<VideoJobEntity>
 
+    @Query("SELECT * FROM video_jobs WHERE status NOT IN ('pending','running') ORDER BY updatedAt DESC LIMIT 30")
+    suspend fun recentTerminal(): List<VideoJobEntity>
+
     @Query("SELECT * FROM video_jobs WHERE id = :id")
     suspend fun byId(id: Long): VideoJobEntity?
 

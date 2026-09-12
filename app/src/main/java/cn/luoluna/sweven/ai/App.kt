@@ -25,6 +25,6 @@ class App : Application() {
         super.onCreate()
         Notifications.ensureChannels(this)
         // 恢复上次未完成的视频生成任务（进程被杀后重新拉起轮询与前台服务）
-        VideoJobManager.get(this).resumeAll()
+        VideoJobManager.get(this).resumeAll(startService = true)
     }
 }

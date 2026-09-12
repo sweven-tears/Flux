@@ -6,6 +6,7 @@ import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
+import androidx.core.app.NotificationManagerCompat
 import androidx.core.app.ServiceCompat
 import androidx.core.content.ContextCompat
 import cn.luoluna.sweven.ai.App
@@ -154,8 +155,13 @@ class VideoJobManager private constructor(private val context: Context) {
         throw (lastError ?: ApiException("没有可用的视频接口形态"))
     }
 
-    /** 进程/服务重启后恢复未完成任务（提交中断、无上游 id 的行标记失败）。[onDone] 带回是否存在活跃任务 */
-    fun resumeAll(onDone: ((Boolean) -> Unit)? = null) {
+    /**
+     * 进程/服务重启后恢复未完成任务（提交中断、无上游 id 的行标记失败）。[onDone] 带回是否存在活跃任务。
+     * **[startService] 仅进程冷启动（App.onCreate）可传 true**——服务自己的 onStartCommand 路径绝不能再
+     * startForegroundService，否则 onStartCommand → resumeAll → ensureService → onStartCommand 自喂成
+     * 启动风暴（实测每 0.5s 重发通知、系统 Shedding 丢掉真实更新，面板永远停留在旧文案）。
+     */
+    fun resumeAll(startService: Boolean = false, onDone: ((Boolean) -> Unit)? = null) {
         scope.launch {
             var hasJobs = false
             val pending = dao.active()
@@ -173,7 +179,14 @@ class VideoJobManager private constructor(private val context: Context) {
                     )
                 }
             }
-            if (hasJobs) ensureService()
+            if (startService) {
+                // 进程冷启动：清掉上个会话遗留的任务通知（僵尸占位/旧进度），结果内容已在聊天里
+                runCatching {
+                    dao.recentTerminal().forEach { Notifications.cancelVideoNotification(context, it.id) }
+                    NotificationManagerCompat.from(context).cancel(Notifications.ID_VIDEO_FOREGROUND)
+                }
+            }
+            if (startService && hasJobs) ensureService()
             onDone?.invoke(hasJobs)
         }
     }
@@ -215,22 +228,6 @@ class VideoJobManager private constructor(private val context: Context) {
     /** 用户点「继续等待」：复位询问窗并顺延到下一个 10 分钟节点 */
     fun onKeepWaiting(jobId: Long) {
         keepSignals[jobId] = true
-    }
-
-    /** 前台服务启动用的通知：取最早一个活跃任务（通知 ID 与轮询循环更新的同一槽位） */
-    fun firstActiveForForeground(): Pair<Int, android.app.Notification> {
-        val job = dao.activeBlocking().firstOrNull()
-        return if (job == null) {
-            // 理论不会发生（调用前已判活跃）；兜底空态通知避免 startForeground 无通知崩溃
-            Notifications.videoNotificationId(0L) to
-                Notifications.buildVideoProgress(context, 0L, 0L, "视频任务", 0, false)
-        } else {
-            val elapsedMin = ((System.currentTimeMillis() - job.createdAt) / 60_000L).toInt()
-            Notifications.videoNotificationId(job.id) to
-                Notifications.buildVideoProgress(
-                    context, job.id, job.conversationId, job.modelName, elapsedMin, false,
-                )
-        }
     }
 
     private fun ensureService() {
@@ -275,6 +272,8 @@ class VideoJobManager private constructor(private val context: Context) {
         try {
             var waitedMs = 0L
             var askedAtMs = -1L
+            var postedMinutes = -1
+            var postedAsking = false
             while (coroutineContext.isActive) {
                 val job = dao.byId(jobId) ?: return
                 if (job.status != VideoJobEntity.STATUS_PENDING && job.status != VideoJobEntity.STATUS_RUNNING) {
@@ -341,16 +340,29 @@ class VideoJobManager private constructor(private val context: Context) {
                 }
                 val asking = askedAtMs > 0 && System.currentTimeMillis() - askedAtMs < ASK_WINDOW_MS
                 if (askedAtMs > 0 && !asking) askedAtMs = -1L
-                if (job.conversationId != VIDEO_JOB_NO_CONVERSATION) {
+                // 只在分钟数/询问态变化时刷新通知，避免每轮轮询都重发（观感是「几秒刷一次」）
+                val minutes = (waitedMs / 60_000).toInt()
+                if (job.conversationId != VIDEO_JOB_NO_CONVERSATION &&
+                    (minutes != postedMinutes || asking != postedAsking)
+                ) {
+                    postedMinutes = minutes
+                    postedAsking = asking
                     Notifications.notifyVideoProgress(
-                        context, jobId, job.conversationId, job.modelName,
-                        (waitedMs / 60_000).toInt(), asking,
+                        context, jobId, job.conversationId, job.modelName, minutes, asking,
                     )
                 }
             }
         } finally {
             polling.remove(jobId)
-            if (polling.isEmpty()) {
+            scheduleIdleStop()
+        }
+    }
+
+    /** 最后一个任务结束后延迟去抖再停服务：避开「完成→立刻又有新提交」的竞态 */
+    private fun scheduleIdleStop() {
+        scope.launch {
+            delay(3_000)
+            if (polling.isEmpty() && dao.active().isEmpty()) {
                 context.stopService(Intent(context, VideoJobService::class.java))
             }
         }
@@ -436,7 +448,9 @@ class VideoJobService : Service() {
             ACTION_CANCEL_JOB -> manager.cancel(intent.getLongExtra(EXTRA_JOB_ID, -1L))
             ACTION_KEEP_WAITING -> manager.onKeepWaiting(intent.getLongExtra(EXTRA_JOB_ID, -1L))
         }
-        // startForegroundService 必须立刻 startForeground（主线程不能碰数据库，先给占位通知）
+        // startForegroundService 必须立刻 startForeground（主线程不能碰数据库，先给占位通知）；
+        // 前台槽位固定 2005，任务进度/结果各自用 3000+jobId 槽位——服务停止时系统只回收 2005，
+        // 「已生成/已失败」通知不受影响（此前与前台同槽会被连带撤掉）
         ServiceCompat.startForeground(
             this, Notifications.ID_VIDEO_FOREGROUND, Notifications.buildVideoForegroundPlaceholder(this),
             if (Build.VERSION.SDK_INT >= 29) ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC else 0,
@@ -445,16 +459,15 @@ class VideoJobService : Service() {
             if (!hasJobs) {
                 ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
                 stopSelf()
-            } else {
-                // 用最早任务的进度通知替换占位（异步查库，不占主线程）
-                val pair = manager.firstActiveForForeground()
-                ServiceCompat.startForeground(
-                    this, pair.first, pair.second,
-                    if (Build.VERSION.SDK_INT >= 29) ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC else 0,
-                )
             }
         }
         return START_STICKY
+    }
+
+    override fun onDestroy() {
+        // 任何停止路径（含 pollLoop 的空闲 stopService）都把占位通知撤干净，不留僵尸
+        ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
+        super.onDestroy()
     }
 
     companion object {

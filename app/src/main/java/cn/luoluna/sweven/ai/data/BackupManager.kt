@@ -9,6 +9,8 @@ import cn.luoluna.sweven.ai.data.db.ModelEntity
 import cn.luoluna.sweven.ai.data.db.PresetEntity
 import cn.luoluna.sweven.ai.data.db.ProviderEntity
 import cn.luoluna.sweven.ai.data.db.SmartRouteEntity
+import cn.luoluna.sweven.ai.data.db.SmartRouteGroupEntity
+import cn.luoluna.sweven.ai.data.db.SmartRouteMemberEntity
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
@@ -24,6 +26,8 @@ data class BackupDto(
     val apiKeys: List<ApiKeyEntity> = emptyList(),
     val models: List<ModelEntity> = emptyList(),
     val smartRoutes: List<SmartRouteEntity> = emptyList(),
+    val smartRouteGroups: List<SmartRouteGroupEntity> = emptyList(),
+    val smartRouteMembers: List<SmartRouteMemberEntity> = emptyList(),
     val folders: List<FolderEntity> = emptyList(),
     val presets: List<PresetEntity> = emptyList(),
     val authDevices: List<AuthDeviceEntity> = emptyList(),
@@ -38,6 +42,8 @@ data class BackupSummary(
     val apiKeys: Int,
     val models: Int,
     val smartRoutes: Int,
+    val smartRouteGroups: Int,
+    val smartRouteMembers: Int,
     val folders: Int,
     val presets: Int,
     val authDevices: Int,
@@ -69,6 +75,8 @@ class BackupManager(private val app: App) {
             apiKeys = if (includeKeys) db.apiKeyDao().all() else emptyList(),
             models = db.modelDao().all(),
             smartRoutes = db.smartRouteDao().all(),
+            smartRouteGroups = db.smartRouteGroupDao().all(),
+            smartRouteMembers = db.smartRouteMemberDao().all(),
             folders = db.folderDao().all(),
             presets = db.presetDao().all(),
             authDevices = db.authDeviceDao().all(),
@@ -96,6 +104,8 @@ class BackupManager(private val app: App) {
         apiKeys = dto.apiKeys.size,
         models = dto.models.size,
         smartRoutes = dto.smartRoutes.size,
+        smartRouteGroups = dto.smartRouteGroups.size,
+        smartRouteMembers = dto.smartRouteMembers.size,
         folders = dto.folders.size,
         presets = dto.presets.size,
         authDevices = dto.authDevices.size,
@@ -108,6 +118,8 @@ class BackupManager(private val app: App) {
             db.conversationDao().clearAllFolderRefs()
             db.apiKeyDao().clearAll()
             db.modelDao().clearAll()
+            db.smartRouteMemberDao().clearAll()
+            db.smartRouteGroupDao().clearAll()
             db.smartRouteDao().clearAll()
             db.presetDao().clearAll()
             db.folderDao().clearAll()
@@ -116,6 +128,8 @@ class BackupManager(private val app: App) {
             db.apiKeyDao().insertAll(dto.apiKeys)
             db.modelDao().insertAll(dto.models)
             db.smartRouteDao().insertAll(dto.smartRoutes)
+            db.smartRouteGroupDao().insertAll(dto.smartRouteGroups)
+            db.smartRouteMemberDao().insertAll(dto.smartRouteMembers)
             db.folderDao().insertAll(dto.folders)
             db.presetDao().insertAll(dto.presets)
             db.authDeviceDao().clearAll()

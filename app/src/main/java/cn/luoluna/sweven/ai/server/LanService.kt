@@ -35,6 +35,8 @@ object ServerRunner {
             providerDao = app.database.providerDao(),
             modelDao = app.database.modelDao(),
             smartRouteDao = app.database.smartRouteDao(),
+            smartRouteGroupDao = app.database.smartRouteGroupDao(),
+            smartRouteMemberDao = app.database.smartRouteMemberDao(),
             settings = app.settings,
             logDao = app.database.requestLogDao(),
             authDao = app.database.authDeviceDao(),

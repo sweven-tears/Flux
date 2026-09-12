@@ -54,6 +54,7 @@ import cn.luoluna.sweven.ai.data.db.FolderEntity
 import cn.luoluna.sweven.ai.data.db.MessageEntity
 import cn.luoluna.sweven.ai.data.db.PresetEntity
 import cn.luoluna.sweven.ai.data.db.Role
+import cn.luoluna.sweven.ai.data.repo.RouteGroupTarget
 import cn.luoluna.sweven.ai.data.repo.SmartAi
 import cn.luoluna.sweven.ai.net.ThinkingDepth
 import cn.luoluna.sweven.ai.ui.chat.plugin.ChatUiDefaults
@@ -95,18 +96,26 @@ fun ChatScreen(
     // 消息模型解析表（含禁用模型）：历史气泡按消息记录的 providerId+modelName 显示当时回复的模型
     val modelsByKey = allPickerModels.associate { (it.provider.id to it.model.name) to it }
     val smartAiCapability by vm.smartAiCapability.collectAsStateWithLifecycle()
-    // SmartAi 聚合目标没有单个模型可看，按钮可见性按启用候选的能力并集判断
+    // 路由分组：可选用列表 + 当前分组能力并集（附件/思考按钮显隐依据）
+    val routeGroups by vm.routeGroups.collectAsStateWithLifecycle()
+    val currentGroup = (currentTarget as? ChatTarget.Group)?.group
+    val currentGroupCapability by vm.currentGroupCapability.collectAsStateWithLifecycle()
+    // SmartAi/分组 聚合目标没有单个模型可看，按钮可见性按启用候选/成员的能力并集判断
     val isSmartAi = currentTarget is ChatTarget.SmartAi
     val showReasoning = currentPicker?.model?.capabilityReasoning == true ||
-        (isSmartAi && smartAiCapability.reasoning)
+        (isSmartAi && smartAiCapability.reasoning) ||
+        (currentGroup != null && currentGroupCapability?.reasoning == true)
     val showImageInput = currentPicker?.model?.inputImage == true ||
-        (isSmartAi && smartAiCapability.inputImage)
+        (isSmartAi && smartAiCapability.inputImage) ||
+        (currentGroup != null && currentGroupCapability?.inputImage == true)
     // 会话记录的模型/目标已不可用、当前展示的是回退目标时为 true（顶栏提示）
     val modelFallback = current?.providerId?.let { pid ->
         val single = currentTarget as? ChatTarget.Single
         when {
             currentTarget == null -> true
             pid == SmartAi.PROVIDER_ID -> currentTarget !is ChatTarget.SmartAi
+            pid == RouteGroupTarget.PROVIDER_ID ->
+                (currentTarget as? ChatTarget.Group)?.group?.groupKey != current?.modelName
             single != null -> pid != single.picker.provider.id ||
                 current?.modelName != single.picker.model.name
             else -> false
@@ -224,6 +233,7 @@ fun ChatScreen(
         modelsByKey = modelsByKey,
         isSmartAi = isSmartAi,
         smartAiCapability = smartAiCapability,
+        currentGroup = currentGroup,
         modelFallback = modelFallback,
         streaming = streaming,
         error = error,
@@ -375,6 +385,12 @@ fun ChatScreen(
             smartAiCapability = smartAiCapability,
             onSelectSmartAi = {
                 vm.selectModel(SmartAi.PROVIDER_ID, SmartAi.MODEL_NAME)
+                pickerOpen = false
+            },
+            routeGroups = routeGroups,
+            selectedGroupKey = currentGroup?.groupKey,
+            onSelectGroup = { group ->
+                vm.selectModel(RouteGroupTarget.PROVIDER_ID, group.groupKey)
                 pickerOpen = false
             },
         )

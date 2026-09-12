@@ -258,6 +258,7 @@ fun SettingsScreen(onBack: () -> Unit, onOpenCreations: () -> Unit) {
                             append(
                                 "包含厂商 ${summary.providers} 家、API Key ${summary.apiKeys} 个、" +
                                     "模型 ${summary.models} 个、智能路由候选 ${summary.smartRoutes} 个、" +
+                                    "路由分组 ${summary.smartRouteGroups} 个、" +
                                     "分组 ${summary.folders} 个、预设 ${summary.presets} 个、" +
                                     "已授权设备 ${summary.authDevices} 台。\n\n"
                             )

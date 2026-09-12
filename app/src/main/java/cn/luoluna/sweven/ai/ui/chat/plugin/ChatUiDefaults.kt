@@ -395,6 +395,7 @@ object ChatUiDefaults {
                         Text(
                             when {
                                 env.isSmartAi -> "smartAi"
+                                env.currentGroup != null -> env.currentGroup.routeName
                                 env.currentPicker != null -> env.currentPicker.displayId
                                 else -> "选择模型"
                             },

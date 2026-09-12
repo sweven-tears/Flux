@@ -13,6 +13,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AutoAwesome
+import androidx.compose.material.icons.filled.Hub
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
@@ -31,6 +32,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import cn.luoluna.sweven.ai.data.db.ModelEntity
+import cn.luoluna.sweven.ai.data.db.SmartRouteGroupEntity
 import cn.luoluna.sweven.ai.data.repo.SmartAggregateCapability
 import cn.luoluna.sweven.ai.ui.common.ModelBadgesRow
 import cn.luoluna.sweven.ai.ui.common.paramsSummary
@@ -78,6 +80,10 @@ fun ModelPickerSheet(
     smartAiSelected: Boolean = false,
     onSelectSmartAi: () -> Unit = {},
     smartAiCapability: SmartAggregateCapability? = null,
+    /** 路由分组（flux-xxx）：列在 smartAi 之后，组内成员自动切换 */
+    routeGroups: List<SmartRouteGroupEntity> = emptyList(),
+    selectedGroupKey: String? = null,
+    onSelectGroup: (SmartRouteGroupEntity) -> Unit = {},
 ) {
     var filter by remember { mutableStateOf(InputFilter.ALL) }
     var providerFilter by remember { mutableStateOf<String?>(null) }
@@ -188,6 +194,38 @@ fun ModelPickerSheet(
                                             ?.let { add(it) }
                                         add("失败自动切换候选")
                                     }.joinToString(" · "),
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                        }
+                        HorizontalDivider(Modifier.padding(top = 8.dp))
+                    }
+                }
+                // 路由分组：同族模型聚合，组内自动切换（不受模态筛选影响，成员按请求动态过滤）
+                routeGroups.forEach { group ->
+                    item(key = "route_group_${group.id}") {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { onSelectGroup(group) }
+                                .padding(horizontal = 8.dp, vertical = 2.dp),
+                        ) {
+                            RadioButton(
+                                selected = group.groupKey == selectedGroupKey,
+                                onClick = { onSelectGroup(group) },
+                            )
+                            Icon(
+                                Icons.Filled.Hub,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.padding(end = 8.dp),
+                            )
+                            Column(Modifier.weight(1f).padding(vertical = 6.dp)) {
+                                Text(group.routeName, style = MaterialTheme.typography.bodyMedium)
+                                Text(
+                                    "路由分组 · 同族模型跨厂商自动切换",
                                     style = MaterialTheme.typography.labelSmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 )

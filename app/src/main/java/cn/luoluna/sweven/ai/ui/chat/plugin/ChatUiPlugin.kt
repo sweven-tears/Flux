@@ -9,6 +9,7 @@ import cn.luoluna.sweven.ai.data.db.ConversationEntity
 import cn.luoluna.sweven.ai.data.db.FolderEntity
 import cn.luoluna.sweven.ai.data.db.MessageEntity
 import cn.luoluna.sweven.ai.data.db.PresetEntity
+import cn.luoluna.sweven.ai.data.db.SmartRouteGroupEntity
 import cn.luoluna.sweven.ai.data.repo.SmartAggregateCapability
 import cn.luoluna.sweven.ai.ui.chat.ChatError
 import cn.luoluna.sweven.ai.ui.chat.ChatTarget
@@ -81,6 +82,8 @@ class ChatUiEnv(
     val modelsByKey: Map<Pair<Long, String>, PickerModel>,
     val isSmartAi: Boolean,
     val smartAiCapability: SmartAggregateCapability,
+    /** 当前路由分组目标（非分组为 null）：顶栏显示 flux-<groupKey> */
+    val currentGroup: SmartRouteGroupEntity?,
     /** 会话原模型不可用、当前展示回退目标 */
     val modelFallback: Boolean,
     val streaming: Boolean,

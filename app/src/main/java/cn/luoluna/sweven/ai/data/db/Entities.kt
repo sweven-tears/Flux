@@ -135,6 +135,50 @@ data class SmartRouteEntity(
     val enabled: Boolean = true,
 )
 
+/**
+ * 智能路由分组：同族模型（按模型 id 归组）聚合为一个对外模型 flux-<groupKey>，
+ * 聊天选择器与局域网 /v1/models 同形暴露；组内跨厂商自动切换，成员见 [SmartRouteMemberEntity]。
+ */
+@Entity(tableName = "smart_route_groups")
+@Serializable
+data class SmartRouteGroupEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    /** 归组键：模型 id 规范化后的基名（小写、去厂商命名空间、去尾部版本/日期后缀），如 deepseek-v4-flash */
+    val groupKey: String,
+    val sortOrder: Int = 0,
+    val enabled: Boolean = true,
+    val createdAt: Long = System.currentTimeMillis(),
+) {
+    /** 对外模型名（局域网请求 model 字段与聊天选择器展示名） */
+    val routeName: String get() = "flux-$groupKey"
+}
+
+/**
+ * 路由分组成员：与 smart_routes 同样按 providerId + modelName 引用模型（重拉模型列表不丢配置）。
+ * [sortOrder] 决定组内切换优先级；enabled=false 仅从本组剔除，模型本身不受影响。
+ */
+@Entity(
+    tableName = "smart_route_members",
+    foreignKeys = [
+        ForeignKey(
+            entity = SmartRouteGroupEntity::class,
+            parentColumns = ["id"],
+            childColumns = ["groupId"],
+            onDelete = ForeignKey.CASCADE,
+        )
+    ],
+    indices = [Index("groupId")],
+)
+@Serializable
+data class SmartRouteMemberEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val groupId: Long,
+    val providerId: Long,
+    val modelName: String,
+    val sortOrder: Int = 0,
+    val enabled: Boolean = true,
+)
+
 @Entity(tableName = "conversations")
 data class ConversationEntity(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,

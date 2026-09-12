@@ -20,7 +20,11 @@ import cn.luoluna.sweven.ai.data.db.ProviderDao
 import cn.luoluna.sweven.ai.data.db.ProviderEntity
 import cn.luoluna.sweven.ai.data.db.Role
 import cn.luoluna.sweven.ai.data.db.SmartRouteDao
+import cn.luoluna.sweven.ai.data.db.SmartRouteGroupDao
+import cn.luoluna.sweven.ai.data.db.SmartRouteGroupEntity
+import cn.luoluna.sweven.ai.data.db.SmartRouteMemberDao
 import cn.luoluna.sweven.ai.data.repo.SmartAggregateCapability
+import cn.luoluna.sweven.ai.data.repo.RouteGroupTarget
 import cn.luoluna.sweven.ai.data.repo.SmartAi
 import cn.luoluna.sweven.ai.data.repo.SmartCandidate
 import cn.luoluna.sweven.ai.data.repo.SmartEvent
@@ -78,10 +82,13 @@ data class PickerModel(val provider: ProviderEntity, val model: ModelEntity) {
     val enabled: Boolean get() = model.enabled
 }
 
-/** 当前生效的聊天目标：单个模型或 smartAi 聚合 */
+/** 当前生效的聊天目标：单个模型、smartAi 聚合或路由分组 */
 sealed interface ChatTarget {
     data class Single(val picker: PickerModel) : ChatTarget
     data object SmartAi : ChatTarget
+
+    /** 路由分组（flux-<groupKey>）：组内成员按优先级与健康度自动切换 */
+    data class Group(val group: SmartRouteGroupEntity) : ChatTarget
 }
 
 /** 抽屉展示状态：文件夹 + 各文件夹的预设对话与会话 */
@@ -120,6 +127,8 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
     private val folderDao: FolderDao = ctx.database.folderDao()
     private val presetDao: PresetDao = ctx.database.presetDao()
     private val smartRouteDao: SmartRouteDao = ctx.database.smartRouteDao()
+    private val smartRouteGroupDao: SmartRouteGroupDao = ctx.database.smartRouteGroupDao()
+    private val smartRouteMemberDao: SmartRouteMemberDao = ctx.database.smartRouteMemberDao()
     private val client: ProviderClient = ctx.providerClient
     private val router = ctx.modelRouter
     private val settings = ctx.settings
@@ -202,12 +211,32 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
             )
         }.stateIn(viewModelScope, SharingStarted.Eagerly, aggregateCapability(emptyList()))
 
+    /**
+     * 可选用的路由分组：启用且至少有一个可用成员（启用、厂商未停用）。
+     * 聊天选择器列出与 [currentTarget] 解析（哨兵 providerId + groupKey）共用这份列表。
+     */
+    val routeGroups: StateFlow<List<SmartRouteGroupEntity>> =
+        combine(
+            smartRouteGroupDao.observeAll(),
+            smartRouteMemberDao.observeAll(),
+            providerDao.observeAll(),
+        ) { groups, members, providers ->
+            val enabledProviders = providers.filter { it.enabled }.map { it.id }.toSet()
+            groups.filter { g ->
+                g.enabled && members.any { it.groupId == g.id && it.enabled && it.providerId in enabledProviders }
+            }
+        }.stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
+
     /** 当前生效目标：优先会话自己选的，否则回退到上次使用的目标 */
     val currentTarget: StateFlow<ChatTarget?> =
-        combine(current, pickerModels, lastModel, smartEnabledCount) { conv, models, last, smartCount ->
+        combine(current, pickerModels, lastModel, smartEnabledCount, routeGroups) { conv, models, last, smartCount, groups ->
             fun resolve(providerId: Long, modelName: String?): ChatTarget? {
                 if (providerId == SmartAi.PROVIDER_ID) {
                     return if (smartCount > 0) ChatTarget.SmartAi else null
+                }
+                // 路由分组：modelName 存 groupKey，分组被删或无可用成员时回退
+                if (providerId == RouteGroupTarget.PROVIDER_ID) {
+                    return groups.firstOrNull { it.groupKey == modelName }?.let { ChatTarget.Group(it) }
                 }
                 return models.firstOrNull { it.provider.id == providerId && it.model.name == modelName }
                     ?.let { ChatTarget.Single(it) }
@@ -215,6 +244,22 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
             conv?.providerId?.let { pid -> resolve(pid, conv.modelName) }
                 ?: last?.let { (pid, name) -> resolve(pid, name) }
         }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
+
+    /** 当前分组目标的能力并集（附件/思考按钮显隐依据）；非分组目标为 null */
+    val currentGroupCapability: StateFlow<SmartAggregateCapability?> =
+        combine(
+            currentTarget,
+            smartRouteMemberDao.observeAll(),
+            modelDao.observeAll(),
+            providerDao.observeAll(),
+        ) { target, members, models, providers ->
+            val g = (target as? ChatTarget.Group)?.group ?: return@combine null
+            val enabledProviders = providers.filter { it.enabled }.map { it.id }.toSet()
+            aggregateCapability(
+                members.filter { it.groupId == g.id && it.enabled && it.providerId in enabledProviders }
+                    .mapNotNull { m -> models.firstOrNull { it.providerId == m.providerId && it.name == m.modelName } },
+            )
+        }.stateIn(viewModelScope, SharingStarted.Eagerly, null)
 
     /** 上下文用量粗估：当前会话 systemPrompt + 全部历史（含图片），按当前目标的窗口显示 */
     val contextEstimate: StateFlow<ContextEstimate?> =
@@ -418,10 +463,11 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         _error.value = null
     }
 
-    /** 会话持久化的目标标识：单个模型为真实厂商 id；smartAi 为哨兵值 */
+    /** 会话持久化的目标标识：单个模型为真实厂商 id；smartAi/路由分组为哨兵值（分组的 modelName 存 groupKey） */
     private fun ChatTarget.identifiers(): Pair<Long, String> = when (this) {
         is ChatTarget.Single -> picker.provider.id to picker.model.name
         ChatTarget.SmartAi -> SmartAi.pair
+        is ChatTarget.Group -> RouteGroupTarget.PROVIDER_ID to group.groupKey
     }
 
     /**
@@ -489,7 +535,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    /** 按目标发起请求：生图模型走文生图分支；其余单模型直连；smartAi 走回退链 */
+    /** 按目标发起请求：生图模型走文生图分支；其余单模型直连；smartAi 走回退链；分组走组内切换 */
     private suspend fun startStreaming(convId: Long, target: ChatTarget) {
         when (target) {
             is ChatTarget.Single -> if (target.picker.model.type == ModelType.IMAGE) {
@@ -498,6 +544,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                 streamSingle(convId, target.picker)
             }
             ChatTarget.SmartAi -> streamSmart(convId)
+            is ChatTarget.Group -> streamGroup(convId, target.group)
         }
     }
 
@@ -703,7 +750,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
     private suspend fun streamSmart(convId: Long) {
         val routes = smartRouteDao.all().filter { it.enabled }
         if (routes.isEmpty()) {
-            _error.value = ChatError("smartAi 没有启用的候选模型，请到「厂商」页右上角 → 智能路由配置")
+            _error.value = ChatError("smartAi 没有启用的候选模型，请到「局域网」页右上角 → 智能路由配置")
             return
         }
         val conversation = conversationDao.byId(convId)
@@ -717,27 +764,11 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         var maxDropped = 0
         var maxStripped = 0
         val prepared = routes.mapNotNull { route ->
-            val resolved = router.resolveById(route.providerId, route.modelName) ?: return@mapNotNull null
-            val key = resolved.apiKey ?: return@mapNotNull null
-            if (key.key.isBlank()) return@mapNotNull null
-            // 指向本机网关自身的候选跳过，避免自连回环
-            if (isSelfGatewayUrl(resolved.provider.baseUrl, settings.lanPort.value)) return@mapNotNull null
-            // 模型配置行可能已被删除，此时退回空配置继续路由
-            val model = resolved.model
-                ?: ModelEntity(providerId = resolved.provider.id, name = route.modelName)
-            val built = buildRequestBody(resolved.provider, model, conversation, history)
-            if (built.droppedCount > maxDropped) maxDropped = built.droppedCount
-            if (built.strippedImageCount > maxStripped) maxStripped = built.strippedImageCount
-            SmartCandidate(
-                label = "${resolved.provider.alias}/${model.alias?.takeIf { it.isNotBlank() } ?: model.name}",
-                providerId = resolved.provider.id,
-                modelName = model.name,
-                baseUrl = resolved.provider.baseUrl,
-                apiKey = key.key,
-                extraHeaders = parseCustomHeaders(model.customHeaders),
-                body = built.body,
-                protocol = resolved.provider.protocol,
-            ) to model
+            val resolved = resolveRouteMember(route.providerId, route.modelName, conversation, history)
+                ?: return@mapNotNull null
+            if (resolved.dropped > maxDropped) maxDropped = resolved.dropped
+            if (resolved.stripped > maxStripped) maxStripped = resolved.stripped
+            resolved.candidate to resolved.model
         }
         _notice.value = trimNotice(maxDropped, maxStripped)
         // 健康桶整链取同一时刻：冷却/降权候选垫底，桶内按特征匹配排序
@@ -752,16 +783,107 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
             _error.value = ChatError("smartAi 的候选模型均不可用（缺少 API Key、已被删除或厂商已停用）")
             return
         }
-        val policy = SmartPolicy(
-            mode = settings.smartResponseMode.value,
-            fastMs = settings.smartFastFirstTokenMs.value.toLong(),
-            chatMs = settings.smartFirstTokenTimeoutSeconds.value * 1000L,
-            leisureMs = settings.smartLeisureFirstTokenSeconds.value * 1000L,
-            cooldownThreshold = settings.smartCooldownThreshold.value,
-            cooldownMs = settings.smartCooldownSeconds.value * 1000L,
-        )
-        val maxRounds = settings.smartRouteMaxRounds.value
+        launchSmartCollect(convId, candidates)
+    }
 
+    /**
+     * 路由分组（flux-<groupKey>）：组内成员按优先级与健康桶自动切换。
+     * 与 smartAi 的差别：按请求模态**严格过滤**成员——带图/视频输入时不支持该模态的成员直接剔除，
+     * 保证「组内参数基本一致」：不会出现同一个分组有的成员支持图像、有的不支持却被路由到的情况。
+     */
+    private suspend fun streamGroup(convId: Long, group: SmartRouteGroupEntity) {
+        val members = smartRouteMemberDao.forGroup(group.id).filter { it.enabled }
+        if (members.isEmpty()) {
+            _error.value = ChatError("分组「${group.routeName}」没有启用的成员，请到「局域网」页右上角 → 智能路由配置")
+            return
+        }
+        val conversation = conversationDao.byId(convId)
+        val history = messageDao.forConversation(convId)
+        val features = featuresOfHistory(
+            hasImageAttachment = history.any { it.images.isNotEmpty() },
+            thinkingDepth = conversation?.thinkingDepth,
+        )
+        var maxDropped = 0
+        var maxStripped = 0
+        val prepared = members.mapNotNull { member ->
+            val resolved = resolveRouteMember(member.providerId, member.modelName, conversation, history)
+                ?: return@mapNotNull null
+            // 严格过滤：模态不匹配的成员不参与本次路由（区别于 smartAi 的排序兜底）
+            if (features.needsImageInput && !resolved.model.inputImage) return@mapNotNull null
+            if (features.needsVideoInput && !resolved.model.inputVideo) return@mapNotNull null
+            if (resolved.dropped > maxDropped) maxDropped = resolved.dropped
+            if (resolved.stripped > maxStripped) maxStripped = resolved.stripped
+            resolved.candidate to resolved.model
+        }
+        if (prepared.isEmpty()) {
+            _error.value = ChatError(
+                if (features.needsImageInput || features.needsVideoInput) {
+                    "分组「${group.routeName}」内没有支持当前输入模态的可用成员（厂商停用/缺 Key，或成员均不支持图像输入）"
+                } else {
+                    "分组「${group.routeName}」的成员均不可用（缺少 API Key、已被删除或厂商已停用）"
+                },
+            )
+            return
+        }
+        _notice.value = trimNotice(maxDropped, maxStripped)
+        val now = System.currentTimeMillis()
+        val candidates = orderCandidates(
+            prepared,
+            features,
+            modelOf = { it.second },
+            bucketOf = { SmartHealth.bucket(it.first.providerId, it.first.modelName, now) },
+        ).map { it.first }
+        launchSmartCollect(convId, candidates)
+    }
+
+    /** 已解析的路由成员：候选请求 + 模型配置 + 上下文裁剪统计 */
+    private data class ResolvedMember(
+        val candidate: SmartCandidate,
+        val model: ModelEntity,
+        val dropped: Int,
+        val stripped: Int,
+    )
+
+    /** 解析一个路由成员（smartAi 候选/分组成员共用）：跳过停用厂商、缺 Key、自连网关；附上下文裁剪统计 */
+    private suspend fun resolveRouteMember(
+        providerId: Long,
+        modelName: String,
+        conversation: ConversationEntity?,
+        history: List<MessageEntity>,
+    ): ResolvedMember? {
+        val resolved = router.resolveById(providerId, modelName) ?: return null
+        val key = resolved.apiKey ?: return null
+        if (key.key.isBlank()) return null
+        if (isSelfGatewayUrl(resolved.provider.baseUrl, settings.lanPort.value)) return null
+        // 模型配置行可能已被删除，此时退回空配置继续路由
+        val model = resolved.model
+            ?: ModelEntity(providerId = resolved.provider.id, name = modelName)
+        val built = buildRequestBody(resolved.provider, model, conversation, history)
+        val candidate = SmartCandidate(
+            label = "${resolved.provider.alias}/${model.alias?.takeIf { it.isNotBlank() } ?: model.name}",
+            providerId = resolved.provider.id,
+            modelName = model.name,
+            baseUrl = resolved.provider.baseUrl,
+            apiKey = key.key,
+            extraHeaders = parseCustomHeaders(model.customHeaders),
+            body = built.body,
+            protocol = resolved.provider.protocol,
+        )
+        return ResolvedMember(candidate, model, built.droppedCount, built.strippedImageCount)
+    }
+
+    /** 智能路由策略（本机聊天）：App 内 smartAi 与路由分组共用同一组参数 */
+    private fun smartPolicy() = SmartPolicy(
+        mode = settings.smartResponseMode.value,
+        fastMs = settings.smartFastFirstTokenMs.value.toLong(),
+        chatMs = settings.smartFirstTokenTimeoutSeconds.value * 1000L,
+        leisureMs = settings.smartLeisureFirstTokenSeconds.value * 1000L,
+        cooldownThreshold = settings.smartCooldownThreshold.value,
+        cooldownMs = settings.smartCooldownSeconds.value * 1000L,
+    )
+
+    /** 启动执行器并把事件接到节流发布器与落库（smartAi 与路由分组共用的收尾） */
+    private fun launchSmartCollect(convId: Long, candidates: List<SmartCandidate>) {
         _error.value = null
         _streaming.value = true
         _streamingText.value = ""
@@ -771,7 +893,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         sendJob = viewModelScope.launch {
             var failed: ChatError? = null
             try {
-                smartExecutor.stream(candidates, policy, maxRounds).collect { ev ->
+                smartExecutor.stream(candidates, smartPolicy(), settings.smartRouteMaxRounds.value).collect { ev ->
                     when (ev) {
                         is SmartEvent.Delta -> {
                             markFirstToken()

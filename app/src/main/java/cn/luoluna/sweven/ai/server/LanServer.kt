@@ -11,7 +11,11 @@ import cn.luoluna.sweven.ai.data.db.ProviderEntity
 import cn.luoluna.sweven.ai.data.db.RequestLogDao
 import cn.luoluna.sweven.ai.data.db.RequestLogEntity
 import cn.luoluna.sweven.ai.data.db.SmartRouteDao
+import cn.luoluna.sweven.ai.data.db.SmartRouteGroupDao
+import cn.luoluna.sweven.ai.data.db.SmartRouteGroupEntity
+import cn.luoluna.sweven.ai.data.db.SmartRouteMemberDao
 import cn.luoluna.sweven.ai.data.repo.ModelRouter
+import cn.luoluna.sweven.ai.data.repo.RouteGroupTarget
 import cn.luoluna.sweven.ai.data.repo.SmartAi
 import cn.luoluna.sweven.ai.data.repo.SmartHealth
 import cn.luoluna.sweven.ai.data.repo.SmartPolicy
@@ -82,6 +86,8 @@ class LanServer(
     private val providerDao: ProviderDao,
     private val modelDao: ModelDao,
     private val smartRouteDao: SmartRouteDao,
+    private val smartRouteGroupDao: SmartRouteGroupDao,
+    private val smartRouteMemberDao: SmartRouteMemberDao,
     private val settings: AppSettings,
     private val logDao: RequestLogDao,
     @Suppress("unused") private val authDao: AuthDeviceDao,
@@ -280,6 +286,35 @@ class LanServer(
                 }
             )
         }
+        // 路由分组：启用且至少有一个可用成员的分组以 flux-<groupKey> 对外暴露（能力取成员并集）
+        val groups = smartRouteGroupDao.all().filter { it.enabled }
+        if (groups.isNotEmpty()) {
+            val allMembers = smartRouteMemberDao.all()
+            groups.forEach { g ->
+                val memberModels = allMembers
+                    .filter { it.groupId == g.id && it.enabled && it.providerId in providers }
+                    .mapNotNull { modelDao.find(it.providerId, it.modelName) }
+                if (memberModels.isEmpty()) return@forEach
+                val agg = aggregateCapability(memberModels)
+                data.add(
+                    buildJsonObject {
+                        put("id", g.routeName)
+                        put("object", "model")
+                        put("owned_by", "flux")
+                        put(
+                            "phone_router",
+                            buildJsonObject {
+                                put("display", "${g.routeName}（路由分组 · ${memberModels.size} 成员组内切换）")
+                                put("type", "chat")
+                                put("input", modalities(agg.inputText, agg.inputImage, agg.inputVideo))
+                                put("output", modalities(agg.outputText, agg.outputImage, agg.outputVideo))
+                                put("capabilities", modalities(agg.tools, agg.reasoning, false))
+                            }
+                        )
+                    }
+                )
+            }
+        }
         return buildJsonObject {
             put("object", "list")
             put("data", JsonArray(data))
@@ -320,6 +355,22 @@ class LanServer(
             // 响应模式按请求设备区分：不同设备对首字延迟的需求不同
             handleSmartCompletion(body, device, device.responseMode, startedAt)
             return
+        }
+        // 路由分组：flux-<groupKey>（分组键不含 /，与「厂商别名/模型名」聚合 id 区分开）
+        if ('/' !in aggregateId) {
+            RouteGroupTarget.groupKeyOf(aggregateId)?.let { key ->
+                val group = smartRouteGroupDao.byKey(key)
+                if (group == null || !group.enabled) {
+                    logRequest(device, aggregateId, null, false, startedAt, null, false, "路由分组不存在或已禁用")
+                    respondOpenAiError(
+                        HttpStatusCode.NotFound,
+                        "路由分组 '$aggregateId' 不存在或已禁用，可用模型见 GET /v1/models",
+                    )
+                    return
+                }
+                handleGroupCompletion(group, body, device, device.responseMode, startedAt)
+                return
+            }
         }
         val route = router.resolveByAggregateId(aggregateId)
         if (route == null) {
@@ -528,6 +579,100 @@ class LanServer(
             bucketOf = { SmartHealth.bucket(it.provider.id, it.model.name, now) },
         )
 
+        executeSmartCandidates(
+            aggregateId = aggregateId,
+            rawBody = rawBody,
+            messages = messages,
+            prepared = prepared,
+            device = device,
+            policy = policy,
+            maxRounds = maxRounds,
+            startedAt = startedAt,
+        )
+    }
+
+    /**
+     * 路由分组（flux-<groupKey>）：组内成员按顺序回退。
+     * 与 smartAi 的差别：按请求模态**严格过滤**成员（带图/视频输入时不支持的成员直接剔除），
+     * 保证组内参数一致；其余（健康桶排序、轮巡、透传、日志）走 [executeSmartCandidates]。
+     */
+    private suspend fun ApplicationCall.handleGroupCompletion(
+        group: SmartRouteGroupEntity,
+        rawBody: JsonObject,
+        device: AuthDeviceEntity,
+        mode: String,
+        startedAt: Long,
+    ) {
+        val stream = streamFlagOf(rawBody)
+        val aggregateId = group.routeName
+        val messages = rawBody["messages"] as? JsonArray
+        if (messages == null) {
+            logRequest(device, aggregateId, null, stream, startedAt, null, false, "messages 字段缺失")
+            respondOpenAiError(HttpStatusCode.BadRequest, "messages 字段必填")
+            return
+        }
+        val members = smartRouteMemberDao.forGroup(group.id).filter { it.enabled }
+        if (members.isEmpty()) {
+            logRequest(device, aggregateId, null, stream, startedAt, null, false, "分组没有启用的成员")
+            respondOpenAiError(HttpStatusCode.NotFound, "分组 '$aggregateId' 没有启用的成员，请先在「智能路由」中配置")
+            return
+        }
+        val features = featuresOfRequestBody(rawBody, messages)
+        val now = System.currentTimeMillis()
+        val resolved = members.mapNotNull { member ->
+            val r = router.resolveById(member.providerId, member.modelName) ?: return@mapNotNull null
+            val apiKey = r.apiKey?.key?.takeIf { it.isNotBlank() } ?: return@mapNotNull null
+            // 指向本机网关自身的成员直接跳过，避免自连回环
+            if (isSelfGatewayUrl(r.provider.baseUrl, port)) return@mapNotNull null
+            val model = r.model ?: ModelEntity(providerId = r.provider.id, name = member.modelName)
+            SmartPrepared(r.provider, apiKey, model, r.advancedParams)
+        }
+        // 严格过滤：模态不匹配的成员不参与本次路由（组内参数一致的承诺）
+        val eligible = resolved.filter {
+            (!features.needsImageInput || it.model.inputImage) &&
+                (!features.needsVideoInput || it.model.inputVideo)
+        }
+        if (eligible.isEmpty()) {
+            logRequest(device, aggregateId, null, stream, startedAt, null, false, "分组内无支持当前模态的可用成员")
+            respondOpenAiError(
+                HttpStatusCode.BadGateway,
+                "分组 '$aggregateId' 内没有支持当前请求模态的可用成员（厂商停用/缺 Key，或成员均不支持图像/视频输入）",
+            )
+            return
+        }
+        val prepared = orderCandidates(
+            eligible,
+            features,
+            modelOf = { it.model },
+            bucketOf = { SmartHealth.bucket(it.provider.id, it.model.name, now) },
+        )
+        val policy = SmartPolicy(
+            mode = mode,
+            fastMs = settings.smartFastFirstTokenMs.value.toLong(),
+            chatMs = settings.smartFirstTokenTimeoutSeconds.value * 1000L,
+            leisureMs = settings.smartLeisureFirstTokenSeconds.value * 1000L,
+            cooldownThreshold = settings.smartCooldownThreshold.value,
+            cooldownMs = settings.smartCooldownSeconds.value * 1000L,
+        )
+        val maxRounds = settings.smartRouteMaxRounds.value.coerceAtLeast(1)
+        executeSmartCandidates(aggregateId, rawBody, messages, prepared, device, policy, maxRounds, startedAt)
+    }
+
+    /**
+     * 智能路由候选执行核心（smartAi 与路由分组共用）：轮巡 [maxRounds] 轮逐个尝试候选，
+     * 非流式成功即转发 JSON，流式建连后透传/回译 SSE；每次尝试打点 [SmartHealth]，整次请求写日志。
+     */
+    private suspend fun ApplicationCall.executeSmartCandidates(
+        aggregateId: String,
+        rawBody: JsonObject,
+        messages: JsonArray,
+        prepared: List<SmartPrepared>,
+        device: AuthDeviceEntity,
+        policy: SmartPolicy,
+        maxRounds: Int,
+        startedAt: Long,
+    ) {
+        val stream = streamFlagOf(rawBody)
         // 轮巡 N 轮：每轮按顺序尝试全部候选，全部失败才进入下一轮；
         // 每个候选保留最后一次失败原因，轮巡结束汇总返回，明确「全部候选不可用」
         val lastErrors = LinkedHashMap<String, String>()
@@ -735,7 +880,7 @@ class LanServer(
         logRequest(device, aggregateId, null, stream, startedAt, null, false, "全部候选不可用：$summary")
         respondOpenAiError(
             HttpStatusCode.BadGateway,
-            "smartAi 全部 ${prepared.size} 个候选均不可用（已尝试 $maxRounds 轮）：$summary",
+            "$aggregateId 全部 ${prepared.size} 个候选均不可用（已尝试 $maxRounds 轮）：$summary",
         )
     }
 

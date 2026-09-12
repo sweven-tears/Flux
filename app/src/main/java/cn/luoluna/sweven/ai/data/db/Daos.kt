@@ -155,6 +155,63 @@ interface SmartRouteDao {
 }
 
 @Dao
+interface SmartRouteGroupDao {
+    @Query("SELECT * FROM smart_route_groups ORDER BY sortOrder ASC, id ASC")
+    fun observeAll(): Flow<List<SmartRouteGroupEntity>>
+
+    @Query("SELECT * FROM smart_route_groups ORDER BY sortOrder ASC, id ASC")
+    suspend fun all(): List<SmartRouteGroupEntity>
+
+    @Query("SELECT * FROM smart_route_groups WHERE groupKey = :key LIMIT 1")
+    suspend fun byKey(key: String): SmartRouteGroupEntity?
+
+    @Insert
+    suspend fun insert(g: SmartRouteGroupEntity): Long
+
+    @Insert
+    suspend fun insertAll(list: List<SmartRouteGroupEntity>)
+
+    @Update
+    suspend fun update(g: SmartRouteGroupEntity)
+
+    @Delete
+    suspend fun delete(g: SmartRouteGroupEntity)
+
+    @Query("DELETE FROM smart_route_groups")
+    suspend fun clearAll()
+}
+
+@Dao
+interface SmartRouteMemberDao {
+    @Query("SELECT * FROM smart_route_members ORDER BY groupId ASC, sortOrder ASC, id ASC")
+    fun observeAll(): Flow<List<SmartRouteMemberEntity>>
+
+    @Query("SELECT * FROM smart_route_members ORDER BY groupId ASC, sortOrder ASC, id ASC")
+    suspend fun all(): List<SmartRouteMemberEntity>
+
+    @Query("SELECT * FROM smart_route_members WHERE groupId = :groupId ORDER BY sortOrder ASC, id ASC")
+    suspend fun forGroup(groupId: Long): List<SmartRouteMemberEntity>
+
+    @Insert
+    suspend fun insert(m: SmartRouteMemberEntity): Long
+
+    @Insert
+    suspend fun insertAll(list: List<SmartRouteMemberEntity>)
+
+    @Update
+    suspend fun update(m: SmartRouteMemberEntity)
+
+    @Update
+    suspend fun updateAll(list: List<SmartRouteMemberEntity>)
+
+    @Delete
+    suspend fun delete(m: SmartRouteMemberEntity)
+
+    @Query("DELETE FROM smart_route_members")
+    suspend fun clearAll()
+}
+
+@Dao
 interface ConversationDao {
     @Query("SELECT * FROM conversations ORDER BY updatedAt DESC")
     fun observeAll(): Flow<List<ConversationEntity>>

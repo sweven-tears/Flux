@@ -13,6 +13,8 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         ApiKeyEntity::class,
         ModelEntity::class,
         SmartRouteEntity::class,
+        SmartRouteGroupEntity::class,
+        SmartRouteMemberEntity::class,
         ConversationEntity::class,
         MessageEntity::class,
         AuthDeviceEntity::class,
@@ -20,7 +22,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         PresetEntity::class,
         RequestLogEntity::class,
     ],
-    version = 13,
+    version = 14,
     exportSchema = false,
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -28,6 +30,8 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun apiKeyDao(): ApiKeyDao
     abstract fun modelDao(): ModelDao
     abstract fun smartRouteDao(): SmartRouteDao
+    abstract fun smartRouteGroupDao(): SmartRouteGroupDao
+    abstract fun smartRouteMemberDao(): SmartRouteMemberDao
     abstract fun conversationDao(): ConversationDao
     abstract fun messageDao(): MessageDao
     abstract fun authDeviceDao(): AuthDeviceDao
@@ -177,11 +181,30 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        /** v13 → v14：新增智能路由分组表与分组成员表（flux-<groupKey> 组内切换） */
+        private val MIGRATION_13_14 = object : Migration(13, 14) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `smart_route_groups` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, " +
+                        "`groupKey` TEXT NOT NULL, `sortOrder` INTEGER NOT NULL DEFAULT 0, " +
+                        "`enabled` INTEGER NOT NULL DEFAULT 1, `createdAt` INTEGER NOT NULL)"
+                )
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `smart_route_members` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, " +
+                        "`groupId` INTEGER NOT NULL, `providerId` INTEGER NOT NULL, `modelName` TEXT NOT NULL, " +
+                        "`sortOrder` INTEGER NOT NULL DEFAULT 0, `enabled` INTEGER NOT NULL DEFAULT 1, " +
+                        "FOREIGN KEY(`groupId`) REFERENCES `smart_route_groups`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE )"
+                )
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_smart_route_members_groupId` ON `smart_route_members` (`groupId`)")
+            }
+        }
+
         fun build(context: Context): AppDatabase =
             Room.databaseBuilder(context, AppDatabase::class.java, "flux.db")
                 .addMigrations(
-                    MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_6_7,
-                    MIGRATION_7_8, MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13,
+                    MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7,
+                    MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12,
+                    MIGRATION_12_13, MIGRATION_13_14,
                 )
                 .fallbackToDestructiveMigration()
                 .build()

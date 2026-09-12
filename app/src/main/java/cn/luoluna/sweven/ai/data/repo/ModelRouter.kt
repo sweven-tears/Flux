@@ -38,6 +38,18 @@ object SmartAi {
     val pair: Pair<Long, String> get() = PROVIDER_ID to MODEL_NAME
 }
 
+/**
+ * 路由分组目标：会话/设置中以哨兵 providerId 标识，modelName 存分组的 groupKey；
+ * 对外暴露的模型名为 flux-<groupKey>（与局域网 /v1/models 一致）
+ */
+object RouteGroupTarget {
+    const val PROVIDER_ID = -2L
+    const val NAME_PREFIX = "flux-"
+    fun routeName(groupKey: String) = NAME_PREFIX + groupKey
+    fun groupKeyOf(routeName: String): String? =
+        routeName.removePrefix(NAME_PREFIX).takeIf { it != routeName && it.isNotBlank() }
+}
+
 class ModelRouter(
     private val providerDao: ProviderDao,
     private val apiKeyDao: ApiKeyDao,

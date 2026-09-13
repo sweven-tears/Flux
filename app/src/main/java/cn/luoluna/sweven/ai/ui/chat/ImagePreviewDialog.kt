@@ -28,9 +28,16 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 
-/** 图片全屏查看：点击空白处关闭，双指缩放、拖动平移 */
+/**
+ * 图片全屏查看：点击空白处关闭，双指缩放、拖动平移；
+ * footer 可选（如「我的创作」预览底部的来源会话行）。
+ */
 @Composable
-fun ImagePreviewDialog(bitmap: ImageBitmap, onDismiss: () -> Unit) {
+fun ImagePreviewDialog(
+    bitmap: ImageBitmap,
+    onDismiss: () -> Unit,
+    footer: (@Composable () -> Unit)? = null,
+) {
     Dialog(
         onDismissRequest = onDismiss,
         properties = DialogProperties(usePlatformDefaultWidth = false),
@@ -70,6 +77,13 @@ fun ImagePreviewDialog(bitmap: ImageBitmap, onDismiss: () -> Unit) {
                     .padding(16.dp),
             ) {
                 Icon(Icons.Filled.Close, contentDescription = "关闭", tint = Color.White)
+            }
+            footer?.let {
+                Box(
+                    Modifier
+                        .align(Alignment.BottomCenter)
+                        .padding(bottom = 48.dp),
+                ) { it() }
             }
         }
     }

@@ -34,6 +34,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -46,6 +47,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
@@ -72,6 +74,8 @@ private data class CreationItem(
     val url: String,
     val createdAt: Long,
     val modelName: String?,
+    /** 来源会话；0 = 局域网来源任务（无会话），不可跳转 */
+    val conversationId: Long,
 ) {
     val key: String get() = "${messageId}_$index"
     val isVideo: Boolean get() = MessageEntity.isVideo(url)
@@ -87,13 +91,19 @@ private val timeFmt = SimpleDateFormat("MM-dd HH:mm", Locale.getDefault())
  */
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
-fun CreationsScreen(onBack: () -> Unit) {
+fun CreationsScreen(onBack: () -> Unit, onOpenChat: (Long) -> Unit) {
     val context = LocalContext.current
     val app = context.applicationContext as App
     val scope = rememberCoroutineScope()
     val messageDao = remember { app.database.messageDao() }
     val messages by remember { messageDao.observeCreations() }
         .collectAsStateWithLifecycle(emptyList())
+    // 会话标题表：预览时显示来源并支持跳回聊天（会话已删除则不显示入口）
+    val conversations by remember { app.database.conversationDao().observeAll() }
+        .collectAsStateWithLifecycle(emptyList())
+    val conversationTitles = remember(conversations) {
+        conversations.associate { it.id to it.title }
+    }
     // 文件打开方式（设置项）：点击媒体时是否直接交系统应用查看
     val imageOpenExternal by app.settings.imageOpenExternal.collectAsStateWithLifecycle()
     val videoOpenExternal by app.settings.videoOpenExternal.collectAsStateWithLifecycle()
@@ -104,7 +114,7 @@ fun CreationsScreen(onBack: () -> Unit) {
         messages.flatMap { m ->
             m.images.mapIndexedNotNull { idx, url ->
                 if (url.startsWith("data:") || MessageEntity.isVideo(url)) {
-                    CreationItem(m.id, idx, url, m.createdAt, m.modelName)
+                    CreationItem(m.id, idx, url, m.createdAt, m.modelName, m.conversationId)
                 } else {
                     null
                 }
@@ -242,18 +252,41 @@ fun CreationsScreen(onBack: () -> Unit) {
         }
     }
 
-    // 大图/视频预览：进入时按 key 找当前项（删除后自动关闭）；视频用内嵌播放器，图片解码完成再弹
+    // 大图/视频预览：进入时按 key 找当前项（删除后自动关闭）；视频用内嵌播放器，图片解码完成再弹；
+    // 有来源会话时显示「打开会话」跳回对应聊天（局域网来源/会话已删除不显示）
     previewKey?.let { key ->
         val item = filtered.firstOrNull { it.key == key }
         if (item == null) {
             previewKey = null
         } else if (item.isVideo) {
+            val sourceTitle = item.conversationId.takeIf { it != 0L }?.let { conversationTitles[it] }
             AlertDialog(
                 onDismissRequest = { previewKey = null },
                 confirmButton = {
                     TextButton(onClick = { previewKey = null }) { Text("关闭") }
                 },
-                title = { Text(item.modelName ?: "视频") },
+                dismissButton = if (sourceTitle != null) {
+                    {
+                        TextButton(onClick = {
+                            previewKey = null
+                            onOpenChat(item.conversationId)
+                        }) { Text("打开会话") }
+                    }
+                } else {
+                    null
+                },
+                title = {
+                    Column {
+                        Text(item.modelName ?: "视频")
+                        if (sourceTitle != null) {
+                            Text(
+                                "来自会话：$sourceTitle",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                    }
+                },
                 text = {
                     FluxVideoPlayer(
                         item.videoPath ?: "",
@@ -264,7 +297,36 @@ fun CreationsScreen(onBack: () -> Unit) {
         } else {
             val bitmap = rememberDataUrlBitmap(item.url).value
             if (bitmap != null) {
-                ImagePreviewDialog(bitmap = bitmap, onDismiss = { previewKey = null })
+                val sourceTitle = item.conversationId.takeIf { it != 0L }?.let { conversationTitles[it] }
+                ImagePreviewDialog(
+                    bitmap = bitmap,
+                    onDismiss = { previewKey = null },
+                    footer = if (sourceTitle != null) {
+                        {
+                            Surface(
+                                shape = RoundedCornerShape(20.dp),
+                                color = Color.Black.copy(alpha = 0.6f),
+                            ) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    modifier = Modifier.padding(start = 16.dp),
+                                ) {
+                                    Text(
+                                        "来自：$sourceTitle",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = Color.White,
+                                    )
+                                    TextButton(onClick = {
+                                        previewKey = null
+                                        onOpenChat(item.conversationId)
+                                    }) { Text("打开会话") }
+                                }
+                            }
+                        }
+                    } else {
+                        null
+                    },
+                )
             }
         }
     }

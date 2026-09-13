@@ -76,15 +76,18 @@ fun PhoneRouterApp(
         }
     }
 
-    LaunchedEffect(openChatTick) {
-        if (openChatTick > 0) {
-            pendingChatConversation = openChatConversation
-            navController.navigate(Routes.CHAT) {
-                popUpTo(navController.graph.findStartDestination().id) { saveState = true }
-                launchSingleTop = true
-                restoreState = true
-            }
+    /** 打开指定会话的聊天页：先注入 pending id，ChatScreen 消费后选中该会话 */
+    fun openChat(conversationId: Long?) {
+        pendingChatConversation = conversationId
+        navController.navigate(Routes.CHAT) {
+            popUpTo(navController.graph.findStartDestination().id) { saveState = true }
+            launchSingleTop = true
+            restoreState = true
         }
+    }
+
+    LaunchedEffect(openChatTick) {
+        if (openChatTick > 0) openChat(openChatConversation)
     }
 
     fun gotoTab(route: String) {
@@ -198,6 +201,7 @@ fun PhoneRouterApp(
             composable(Routes.CREATIONS) {
                 CreationsScreen(
                     onBack = { navController.popBackStack() },
+                    onOpenChat = { openChat(it) },
                 )
             }
         }

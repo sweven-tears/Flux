@@ -1465,7 +1465,7 @@ object ChatUiDefaults {
         }
     }
 
-    /** 视频消息气泡：封面帧（缺帧用占位）+ 播放角标，点击原位展开 media3 播放器 */
+    /** 视频消息气泡：封面帧（缺帧用占位）+ 播放角标，点击原位展开 VideoView 播放器 */
     @Composable
     private fun VideoBubble(path: String) {
         var playing by remember(path) { mutableStateOf(false) }

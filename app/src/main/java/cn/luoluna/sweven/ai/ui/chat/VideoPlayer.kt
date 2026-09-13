@@ -1,42 +1,34 @@
 package cn.luoluna.sweven.ai.ui.chat
 
 import android.net.Uri
+import android.widget.MediaController
+import android.widget.VideoView
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.viewinterop.AndroidView
-import androidx.media3.common.MediaItem
-import androidx.media3.exoplayer.ExoPlayer
-import androidx.media3.ui.PlayerView
 import java.io.File
 
 /**
- * 内嵌视频播放器（media3 ExoPlayer）：按 App 私有目录文件路径播放，
- * 离开组合即释放播放器；播放控制条由 PlayerView 自带。
+ * 内嵌视频播放器（系统 VideoView + MediaController）：按 App 私有目录文件路径播放，
+ * prepared 后自动播放；控制条支持暂停/拖动进度，离开组合即停止释放。
  */
 @Composable
 fun FluxVideoPlayer(path: String, modifier: Modifier = Modifier) {
     val context = LocalContext.current
     val player = remember(path) {
-        ExoPlayer.Builder(context).build().apply {
-            setMediaItem(MediaItem.fromUri(Uri.fromFile(File(path))))
-            prepare()
-            playWhenReady = true
+        VideoView(context).apply {
+            val controller = MediaController(context)
+            controller.setAnchorView(this)
+            setMediaController(controller)
+            setVideoURI(Uri.fromFile(File(path)))
+            setOnPreparedListener { it.start() }
         }
     }
     DisposableEffect(path) {
-        onDispose { player.release() }
+        onDispose { player.stopPlayback() }
     }
-    AndroidView(
-        modifier = modifier,
-        factory = { ctx ->
-            PlayerView(ctx).apply {
-                this.player = player
-                useController = true
-            }
-        },
-        update = { view -> if (view.player !== player) view.player = player },
-    )
+    AndroidView(modifier = modifier, factory = { player })
 }

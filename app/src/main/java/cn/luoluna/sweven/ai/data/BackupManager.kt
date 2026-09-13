@@ -151,6 +151,8 @@ class BackupManager(private val app: App) {
             put("smartCooldownThreshold", s.smartCooldownThreshold.value.toString())
             put("smartCooldownSeconds", s.smartCooldownSeconds.value.toString())
             put("logRequestsEnabled", s.logRequestsEnabled.value.toString())
+            put("imageOpenExternal", s.imageOpenExternal.value.toString())
+            put("videoOpenExternal", s.videoOpenExternal.value.toString())
         }
     }
 
@@ -166,6 +168,8 @@ class BackupManager(private val app: App) {
         map["smartCooldownThreshold"]?.toIntOrNull()?.let { s.setSmartCooldownThreshold(it) }
         map["smartCooldownSeconds"]?.toIntOrNull()?.let { s.setSmartCooldownSeconds(it) }
         map["logRequestsEnabled"]?.toBooleanStrictOrNull()?.let { s.setLogRequestsEnabled(it) }
+        map["imageOpenExternal"]?.toBooleanStrictOrNull()?.let { s.setImageOpenExternal(it) }
+        map["videoOpenExternal"]?.toBooleanStrictOrNull()?.let { s.setVideoOpenExternal(it) }
     }
 
     companion object {

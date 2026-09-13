@@ -65,6 +65,8 @@ fun SettingsScreen(onBack: () -> Unit, onOpenCreations: () -> Unit) {
         }
     }
     val logRequestsEnabled by settings.logRequestsEnabled.collectAsStateWithLifecycle()
+    val imageOpenExternal by settings.imageOpenExternal.collectAsStateWithLifecycle()
+    val videoOpenExternal by settings.videoOpenExternal.collectAsStateWithLifecycle()
 
     // 导出：先弹配置弹窗（是否含 Key），再走系统保存文件
     var showExportDialog by remember { mutableStateOf(false) }
@@ -164,6 +166,41 @@ fun SettingsScreen(onBack: () -> Unit, onOpenCreations: () -> Unit) {
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
+            }
+            SectionCard(title = "文件打开方式") {
+                Column(
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Column(Modifier.weight(1f)) {
+                            Text("图片用系统应用打开", style = MaterialTheme.typography.bodyMedium)
+                            Text(
+                                "关闭时点击图片用内置预览查看；开启后点击即交给系统图片查看器",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                        Switch(
+                            checked = imageOpenExternal,
+                            onCheckedChange = { settings.setImageOpenExternal(it) },
+                        )
+                    }
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Column(Modifier.weight(1f)) {
+                            Text("视频用系统应用打开", style = MaterialTheme.typography.bodyMedium)
+                            Text(
+                                "关闭时点击视频用内置播放器播放；开启后点击即交给系统视频播放器",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                        Switch(
+                            checked = videoOpenExternal,
+                            onCheckedChange = { settings.setVideoOpenExternal(it) },
+                        )
+                    }
+                }
             }
             SectionCard(title = "我的创作") {
                 Row(

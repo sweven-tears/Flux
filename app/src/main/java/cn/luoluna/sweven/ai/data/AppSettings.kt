@@ -69,6 +69,13 @@ class AppSettings(context: Context) {
     private val _logRequestsEnabled = MutableStateFlow(prefs.getBoolean(KEY_LOG_REQUESTS, true))
     val logRequestsEnabled: StateFlow<Boolean> = _logRequestsEnabled
 
+    /** 文件打开方式：图片/视频点击时交给系统应用查看（true=外部，false=内置预览） */
+    private val _imageOpenExternal = MutableStateFlow(prefs.getBoolean(KEY_IMAGE_OPEN_EXTERNAL, false))
+    val imageOpenExternal: StateFlow<Boolean> = _imageOpenExternal
+
+    private val _videoOpenExternal = MutableStateFlow(prefs.getBoolean(KEY_VIDEO_OPEN_EXTERNAL, false))
+    val videoOpenExternal: StateFlow<Boolean> = _videoOpenExternal
+
     fun setLanEnabled(enabled: Boolean) {
         prefs.edit().putBoolean(KEY_LAN_ENABLED, enabled).apply()
         _lanEnabled.value = enabled
@@ -147,6 +154,16 @@ class AppSettings(context: Context) {
         _logRequestsEnabled.value = enabled
     }
 
+    fun setImageOpenExternal(external: Boolean) {
+        prefs.edit().putBoolean(KEY_IMAGE_OPEN_EXTERNAL, external).apply()
+        _imageOpenExternal.value = external
+    }
+
+    fun setVideoOpenExternal(external: Boolean) {
+        prefs.edit().putBoolean(KEY_VIDEO_OPEN_EXTERNAL, external).apply()
+        _videoOpenExternal.value = external
+    }
+
     private val _chatPluginId = MutableStateFlow(prefs.getString(KEY_CHAT_PLUGIN, null))
     val chatPluginId: StateFlow<String?> = _chatPluginId
 
@@ -197,6 +214,8 @@ class AppSettings(context: Context) {
         private const val KEY_SMART_COOLDOWN_THRESHOLD = "smart_cooldown_threshold"
         private const val KEY_SMART_COOLDOWN_SECONDS = "smart_cooldown_seconds"
         private const val KEY_LOG_REQUESTS = "log_requests_enabled"
+        private const val KEY_IMAGE_OPEN_EXTERNAL = "image_open_external"
+        private const val KEY_VIDEO_OPEN_EXTERNAL = "video_open_external"
         private const val KEY_CHAT_PLUGIN = "chat_ui_plugin"
         private const val KEY_USER_NAME = "user_name"
         private const val KEY_USER_AVATAR = "user_avatar"

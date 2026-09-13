@@ -48,6 +48,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
@@ -1345,11 +1346,13 @@ private fun AddGroupSheet(
     val suggestions = ModelIdGrouper.suggestKeys(query, eligible, existingKeys).take(8)
     val groupMembers = selectedKey?.let { ModelIdGrouper.membersOf(it, eligible) } ?: emptyList()
 
-    ModalBottomSheet(onDismissRequest = onDismiss) {
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
+    ) {
         Column(
             Modifier
                 .fillMaxWidth()
-                .verticalScroll(rememberScrollState())
                 .padding(horizontal = 16.dp)
                 .padding(bottom = 24.dp),
         ) {
@@ -1361,20 +1364,14 @@ private fun AddGroupSheet(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(top = 4.dp),
             )
-            OutlinedTextField(
-                value = query,
-                onValueChange = {
-                    query = it
-                    selectedKey = null
-                },
-                label = { Text("模型 id，如 deepseek-v4-flash") },
-                singleLine = true,
-                modifier = Modifier
-                    .fillMaxWidth()
+            // 内容区占满搜索框之上的空间，搜索框固定贴底（键盘弹出不遮挡结果）
+            Column(
+                Modifier
+                    .weight(1f)
+                    .verticalScroll(rememberScrollState())
                     .padding(top = 12.dp),
-            )
-
-            if (selectedKey == null) {
+            ) {
+                if (selectedKey == null) {
                 suggestions.forEach { key ->
                     val groupModels = ModelIdGrouper.membersOf(key, eligible)
                     // 是否有成员靠备注（别名）归组：别名基名命中而 id 基名不命中
@@ -1485,7 +1482,18 @@ private fun AddGroupSheet(
                         onClick = { onCreate(selectedKey ?: return@Button, groupMembers) },
                     ) { Text("创建分组") }
                 }
+                }
             }
+            OutlinedTextField(
+                value = query,
+                onValueChange = {
+                    query = it
+                    selectedKey = null
+                },
+                label = { Text("模型 id，如 deepseek-v4-flash") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth(),
+            )
         }
     }
 }
@@ -1524,44 +1532,44 @@ private fun AddCandidatesSheet(
         }
     }
 
-    ModalBottomSheet(onDismissRequest = onDismiss) {
-        Column(Modifier.padding(horizontal = 16.dp)) {
-            Text("添加候选模型", style = MaterialTheme.typography.titleMedium)
-            OutlinedTextField(
-                value = query,
-                onValueChange = { query = it },
-                placeholder = { Text("搜索模型") },
-                singleLine = true,
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
+    ) {
+        Text(
+            "添加候选模型",
+            style = MaterialTheme.typography.titleMedium,
+            modifier = Modifier.padding(horizontal = 16.dp),
+        )
+        if (providerAliases.size > 1) {
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(vertical = 8.dp),
-            )
-            if (providerAliases.size > 1) {
-                Row(
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .horizontalScroll(rememberScrollState())
-                        .padding(bottom = 8.dp),
-                ) {
+                    .padding(horizontal = 16.dp)
+                    .horizontalScroll(rememberScrollState())
+                    .padding(bottom = 8.dp),
+            ) {
+                FilterChip(
+                    selected = providerFilter == null,
+                    onClick = { providerFilter = null },
+                    label = { Text("全部厂商") },
+                )
+                providerAliases.forEach { alias ->
                     FilterChip(
-                        selected = providerFilter == null,
-                        onClick = { providerFilter = null },
-                        label = { Text("全部厂商") },
+                        selected = providerFilter == alias,
+                        onClick = { providerFilter = if (providerFilter == alias) null else alias },
+                        label = { Text(alias, maxLines = 1) },
                     )
-                    providerAliases.forEach { alias ->
-                        FilterChip(
-                            selected = providerFilter == alias,
-                            onClick = { providerFilter = if (providerFilter == alias) null else alias },
-                            label = { Text(alias, maxLines = 1) },
-                        )
-                    }
                 }
             }
         }
         if (rows.isEmpty()) {
             Column(
-                Modifier.fillMaxWidth().padding(32.dp),
+                Modifier
+                    .fillMaxWidth()
+                    .weight(1f)
+                    .padding(32.dp),
                 horizontalAlignment = Alignment.CenterHorizontally,
             ) {
                 Text(
@@ -1572,7 +1580,7 @@ private fun AddCandidatesSheet(
                 )
             }
         } else {
-            LazyColumn(Modifier.fillMaxWidth().heightIn(max = 420.dp)) {
+            LazyColumn(Modifier.fillMaxWidth().weight(1f)) {
                 items(rows, key = { "${it.provider.id}_${it.model.name}" }) { row ->
                     if (row.showHeader) {
                         Text(
@@ -1606,6 +1614,15 @@ private fun AddCandidatesSheet(
                 item(key = "footer") { Spacer(Modifier.height(8.dp)) }
             }
         }
+        OutlinedTextField(
+            value = query,
+            onValueChange = { query = it },
+            placeholder = { Text("搜索模型") },
+            singleLine = true,
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 8.dp),
+        )
         Row(
             Modifier
                 .fillMaxWidth()
@@ -1821,54 +1838,53 @@ private fun AddGroupMembersSheet(
         .filter { (it.providerId to it.name) !in matchedKeys }
         .filter { pass(it) }
 
-    ModalBottomSheet(onDismissRequest = onDismiss) {
-        Column(Modifier.padding(horizontal = 16.dp)) {
-            Text(
-                "添加成员 · ${group.routeName}",
-                style = MaterialTheme.typography.titleMedium,
-            )
-            Text(
-                "同族匹配的模型已预选，确认即一并加入；也可在全部模型里手动勾选任意模型入组" +
-                    "（成员顺序即组内切换优先级，入组后可在成员列表长按拖动调整）。",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(top = 2.dp),
-            )
-            OutlinedTextField(
-                value = query,
-                onValueChange = { query = it },
-                placeholder = { Text("搜索模型") },
-                singleLine = true,
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
+    ) {
+        Text(
+            "添加成员 · ${group.routeName}",
+            style = MaterialTheme.typography.titleMedium,
+            modifier = Modifier.padding(horizontal = 16.dp),
+        )
+        Text(
+            "同族匹配的模型已预选，确认即一并加入；也可在全部模型里手动勾选任意模型入组" +
+                "（成员顺序即组内切换优先级，入组后可在成员列表长按拖动调整）。",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier
+                .padding(horizontal = 16.dp)
+                .padding(top = 2.dp),
+        )
+        if (providerAliases.size > 1) {
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(vertical = 8.dp),
-            )
-            if (providerAliases.size > 1) {
-                Row(
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .horizontalScroll(rememberScrollState())
-                        .padding(bottom = 8.dp),
-                ) {
+                    .padding(horizontal = 16.dp)
+                    .horizontalScroll(rememberScrollState())
+                    .padding(bottom = 8.dp),
+            ) {
+                FilterChip(
+                    selected = providerFilter == null,
+                    onClick = { providerFilter = null },
+                    label = { Text("全部厂商") },
+                )
+                providerAliases.forEach { alias ->
                     FilterChip(
-                        selected = providerFilter == null,
-                        onClick = { providerFilter = null },
-                        label = { Text("全部厂商") },
+                        selected = providerFilter == alias,
+                        onClick = { providerFilter = if (providerFilter == alias) null else alias },
+                        label = { Text(alias, maxLines = 1) },
                     )
-                    providerAliases.forEach { alias ->
-                        FilterChip(
-                            selected = providerFilter == alias,
-                            onClick = { providerFilter = if (providerFilter == alias) null else alias },
-                            label = { Text(alias, maxLines = 1) },
-                        )
-                    }
                 }
             }
         }
         if (matchedFiltered.isEmpty() && others.isEmpty()) {
             Column(
-                Modifier.fillMaxWidth().padding(32.dp),
+                Modifier
+                    .fillMaxWidth()
+                    .weight(1f)
+                    .padding(32.dp),
                 horizontalAlignment = Alignment.CenterHorizontally,
             ) {
                 Text(
@@ -1879,7 +1895,7 @@ private fun AddGroupMembersSheet(
                 )
             }
         } else {
-            LazyColumn(Modifier.fillMaxWidth().heightIn(max = 420.dp)) {
+            LazyColumn(Modifier.fillMaxWidth().weight(1f)) {
                 if (matchedFiltered.isNotEmpty()) {
                     item(key = "sec_matched") {
                         Text(
@@ -1925,6 +1941,15 @@ private fun AddGroupMembersSheet(
                 item(key = "footer") { Spacer(Modifier.height(8.dp)) }
             }
         }
+        OutlinedTextField(
+            value = query,
+            onValueChange = { query = it },
+            placeholder = { Text("搜索模型") },
+            singleLine = true,
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 8.dp),
+        )
         Row(
             Modifier
                 .fillMaxWidth()

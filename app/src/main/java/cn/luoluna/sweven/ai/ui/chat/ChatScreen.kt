@@ -74,6 +74,8 @@ import cn.luoluna.sweven.ai.ui.common.ConfirmDialog
 import cn.luoluna.sweven.ai.ui.common.InAppBrowser
 import cn.luoluna.sweven.ai.ui.common.TextFieldDialog
 import cn.luoluna.sweven.ai.ui.common.formatTokens
+import cn.luoluna.sweven.ai.ui.common.openImageExternally
+import cn.luoluna.sweven.ai.ui.common.openVideoExternally
 import kotlinx.coroutines.launch
 
 /**
@@ -604,6 +606,17 @@ fun ChatScreen(
                 onBranch = { vm.branchConversation(msg) },
                 onDelete = { deleteMessageTarget = msg },
                 onDownload = { saveToGallery(msg.images) },
+                // 打开方式…：视频走私有目录文件，图片走第一条 data URL；手动入口不受「文件打开方式」设置影响
+                onOpenExternally = {
+                    val videoPath = msg.images.firstOrNull { MessageEntity.isVideo(it) }
+                        ?.removePrefix(MessageEntity.VIDEO_PREFIX)
+                    if (videoPath != null) {
+                        openVideoExternally(context, java.io.File(videoPath))
+                    } else {
+                        msg.images.firstOrNull { it.startsWith("data:") }
+                            ?.let { openImageExternally(context, it) }
+                    }
+                },
                 // 添加到对话：作为待发附件挂到输入区；编辑态下并入编辑附件
                 onAttach = {
                     val real = msg.images.filter { it.startsWith("data:") }

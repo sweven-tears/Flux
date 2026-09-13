@@ -20,6 +20,7 @@ import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.OpenWith
 import androidx.compose.material.icons.filled.Web
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -43,7 +44,7 @@ import androidx.compose.ui.window.DialogProperties
 import cn.luoluna.sweven.ai.data.db.MessageEntity
 import cn.luoluna.sweven.ai.data.db.Role
 
-/** 「更多」弹层的动作集合；onEdit 仅用户消息传入（编辑并重发）；onDownload/onAttach 仅媒体消息 */
+/** 「更多」弹层的动作集合；onEdit 仅用户消息传入（编辑并重发）；onDownload/onAttach/onOpenExternally 仅媒体消息 */
 data class MessageActions(
     val onFreeCopy: () -> Unit,
     val onWebRender: () -> Unit,
@@ -55,11 +56,13 @@ data class MessageActions(
     /** 添加到对话（作为待发附件）；attachEnabled=false 时置灰（当前助手不支持图像输入） */
     val onAttach: (() -> Unit)? = null,
     val attachEnabled: Boolean = true,
+    /** 打开方式…（交给系统图片查看器/视频播放器）；媒体消息必传 */
+    val onOpenExternally: (() -> Unit)? = null,
 )
 
 /**
  * 消息「更多」弹层。
- * 助手媒体消息（带图/视频）：下载 / 添加到对话 / 创建分支 / 删除；
+ * 助手媒体消息（带图/视频）：打开方式… / 下载 / 添加到对话 / 创建分支 / 删除；
  * 其余：自由选择复制 / 编辑并重发（仅用户消息）/ 网页视图渲染 / 创建分支 / 删除。
  */
 @OptIn(ExperimentalMaterial3Api::class)
@@ -78,6 +81,9 @@ fun MessageActionSheet(
                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
             )
             if (isAssistantMedia) {
+                MessageActionRow(Icons.Filled.OpenWith, "打开方式…") {
+                    onDismiss(); actions.onOpenExternally?.invoke()
+                }
                 MessageActionRow(Icons.Filled.Download, "下载（保存到相册）") {
                     onDismiss(); actions.onDownload?.invoke()
                 }

@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<paths>
+    <!-- 生成的视频存于 filesDir/videos，以 content:// 共享给系统播放器 -->
+    <files-path name="videos" path="videos/" />
+    <!-- data URL 图片外发前导出到 cacheDir/external_media/ -->
+    <cache-path name="external_media" path="external_media/" />
+</paths>

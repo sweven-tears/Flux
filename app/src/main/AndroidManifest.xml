@@ -47,5 +47,16 @@
             android:name=".server.VideoJobService"
             android:exported="false"
             android:foregroundServiceType="dataSync" />
+
+        <!-- 媒体「打开方式…」：私有目录文件经 content:// 共享给系统播放器/图片查看器 -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
     </application>
 </manifest>

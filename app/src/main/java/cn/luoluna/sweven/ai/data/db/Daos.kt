@@ -174,6 +174,9 @@ interface SmartRouteGroupDao {
     @Update
     suspend fun update(g: SmartRouteGroupEntity)
 
+    @Update
+    suspend fun updateAll(list: List<SmartRouteGroupEntity>)
+
     @Delete
     suspend fun delete(g: SmartRouteGroupEntity)
 

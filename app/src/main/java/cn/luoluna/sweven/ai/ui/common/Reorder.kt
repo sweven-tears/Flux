@@ -16,11 +16,13 @@ import androidx.compose.ui.zIndex
 
 /**
  * LazyColumn 长按拖拽排序状态。条目 key 必须唯一且稳定（如实体 id）。
- * onMove 收到「被拖条目 key → 目标条目 key」，由调用方在数据里换位并持久化。
+ * onMove 收到「被拖条目 key → 目标条目 key」，由调用方在数据里换位并持久化；
+ * onDragStart（可选）在拖动开始时回调，可用于拖动前的预处理（如展开条目先折叠）。
  */
 class ReorderState internal constructor(
     private val listState: LazyListState,
     private val onMove: (fromKey: Any, toKey: Any) -> Unit,
+    private val onDragStarted: ((key: Any) -> Unit)? = null,
 ) {
     var draggingKey by mutableStateOf<Any?>(null)
         internal set
@@ -40,6 +42,7 @@ class ReorderState internal constructor(
         draggingKey = key
         totalDelta = 0f
         startOffset = draggingItem?.offset ?: 0
+        onDragStarted?.invoke(key)
     }
 
     internal fun onDrag(delta: Float) {
@@ -64,10 +67,17 @@ class ReorderState internal constructor(
 @Composable
 fun rememberReorderState(
     listState: LazyListState,
+    /** 拖动开始回调（可选）：如展开中的条目先折叠再拖动 */
+    onDragStart: ((key: Any) -> Unit)? = null,
     onMove: (fromKey: Any, toKey: Any) -> Unit,
 ): ReorderState {
     val currentOnMove by rememberUpdatedState(onMove)
-    return remember(listState) { ReorderState(listState) { from, to -> currentOnMove(from, to) } }
+    val currentOnDragStart by rememberUpdatedState(onDragStart)
+    return remember(listState) {
+        ReorderState(listState, { from, to -> currentOnMove(from, to) }) { key ->
+            currentOnDragStart?.invoke(key)
+        }
+    }
 }
 
 /** 拖拽手柄手势：长按后拖动。加在手柄图标所在的 Modifier 上 */

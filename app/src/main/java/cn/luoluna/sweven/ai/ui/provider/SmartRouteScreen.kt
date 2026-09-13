@@ -180,7 +180,32 @@ fun SmartRouteScreen(onBack: () -> Unit) {
             }
         }
     }
-    val reorderStateGroups = rememberReorderState(listStateGroups) { fromKey, toKey ->
+    val reorderStateGroups = rememberReorderState(
+        listStateGroups,
+        onDragStart = { key ->
+            // 拖动分组卡片：若处于展开态先折叠——成员行是独立 item，不折叠会与拖动中的卡片错位
+            if (key is String && key.startsWith("g")) {
+                key.removePrefix("g").toLongOrNull()?.let { id ->
+                    if (id in expandedGroups) expandedGroups = expandedGroups - id
+                }
+            }
+        },
+    ) { fromKey, toKey ->
+        // 分组卡片换位（key 形如 g<id>），sortOrder 重编号落库
+        if (fromKey is String && toKey is String &&
+            fromKey.startsWith("g") && toKey.startsWith("g")
+        ) {
+            val fromId = fromKey.removePrefix("g").toLongOrNull() ?: return@rememberReorderState
+            val toId = toKey.removePrefix("g").toLongOrNull() ?: return@rememberReorderState
+            if (fromId == toId) return@rememberReorderState
+            val fi = groups.indexOfFirst { it.id == fromId }
+            val ti = groups.indexOfFirst { it.id == toId }
+            if (fi < 0 || ti < 0) return@rememberReorderState
+            val reordered = groups.toMutableList().apply { add(ti, removeAt(fi)) }
+                .mapIndexed { i, g -> g.copy(sortOrder = i) }
+            scope.launch { app.database.smartRouteGroupDao().updateAll(reordered) }
+            return@rememberReorderState
+        }
         // 分组成员换位（仅同组内；key 形如 m<id>）
         if (fromKey is String && toKey is String &&
             fromKey.startsWith("m") && toKey.startsWith("m")
@@ -319,6 +344,7 @@ fun SmartRouteScreen(onBack: () -> Unit) {
                                 scope.launch { app.database.smartRouteGroupDao().update(group.copy(enabled = nv)) }
                             },
                             onDelete = { deleteGroupTarget = group },
+                            reorderState = reorderStateGroups,
                             modifier = Modifier.animateItem(),
                         )
                     }
@@ -1017,7 +1043,7 @@ private fun SlidingSegmentedControl(
     }
 }
 
-/** 路由分组卡片：flux-xxx 组名 + 成员数与能力摘要 + 展开箭头；侧滑 禁用/启用、删除（删除有确认） */
+/** 路由分组卡片：flux-xxx 组名 + 成员数与能力摘要 + 展开箭头；侧滑 禁用/启用、删除（删除有确认）；拖动手柄排序 */
 @Composable
 private fun RouteGroupCard(
     group: SmartRouteGroupEntity,
@@ -1031,10 +1057,11 @@ private fun RouteGroupCard(
     onOpenChange: (Boolean) -> Unit,
     onToggle: (Boolean) -> Unit,
     onDelete: () -> Unit,
+    reorderState: ReorderState,
     modifier: Modifier = Modifier,
 ) {
     SwipeRevealActions(
-        modifier = modifier,
+        modifier = modifier.reorderDragged(reorderState, "g${group.id}"),
         actions = listOf(
             SwipeAction(
                 label = if (group.enabled) "禁用" else "启用",
@@ -1102,6 +1129,14 @@ private fun RouteGroupCard(
                         )
                     }
                 }
+                Icon(
+                    Icons.Filled.DragIndicator,
+                    contentDescription = "长按拖动排序",
+                    tint = MaterialTheme.colorScheme.outlineVariant,
+                    modifier = Modifier
+                        .reorderHandle(reorderState, "g${group.id}")
+                        .padding(end = 4.dp),
+                )
                 Icon(
                     if (expanded) Icons.Filled.KeyboardArrowUp else Icons.Filled.KeyboardArrowDown,
                     contentDescription = if (expanded) "收起成员" else "展开成员",

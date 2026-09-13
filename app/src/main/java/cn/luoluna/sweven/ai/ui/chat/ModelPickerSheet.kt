@@ -52,6 +52,9 @@ private enum class InputFilter(val label: String) {
 
 private data class PickerRow(val item: PickerModel, val showHeader: Boolean)
 
+/** 厂商筛选 chip 里代表路由分组集合的哨兵值（区别于真实厂商别名） */
+private const val FLUX_GROUP_FILTER = "flux分组"
+
 /** smartAi 聚合能力摘要：「文图→文图 · 支持工具/推理」 */
 private fun smartAiCapabilitySummary(cap: SmartAggregateCapability?): String {
     if (cap == null) return ""
@@ -96,8 +99,16 @@ fun ModelPickerSheet(
         }
     }
     val filtered = models.filter {
-        filter.matches(it.model) && (providerFilter == null || it.provider.alias == providerFilter)
+        filter.matches(it.model) && when (providerFilter) {
+            null -> true
+            // 「flux分组」筛选：只看路由分组，普通模型全部隐藏
+            FLUX_GROUP_FILTER -> false
+            else -> it.provider.alias == providerFilter
+        }
     }
+    // 路由分组的显隐：不参与模态筛选（成员按请求动态过滤）；选了具体厂商时也隐藏
+    val showRouteGroups = routeGroups.isNotEmpty() &&
+        (providerFilter == null || providerFilter == FLUX_GROUP_FILTER)
     val rows = remember(filtered) {
         buildList {
             var lastAlias: String? = null
@@ -123,8 +134,8 @@ fun ModelPickerSheet(
                     )
                 }
             }
-            if (providerAliases.size > 1) {
-                // 厂商快速定位：单选过滤，点「全部」恢复完整列表
+            if (providerAliases.size > 1 || routeGroups.isNotEmpty()) {
+                // 厂商快速定位：单选过滤，点「全部」恢复完整列表；「flux分组」定位路由分组
                 Row(
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                     modifier = Modifier
@@ -137,6 +148,16 @@ fun ModelPickerSheet(
                         onClick = { providerFilter = null },
                         label = { Text("全部厂商") },
                     )
+                    if (routeGroups.isNotEmpty()) {
+                        FilterChip(
+                            selected = providerFilter == FLUX_GROUP_FILTER,
+                            onClick = {
+                                providerFilter =
+                                    if (providerFilter == FLUX_GROUP_FILTER) null else FLUX_GROUP_FILTER
+                            },
+                            label = { Text(FLUX_GROUP_FILTER) },
+                        )
+                    }
                     providerAliases.forEach { alias ->
                         FilterChip(
                             selected = providerFilter == alias,
@@ -147,7 +168,7 @@ fun ModelPickerSheet(
                 }
             }
         }
-        if (rows.isEmpty()) {
+        if (rows.isEmpty() && !showRouteGroups) {
             Column(
                 Modifier
                     .fillMaxWidth()
@@ -204,8 +225,18 @@ fun ModelPickerSheet(
                         HorizontalDivider(Modifier.padding(top = 8.dp))
                     }
                 }
-                // 路由分组：同族模型聚合，组内自动切换（不受模态筛选影响，成员按请求动态过滤）
-                routeGroups.forEach { group ->
+                // 路由分组（flux-<groupKey>）：同族模型聚合，组内自动切换；有多个时归入「flux分组」头
+                if (showRouteGroups) {
+                    item(key = "flux_group_header") {
+                        Text(
+                            FLUX_GROUP_FILTER,
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.padding(start = 16.dp, top = 8.dp, bottom = 2.dp),
+                        )
+                    }
+                }
+                if (showRouteGroups) routeGroups.forEach { group ->
                     item(key = "route_group_${group.id}") {
                         Row(
                             verticalAlignment = Alignment.CenterVertically,

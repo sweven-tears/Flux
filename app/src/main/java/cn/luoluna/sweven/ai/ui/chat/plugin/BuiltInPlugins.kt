@@ -86,7 +86,7 @@ object FlatChatUiPlugin : ChatUiPlugin {
                                 .padding(bottom = 4.dp),
                         ) {
                             message.images.forEach { url ->
-                                ChatUiDefaults.MessageImage(url = url, onClick = env.showImage)
+                                ChatUiDefaults.MessageImage(url = url, onClick = env.showImage, openExternal = env.imageOpenExternal)
                             }
                         }
                     }
@@ -128,7 +128,7 @@ object FlatChatUiPlugin : ChatUiPlugin {
                             modifier = Modifier.padding(start = 4.dp, bottom = 4.dp),
                         ) {
                             message.images.forEach { url ->
-                                ChatUiDefaults.MessageImage(url = url, onClick = env.showImage)
+                                ChatUiDefaults.MessageImage(url = url, onClick = env.showImage, openExternal = env.imageOpenExternal)
                             }
                         }
                     }
@@ -228,7 +228,7 @@ object MonoChatUiPlugin : ChatUiPlugin {
                                 .padding(bottom = 4.dp),
                         ) {
                             message.images.forEach { url ->
-                                ChatUiDefaults.MessageImage(url = url, onClick = env.showImage)
+                                ChatUiDefaults.MessageImage(url = url, onClick = env.showImage, openExternal = env.imageOpenExternal)
                             }
                         }
                     }
@@ -271,7 +271,7 @@ object MonoChatUiPlugin : ChatUiPlugin {
                             modifier = Modifier.padding(bottom = 4.dp),
                         ) {
                             message.images.forEach { url ->
-                                ChatUiDefaults.MessageImage(url = url, onClick = env.showImage)
+                                ChatUiDefaults.MessageImage(url = url, onClick = env.showImage, openExternal = env.imageOpenExternal)
                             }
                         }
                     }

@@ -120,6 +120,9 @@ fun ChatScreen(
     val showImageInput = currentPicker?.model?.inputImage == true ||
         (isSmartAi && smartAiCapability.inputImage) ||
         (currentGroup != null && currentGroupCapability?.inputImage == true)
+    // 文件打开方式（设置项）：媒体点击是否直接交系统应用查看
+    val imageOpenExternal by app.settings.imageOpenExternal.collectAsStateWithLifecycle()
+    val videoOpenExternal by app.settings.videoOpenExternal.collectAsStateWithLifecycle()
     // 会话记录的模型/目标已不可用、当前展示的是回退目标时为 true（顶栏提示）
     val modelFallback = current?.providerId?.let { pid ->
         val single = currentTarget as? ChatTarget.Single
@@ -295,6 +298,8 @@ fun ChatScreen(
         effectiveThinkingDepth = effectiveThinkingDepth,
         showReasoning = showReasoning,
         showImageInput = showImageInput,
+        imageOpenExternal = imageOpenExternal,
+        videoOpenExternal = videoOpenExternal,
         userName = userName,
         userAvatar = userAvatar,
         input = input,

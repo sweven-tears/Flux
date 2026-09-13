@@ -58,6 +58,8 @@ import cn.luoluna.sweven.ai.ui.chat.rememberDataUrlBitmap
 import cn.luoluna.sweven.ai.ui.chat.rememberDataUrlThumb
 import cn.luoluna.sweven.ai.ui.chat.rememberGallerySaver
 import cn.luoluna.sweven.ai.ui.chat.rememberVideoFrame
+import cn.luoluna.sweven.ai.ui.common.openImageExternally
+import cn.luoluna.sweven.ai.ui.common.openVideoExternally
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -92,6 +94,9 @@ fun CreationsScreen(onBack: () -> Unit) {
     val messageDao = remember { app.database.messageDao() }
     val messages by remember { messageDao.observeCreations() }
         .collectAsStateWithLifecycle(emptyList())
+    // 文件打开方式（设置项）：点击媒体时是否直接交系统应用查看
+    val imageOpenExternal by app.settings.imageOpenExternal.collectAsStateWithLifecycle()
+    val videoOpenExternal by app.settings.videoOpenExternal.collectAsStateWithLifecycle()
     val saveToGallery = rememberGallerySaver()
 
     // 展开为网格项：一张图/一个视频一项；已清理的占位标记不再收录
@@ -216,6 +221,10 @@ fun CreationsScreen(onBack: () -> Unit) {
                             onClick = {
                                 if (selecting) {
                                     selected = if (item.key in selected) selected - item.key else selected + item.key
+                                } else if (item.isVideo && videoOpenExternal) {
+                                    item.videoPath?.let { openVideoExternally(context, java.io.File(it)) }
+                                } else if (!item.isVideo && imageOpenExternal) {
+                                    openImageExternally(context, item.url)
                                 } else {
                                     previewKey = item.key
                                 }

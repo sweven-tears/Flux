@@ -124,6 +124,8 @@ import cn.luoluna.sweven.ai.ui.chat.rememberDataUrlBitmap
 import cn.luoluna.sweven.ai.ui.chat.rememberVideoFrame
 import cn.luoluna.sweven.ai.ui.chat.FluxVideoPlayer
 import cn.luoluna.sweven.ai.ui.common.ConfirmDialog
+import cn.luoluna.sweven.ai.ui.common.openImageExternally
+import cn.luoluna.sweven.ai.ui.common.openVideoExternally
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -698,7 +700,7 @@ object ChatUiDefaults {
                             .padding(bottom = 4.dp),
                     ) {
                         message.images.forEach { url ->
-                            MessageImage(url = url, onClick = env.showImage)
+                            MessageImage(url = url, onClick = env.showImage, openExternal = env.imageOpenExternal)
                         }
                     }
                 }
@@ -738,7 +740,7 @@ object ChatUiDefaults {
                             modifier = Modifier.padding(bottom = 4.dp),
                         ) {
                             message.images.forEach { url ->
-                                MessageImage(url = url, onClick = env.showImage)
+                                MessageImage(url = url, onClick = env.showImage, openExternal = env.imageOpenExternal)
                             }
                         }
                     }
@@ -1414,10 +1416,10 @@ object ChatUiDefaults {
     }
 
     @Composable
-    fun MessageImage(url: String, onClick: (androidx.compose.ui.graphics.ImageBitmap) -> Unit) {
-        // 视频消息（视频生成结果）：封面帧 + 播放角标，点击原位内嵌播放
+    fun MessageImage(url: String, onClick: (androidx.compose.ui.graphics.ImageBitmap) -> Unit, openExternal: Boolean = false) {
+        // 视频消息（视频生成结果）：封面帧 + 播放角标，点击原位内嵌播放（设置外部打开则直接交系统播放器）
         if (MessageEntity.isVideo(url)) {
-            VideoBubble(url.removePrefix(MessageEntity.VIDEO_PREFIX))
+            VideoBubble(url.removePrefix(MessageEntity.VIDEO_PREFIX), openExternal)
             return
         }
         // 「我的创作」里被清理的图片：原位渲染占位块，告知资源已删除
@@ -1447,6 +1449,7 @@ object ChatUiDefaults {
             }
             return
         }
+        val context = LocalContext.current
         val bitmap = rememberDataUrlBitmap(url).value
         Surface(shape = RoundedCornerShape(10.dp)) {
             if (bitmap != null) {
@@ -1457,7 +1460,10 @@ object ChatUiDefaults {
                     modifier = Modifier
                         .size(140.dp)
                         .clip(RoundedCornerShape(10.dp))
-                        .clickable { onClick(bitmap) },
+                        .clickable {
+                            // 设置「图片用系统应用打开」：点击直接交系统查看器
+                            if (openExternal) openImageExternally(context, url) else onClick(bitmap)
+                        },
                 )
             } else {
                 Surface(color = MaterialTheme.colorScheme.surfaceVariant, modifier = Modifier.size(140.dp)) {}
@@ -1465,16 +1471,25 @@ object ChatUiDefaults {
         }
     }
 
-    /** 视频消息气泡：封面帧（缺帧用占位）+ 播放角标，点击原位展开 VideoView 播放器 */
+    /** 视频消息气泡：封面帧（缺帧用占位）+ 播放角标，点击原位展开 VideoView 播放器（设置外部打开则直接交系统播放器） */
     @Composable
-    private fun VideoBubble(path: String) {
+    private fun VideoBubble(path: String, openExternal: Boolean) {
         var playing by remember(path) { mutableStateOf(false) }
+        val context = LocalContext.current
         val frame = rememberVideoFrame(path)
         Box(
             Modifier
                 .widthIn(max = 280.dp)
                 .clip(RoundedCornerShape(10.dp))
-                .then(if (playing) Modifier else Modifier.clickable { playing = true }),
+                .then(
+                    if (playing) {
+                        Modifier
+                    } else {
+                        Modifier.clickable {
+                            if (openExternal) openVideoExternally(context, java.io.File(path)) else playing = true
+                        }
+                    },
+                ),
         ) {
             if (playing) {
                 FluxVideoPlayer(

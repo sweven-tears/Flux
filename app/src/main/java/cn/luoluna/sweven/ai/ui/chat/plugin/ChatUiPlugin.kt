@@ -98,6 +98,9 @@ class ChatUiEnv(
     val effectiveThinkingDepth: String,
     val showReasoning: Boolean,
     val showImageInput: Boolean,
+    /** 文件打开方式（设置项）：图片/视频点击是否直接交系统应用查看 */
+    val imageOpenExternal: Boolean,
+    val videoOpenExternal: Boolean,
     /** 用户显示名（null 未设置） */
     val userName: String?,
     /** 用户头像 data URL（null 用首字合成） */

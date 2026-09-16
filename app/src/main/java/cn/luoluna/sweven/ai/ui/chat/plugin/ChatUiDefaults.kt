@@ -19,6 +19,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.basicMarquee
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
@@ -748,12 +749,27 @@ object ChatUiDefaults {
                         message.content.lines().size > 12 || message.content.length > 600
                     }
                     var collapsed by rememberSaveable(message.id) { mutableStateOf(false) }
+                    // 折叠长消息时列表项高度骤减，LazyList 会保持视口跳到后面的消息；滚回本条顶部便于继续阅读
+                    fun toggleCollapse() {
+                        val willCollapse = !collapsed
+                        collapsed = !collapsed
+                        if (willCollapse && isLong) {
+                            val info = env.listState.layoutInfo.visibleItemsInfo
+                                .firstOrNull { it.key == message.id }
+                            if (info != null && info.offset < 0) {
+                                val index = env.messages.indexOfFirst { it.id == message.id }
+                                if (index >= 0) {
+                                    env.scope.launch { env.listState.animateScrollToItem(index) }
+                                }
+                            }
+                        }
+                    }
                     if (message.content.isNotBlank() || !message.reasoning.isNullOrBlank()) {
                         Surface(
                             color = MaterialTheme.colorScheme.surfaceVariant,
                             shape = RoundedCornerShape(4.dp, 16.dp, 16.dp, 16.dp),
                             modifier = Modifier.combinedClickable(
-                                onClick = { if (isLong) collapsed = !collapsed },
+                                onClick = { if (isLong) toggleCollapse() },
                                 onLongClick = { env.showDetail(message) },
                             ),
                         ) {
@@ -762,7 +778,7 @@ object ChatUiDefaults {
                                     ReasoningSection(message.reasoning, inProgress = false)
                                 }
                                 CollapsibleMessageBody(message.content, isLong, collapsed) {
-                                    collapsed = !collapsed
+                                    toggleCollapse()
                                 }
                             }
                         }
@@ -1189,18 +1205,21 @@ object ChatUiDefaults {
                             append(" (${formatTokenCount(it)} cached)")
                         }
                     },
+                    modifier = Modifier.weight(1f, fill = false),
                 )
             }
             if (completion != null) {
                 UsageItem(
                     icon = Icons.Filled.ArrowDownward,
                     text = "${formatTokenCount(completion)} tokens",
+                    modifier = Modifier.weight(1f, fill = false),
                 )
                 // 速度 = 输出 token ÷ 总耗时（与厂商口径一致的端到端速度）
                 if (totalSec != null) {
                     UsageItem(
                         icon = Icons.Filled.Bolt,
                         text = String.format(Locale.US, "%.1f tok/s", completion / totalSec),
+                        modifier = Modifier.weight(1f, fill = false),
                     )
                 }
             }
@@ -1208,25 +1227,36 @@ object ChatUiDefaults {
                 UsageItem(
                     icon = Icons.Filled.Schedule,
                     text = String.format(Locale.US, "%.1fs", totalSec),
+                    modifier = Modifier.weight(1f, fill = false),
                 )
             }
         }
     }
 
     @Composable
-    private fun UsageItem(icon: ImageVector, text: String) {
-        Icon(
-            icon,
-            contentDescription = null,
-            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.size(12.dp),
-        )
-        Text(
-            text,
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.padding(start = 3.dp, end = 12.dp),
-        )
+    private fun UsageItem(icon: ImageVector, text: String, modifier: Modifier = Modifier) {
+        // 调用处传入 weight(fill=false)：短内容保持固有宽度，超长项被压进均分宽度内跑马灯滚动
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = modifier,
+        ) {
+            Icon(
+                icon,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(12.dp),
+            )
+            Text(
+                text,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                softWrap = false,
+                modifier = Modifier
+                    .padding(start = 3.dp, end = 12.dp)
+                    .basicMarquee(),
+            )
+        }
     }
 
     /** token 数紧凑格式：≥1000 转 K 保留一位小数（去尾零），如 3.3K / 514 */

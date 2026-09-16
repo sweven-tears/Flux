@@ -568,10 +568,23 @@ class LanServer(
             )
             return
         }
-        val routes = smartRouteDao.all().filter { it.enabled }
+        // 开放所有模型：候选 = 启用厂商×启用模型聚合链；否则为手动候选链
+        val allModels = settings.smartAutoAllModels.value
+        val routes: List<Pair<Long, String>> = if (allModels) {
+            router.allModelsChain().map { (provider, model) -> provider.id to model.name }
+        } else {
+            smartRouteDao.all().filter { it.enabled }.map { it.providerId to it.modelName }
+        }
         if (routes.isEmpty()) {
-            logRequest(device, aggregateId, null, stream, startedAt, null, false, "${SmartAi.MODEL_NAME} 没有启用的候选模型")
-            respondOpenAiError(HttpStatusCode.NotFound, "${SmartAi.MODEL_NAME} 没有启用的候选模型，请先在「智能路由」中配置")
+            logRequest(device, aggregateId, null, stream, startedAt, null, false, "${SmartAi.MODEL_NAME} 没有可用的候选模型")
+            respondOpenAiError(
+                HttpStatusCode.NotFound,
+                if (allModels) {
+                    "${SmartAi.MODEL_NAME} 没有可聚合的启用模型，请检查厂商与模型是否已启用"
+                } else {
+                    "${SmartAi.MODEL_NAME} 没有启用的候选模型，请先在「智能路由」中配置"
+                },
+            )
             return
         }
         val messages = rawBody["messages"] as? JsonArray
@@ -595,14 +608,14 @@ class LanServer(
         val features = featuresOfRequestBody(rawBody, messages)
         val now = System.currentTimeMillis()
         val prepared = orderCandidates(
-            routes.mapNotNull { route ->
-                val resolved = router.resolveById(route.providerId, route.modelName) ?: return@mapNotNull null
+            routes.mapNotNull { (providerId, modelName) ->
+                val resolved = router.resolveById(providerId, modelName) ?: return@mapNotNull null
                 val apiKey = resolved.apiKey?.key?.takeIf { it.isNotBlank() } ?: return@mapNotNull null
                 // 指向本机网关自身的候选直接跳过，避免自连回环
                 if (isSelfGatewayUrl(resolved.provider.baseUrl, port)) return@mapNotNull null
                 // 模型配置行可能已被删除，此时退回空配置继续路由
                 val model = resolved.model
-                    ?: ModelEntity(providerId = resolved.provider.id, name = route.modelName)
+                    ?: ModelEntity(providerId = resolved.provider.id, name = modelName)
                 SmartPrepared(resolved.provider, apiKey, model, resolved.advancedParams)
             },
             features,

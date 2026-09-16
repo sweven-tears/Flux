@@ -195,25 +195,42 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
             conv?.thinkingDepth ?: pending
         }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
 
-    /** 智能路由启用的候选数量（>0 时聊天选择器显示 smartAi）；候选所属厂商停用后不计入 */
-    private val smartEnabledCount: StateFlow<Int> =
-        combine(smartRouteDao.observeAll(), providerDao.observeAll()) { routes, providers ->
-            val enabledIds = providers.filter { it.enabled }.map { it.id }.toSet()
-            routes.count { it.enabled && it.providerId in enabledIds }
-        }.stateIn(viewModelScope, SharingStarted.Eagerly, 0)
+    /**
+     * flux-auto 候选链（providerId to modelName）：
+     * 开放所有模型时为启用厂商×启用模型的聚合链（厂商配置顺序+模型顺序），否则为手动候选链。
+     */
+    private val smartChain: StateFlow<List<Pair<Long, String>>> =
+        combine(
+            smartRouteDao.observeAll(),
+            providerDao.observeAll(),
+            modelDao.observeAll(),
+            settings.smartAutoAllModels,
+        ) { routes, providers, models, allModels ->
+            if (!allModels) {
+                val enabledIds = providers.filter { it.enabled }.map { it.id }.toSet()
+                routes.filter { it.enabled && it.providerId in enabledIds }
+                    .map { it.providerId to it.modelName }
+            } else {
+                providers.filter { it.enabled }.flatMap { provider ->
+                    models.filter {
+                        it.providerId == provider.id && it.enabled &&
+                            (it.type == ModelType.CHAT || it.outputImage)
+                    }.map { provider.id to it.name }
+                }
+            }
+        }.stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
 
     /** 聊天模型选择器是否显示 smartAi 条目 */
     val smartAiAvailable: StateFlow<Boolean> =
-        smartEnabledCount.map { it > 0 }
+        smartChain.map { it.isNotEmpty() }
             .stateIn(viewModelScope, SharingStarted.Eagerly, false)
 
-    /** smartAi 聚合能力（启用候选的模态/能力并集）：SmartAi 目标下附件按钮与思考深度的显示依据 */
+    /** smartAi 聚合能力（候选链的模态/能力并集）：SmartAi 目标下附件按钮与思考深度的显示依据 */
     val smartAiCapability: StateFlow<SmartAggregateCapability> =
-        combine(smartRouteDao.observeAll(), providerDao.observeAll(), modelDao.observeAll()) { routes, providers, models ->
-            val enabledIds = providers.filter { it.enabled }.map { it.id }.toSet()
+        combine(smartChain, modelDao.observeAll()) { chain, models ->
             aggregateCapability(
-                routes.filter { it.enabled && it.providerId in enabledIds }.mapNotNull { route ->
-                    models.firstOrNull { it.providerId == route.providerId && it.name == route.modelName }
+                chain.mapNotNull { (providerId, modelName) ->
+                    models.firstOrNull { it.providerId == providerId && it.name == modelName }
                 },
             )
         }.stateIn(viewModelScope, SharingStarted.Eagerly, aggregateCapability(emptyList()))
@@ -236,10 +253,10 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
 
     /** 当前生效目标：优先会话自己选的，否则回退到上次使用的目标 */
     val currentTarget: StateFlow<ChatTarget?> =
-        combine(current, pickerModels, lastModel, smartEnabledCount, routeGroups) { conv, models, last, smartCount, groups ->
+        combine(current, pickerModels, lastModel, smartChain, routeGroups) { conv, models, last, chain, groups ->
             fun resolve(providerId: Long, modelName: String?): ChatTarget? {
                 if (providerId == SmartAi.PROVIDER_ID) {
-                    return if (smartCount > 0) ChatTarget.SmartAi else null
+                    return if (chain.isNotEmpty()) ChatTarget.SmartAi else null
                 }
                 // 路由分组：modelName 存 groupKey，分组被删或无可用成员时回退
                 if (providerId == RouteGroupTarget.PROVIDER_ID) {
@@ -842,11 +859,22 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
             failed?.let { _error.value = it }
         }
     }
-    /** smartAi：按智能路由候选顺序发起请求，首字前失败/超时自动切换下一个 */
+    /** smartAi：按候选链顺序发起请求，首字前失败/超时自动切换下一个（开放所有模型时聚合全部启用模型） */
     private suspend fun streamSmart(convId: Long) {
-        val routes = smartRouteDao.all().filter { it.enabled }
+        val allModels = settings.smartAutoAllModels.value
+        val routes: List<Pair<Long, String>> = if (allModels) {
+            router.allModelsChain().map { (provider, model) -> provider.id to model.name }
+        } else {
+            smartRouteDao.all().filter { it.enabled }.map { it.providerId to it.modelName }
+        }
         if (routes.isEmpty()) {
-            _error.value = ChatError("${SmartAi.MODEL_NAME} 没有启用的候选模型，请到「局域网」页右上角 → 智能路由配置")
+            _error.value = ChatError(
+                if (allModels) {
+                    "${SmartAi.MODEL_NAME} 没有可聚合的启用模型，请检查厂商与模型是否已启用"
+                } else {
+                    "${SmartAi.MODEL_NAME} 没有启用的候选模型，请到「局域网」页右上角 → 智能路由配置"
+                },
+            )
             return
         }
         val conversation = conversationDao.byId(convId)
@@ -859,8 +887,8 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         // 各候选按各自窗口裁剪上下文，取最坏情况作提示
         var maxDropped = 0
         var maxStripped = 0
-        val prepared = routes.mapNotNull { route ->
-            val resolved = resolveRouteMember(route.providerId, route.modelName, conversation, history)
+        val prepared = routes.mapNotNull { (providerId, modelName) ->
+            val resolved = resolveRouteMember(providerId, modelName, conversation, history)
                 ?: return@mapNotNull null
             if (resolved.dropped > maxDropped) maxDropped = resolved.dropped
             if (resolved.stripped > maxStripped) maxStripped = resolved.stripped

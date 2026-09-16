@@ -79,6 +79,7 @@ fun LanScreen(
     val lanEnabled by vm.lanEnabled.collectAsStateWithLifecycle()
     val lanPort by vm.lanPort.collectAsStateWithLifecycle()
     val smartAiEnabled by vm.lanSmartAiEnabled.collectAsStateWithLifecycle()
+    val smartAutoAllModels by vm.smartAutoAllModels.collectAsStateWithLifecycle()
     val running by vm.running.collectAsStateWithLifecycle()
     val serverError by vm.serverError.collectAsStateWithLifecycle()
     val lanHostnameLabel by vm.lanHostnameLabel.collectAsStateWithLifecycle()
@@ -229,6 +230,19 @@ fun LanScreen(
                         )
                     }
                     Switch(checked = smartAiEnabled, onCheckedChange = { vm.setSmartAiEnabled(it) })
+                }
+                // 开放所有模型：flux-auto 候选来源切换（本机聊天同样生效）
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text("开放所有模型", style = MaterialTheme.typography.bodyMedium)
+                        Text(
+                            "开启后 ${SmartAi.MODEL_NAME} 聚合全部启用模型（按厂商配置顺序+模型顺序，" +
+                                "健康度动态调度取长补短）；关闭则使用手动候选链",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    Switch(checked = smartAutoAllModels, onCheckedChange = { vm.setSmartAutoAllModels(it) })
                 }
             }
 

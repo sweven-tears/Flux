@@ -4,6 +4,7 @@ import cn.luoluna.sweven.ai.data.db.ApiKeyDao
 import cn.luoluna.sweven.ai.data.db.ApiKeyEntity
 import cn.luoluna.sweven.ai.data.db.ModelDao
 import cn.luoluna.sweven.ai.data.db.ModelEntity
+import cn.luoluna.sweven.ai.data.db.ModelType
 import cn.luoluna.sweven.ai.data.db.ProviderDao
 import cn.luoluna.sweven.ai.data.db.ProviderEntity
 import cn.luoluna.sweven.ai.net.AdvancedParams
@@ -83,4 +84,15 @@ class ModelRouter(
         val model = modelDao.find(provider.id, modelName)
         return ModelRoute(provider, key, model)
     }
+
+    /**
+     * 「开放所有模型」聚合链：启用厂商按配置顺序 × 其下启用 chat/图像输出模型按配置顺序。
+     * flux-auto 开关打开时候选来源，与本机聊天、局域网网关共用。
+     */
+    suspend fun allModelsChain(): List<Pair<ProviderEntity, ModelEntity>> =
+        providerDao.all().filter { it.enabled }.flatMap { provider ->
+            modelDao.forProvider(provider.id)
+                .filter { it.enabled && (it.type == ModelType.CHAT || it.outputImage) }
+                .map { provider to it }
+        }
 }

@@ -145,6 +145,7 @@ class BackupManager(private val app: App) {
             put("smartFirstTokenTimeoutSeconds", s.smartFirstTokenTimeoutSeconds.value.toString())
             put("smartRouteMaxRounds", s.smartRouteMaxRounds.value.toString())
             put("lanSmartAiEnabled", s.lanSmartAiEnabled.value.toString())
+            put("smartAutoAllModels", s.smartAutoAllModels.value.toString())
             put("smartResponseMode", s.smartResponseMode.value)
             put("smartFastFirstTokenMs", s.smartFastFirstTokenMs.value.toString())
             put("smartLeisureFirstTokenSeconds", s.smartLeisureFirstTokenSeconds.value.toString())
@@ -162,6 +163,7 @@ class BackupManager(private val app: App) {
         map["smartFirstTokenTimeoutSeconds"]?.toIntOrNull()?.let { s.setSmartFirstTokenTimeout(it) }
         map["smartRouteMaxRounds"]?.toIntOrNull()?.let { s.setSmartRouteMaxRounds(it) }
         map["lanSmartAiEnabled"]?.toBooleanStrictOrNull()?.let { s.setLanSmartAiEnabled(it) }
+        map["smartAutoAllModels"]?.toBooleanStrictOrNull()?.let { s.setSmartAutoAllModels(it) }
         map["smartResponseMode"]?.let { s.setSmartResponseMode(it) }
         map["smartFastFirstTokenMs"]?.toIntOrNull()?.let { s.setSmartFastFirstToken(it) }
         map["smartLeisureFirstTokenSeconds"]?.toIntOrNull()?.let { s.setSmartLeisureFirstToken(it) }

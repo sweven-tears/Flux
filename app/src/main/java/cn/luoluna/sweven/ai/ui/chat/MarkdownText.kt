@@ -2,20 +2,30 @@ package cn.luoluna.sweven.ai.ui.chat
 
 import android.content.Intent
 import android.net.Uri
+import android.widget.Toast
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -43,6 +53,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.withLink
 import androidx.compose.ui.text.withStyle
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import cn.luoluna.sweven.ai.ui.common.InAppBrowser
@@ -189,11 +200,45 @@ private fun AnnotatedString.Builder.inline(line: String, onOpenUrl: ((String) ->
     if (last < line.length) append(line.substring(last))
 }
 
-/** 消息分块：普通文本 / ``` 围栏代码块（代码内容不做 HTML 清洗，原样保留供预览） */
+/** 消息分块：普通文本 / ``` 围栏代码块（代码内容不做 HTML 清洗，原样保留供预览）/ Markdown 表格 */
 private sealed interface MdBlock {
     data class Text(val content: String) : MdBlock
     data class Code(val lang: String?, val content: String, val closed: Boolean) : MdBlock
+
+    /** Markdown 表格：表头 + 数据行 + 各列对齐（按分隔行 : 标记） */
+    data class Table(
+        val headers: List<String>,
+        val rows: List<List<String>>,
+        val aligns: List<TableAlign>,
+    ) : MdBlock
 }
+
+/** 表格列对齐 */
+private enum class TableAlign { START, CENTER, END }
+
+/** 分隔行：| --- | :---: | ---: | 这类（每列至少 3 个 -，: 标记对齐） */
+private val TABLE_SEP_ROW = Regex("""^\s*\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)*\|?\s*$""")
+
+private const val ESCAPED_PIPE = "\u0000"
+
+/** 表格行按未转义 | 切分，\| 还原为 |，并去掉外层管道产生的首尾空列 */
+private fun splitTableRow(line: String): List<String> {
+    val replaced = line.replace("\\|", ESCAPED_PIPE)
+    val cells = replaced.split('|').map { it.trim().replace(ESCAPED_PIPE, "|") }
+    var list = cells
+    if (replaced.trimStart().startsWith("|") && list.size > 1) list = list.drop(1)
+    if (replaced.trimEnd().endsWith("|") && list.isNotEmpty()) list = list.dropLast(1)
+    return list
+}
+
+private fun parseAligns(separatorLine: String): List<TableAlign> =
+    splitTableRow(separatorLine).map { cell ->
+        when {
+            cell.startsWith(":") && cell.endsWith(":") -> TableAlign.CENTER
+            cell.endsWith(":") -> TableAlign.END
+            else -> TableAlign.START
+        }
+    }
 
 private fun parseBlocks(text: String): List<MdBlock> {
     val blocks = ArrayList<MdBlock>()
@@ -217,7 +262,10 @@ private fun parseBlocks(text: String): List<MdBlock> {
         }
     }
 
-    text.lines().forEach { raw ->
+    val lines = text.lines()
+    var i = 0
+    while (i < lines.size) {
+        val raw = lines[i]
         val trimmed = raw.trimStart()
         when {
             !inCode && trimmed.startsWith("```") -> {
@@ -225,13 +273,37 @@ private fun parseBlocks(text: String): List<MdBlock> {
                 inCode = true
                 codeLang = trimmed.removePrefix("```").trim()
                     .takeIf { it.isNotEmpty() }?.substringBefore(' ')
+                i++
             }
             inCode && trimmed.startsWith("```") -> {
                 inCode = false
                 flushCode(closed = true)
+                i++
             }
-            inCode -> codeLines += raw
-            else -> textLines += raw
+            inCode -> {
+                codeLines += raw
+                i++
+            }
+            // 表格：本行含 | 且下一行是分隔行，此后连续含 | 的行都算数据行
+            trimmed.contains('|') && i + 1 < lines.size && TABLE_SEP_ROW.matches(lines[i + 1]) -> {
+                val headers = splitTableRow(raw)
+                var j = i + 2
+                val rows = ArrayList<List<String>>()
+                while (j < lines.size) {
+                    val rowTrimmed = lines[j].trimStart()
+                    if (rowTrimmed.isNotBlank() && rowTrimmed.contains('|')) {
+                        rows.add(splitTableRow(lines[j]))
+                        j++
+                    } else break
+                }
+                flushText()
+                blocks += MdBlock.Table(headers, rows, parseAligns(lines[i + 1]))
+                i = j
+            }
+            else -> {
+                textLines += raw
+                i++
+            }
         }
     }
     flushText()
@@ -309,6 +381,7 @@ fun MarkdownText(
                         preview = Preview.Html(buildPreviewHtml(block.lang, block.content))
                     },
                 )
+                is MdBlock.Table -> MdTableView(block)
             }
         }
     }
@@ -340,8 +413,77 @@ private fun MarkdownParagraph(content: String, style: TextStyle, onOpenUrl: (Str
     }
 }
 
+/** Markdown 表格视图：列宽均分可用宽度（最小 88dp，超出横向滚动），表头加粗带底色，行间分隔线 */
+@Composable
+private fun MdTableView(table: MdBlock.Table) {
+    BoxWithConstraints(Modifier.fillMaxWidth()) {
+        val columnCount = table.headers.size.coerceAtLeast(1)
+        val minCell = 88.dp
+        val share = (maxWidth - 1.dp) / columnCount
+        val cellWidth = if (share > minCell) share else minCell
+        Column(
+            Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(8.dp))
+                .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(8.dp))
+                .horizontalScroll(rememberScrollState()),
+        ) {
+            Row(
+                Modifier.background(MaterialTheme.colorScheme.surfaceContainerHighest),
+            ) {
+                table.headers.forEachIndexed { col, header ->
+                    TableCell(
+                        text = header,
+                        align = table.aligns.getOrNull(col) ?: TableAlign.START,
+                        header = true,
+                        width = cellWidth,
+                    )
+                }
+            }
+            table.rows.forEach { row ->
+                HorizontalDivider(
+                    color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f),
+                )
+                Row(Modifier.fillMaxWidth()) {
+                    repeat(columnCount) { col ->
+                        TableCell(
+                            text = row.getOrNull(col).orEmpty(),
+                            align = table.aligns.getOrNull(col) ?: TableAlign.START,
+                            header = false,
+                            width = cellWidth,
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+/** 单元格：复用行内 Markdown 渲染（加粗/删除线/行内代码/链接），按列对齐 */
+@Composable
+private fun RowScope.TableCell(text: String, align: TableAlign, header: Boolean, width: Dp) {
+    val annotated = remember(text) { renderMarkdown(text) }
+    Box(
+        Modifier
+            .width(width)
+            .padding(horizontal = 8.dp, vertical = 6.dp),
+        contentAlignment = when (align) {
+            TableAlign.CENTER -> Alignment.Center
+            TableAlign.END -> Alignment.CenterEnd
+            TableAlign.START -> Alignment.CenterStart
+        },
+    ) {
+        Text(
+            annotated,
+            style = if (header) MaterialTheme.typography.labelMedium else MaterialTheme.typography.bodySmall,
+            fontWeight = if (header) FontWeight.Bold else null,
+        )
+    }
+}
+
 @Composable
 private fun CodeBlockView(code: MdBlock.Code, onPreview: () -> Unit) {
+    val context = LocalContext.current
     val previewable = code.closed && isWebPreviewable(code.lang, code.content)
     var collapsed by rememberSaveable { mutableStateOf(false) }
     val lineCount = remember(code.content) { code.content.count { it == '\n' } + 1 }
@@ -381,6 +523,30 @@ private fun CodeBlockView(code: MdBlock.Code, onPreview: () -> Unit) {
                     )
                 }
                 Spacer(Modifier.weight(1f))
+                // 快速复制整个代码块
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(12.dp))
+                        .clickable {
+                            copyMessageText(context, code.content)
+                            Toast.makeText(context, "已复制", Toast.LENGTH_SHORT).show()
+                        }
+                        .padding(horizontal = 6.dp, vertical = 2.dp),
+                ) {
+                    Icon(
+                        Icons.Filled.ContentCopy,
+                        contentDescription = "复制代码",
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(14.dp),
+                    )
+                    Spacer(Modifier.width(2.dp))
+                    Text(
+                        "复制",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.primary,
+                    )
+                }
                 if (previewable) {
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
@@ -432,7 +598,10 @@ private const val MESSAGE_HTML_STYLE =
         "pre{background:#f4f4f5;padding:10px;border-radius:8px;overflow-x:auto}" +
         "code{font-family:Menlo,Consolas,monospace;font-size:0.92em}" +
         "blockquote{border-left:3px solid #d4d4d8;margin:6px 0;padding-left:10px;color:#52525b}" +
-        "a{color:#3b82f6}img{max-width:100%}ul,ol{margin:6px 0;padding-left:22px}</style>"
+        "a{color:#3b82f6}img{max-width:100%}ul,ol{margin:6px 0;padding-left:22px}" +
+        "table{border-collapse:collapse;margin:6px 0}" +
+        "th,td{border:1px solid #d4d4d8;padding:4px 10px}" +
+        "th{background:#f4f4f5;text-align:left}</style>"
 
 /** HTML 转义（先转义再做 Markdown 行内替换，避免注入） */
 private fun escapeHtml(s: String): String = s
@@ -469,7 +638,7 @@ private fun inlineToHtml(escaped: String): String {
 
 /**
  * 消息 Markdown → 完整 HTML（供「网页视图渲染」用 WebView 查看）。
- * 支持标题/无序与有序列表/引用/围栏代码块/行内样式与链接，与 renderMarkdown 的规则一致。
+ * 支持标题/无序与有序列表/引用/围栏代码块/表格/行内样式与链接，与 renderMarkdown 的规则一致。
  */
 fun buildMessageHtml(text: String): String {
     val source = normalizeHtmlLike(text)
@@ -480,7 +649,10 @@ fun buildMessageHtml(text: String): String {
         listTag = null
     }
     var inCode = false
-    source.lines().forEach { raw ->
+    val lines = source.lines()
+    var i = 0
+    while (i < lines.size) {
+        val raw = lines[i]
         val line = raw.trimEnd()
         val trimmed = line.trim()
         if (trimmed.startsWith("```")) {
@@ -497,11 +669,42 @@ fun buildMessageHtml(text: String): String {
                 }
                 inCode = true
             }
-            return@forEach
+            i++
+            continue
         }
         if (inCode) {
             sb.append(escapeHtml(raw)).append('\n')
-            return@forEach
+            i++
+            continue
+        }
+        // 表格：与 parseBlocks 同口径识别，输出 <table>（th 加粗带底色由样式表控制）
+        if (trimmed.contains('|') && i + 1 < lines.size && TABLE_SEP_ROW.matches(lines[i + 1])) {
+            val headers = splitTableRow(line)
+            var j = i + 2
+            val rows = ArrayList<List<String>>()
+            while (j < lines.size) {
+                val rowTrimmed = lines[j].trimStart()
+                if (rowTrimmed.isNotBlank() && rowTrimmed.contains('|')) {
+                    rows.add(splitTableRow(lines[j]))
+                    j++
+                } else break
+            }
+            closeList()
+            sb.append("<table>\n<thead><tr>")
+            headers.forEach { header ->
+                sb.append("<th>").append(inlineToHtml(escapeHtml(header))).append("</th>")
+            }
+            sb.append("</tr></thead>\n<tbody>")
+            rows.forEach { row ->
+                sb.append("<tr>")
+                repeat(headers.size) { col ->
+                    sb.append("<td>").append(inlineToHtml(escapeHtml(row.getOrNull(col).orEmpty()))).append("</td>")
+                }
+                sb.append("</tr>\n")
+            }
+            sb.append("</tbody></table>\n")
+            i = j
+            continue
         }
         val header = HEADER_PATTERN.find(line)
         val bullet = BULLET_PATTERN.find(line)
@@ -543,6 +746,7 @@ fun buildMessageHtml(text: String): String {
                 sb.append("<p>").append(inlineToHtml(escapeHtml(line))).append("</p>\n")
             }
         }
+        i++
     }
     if (inCode) sb.append("</code></pre>\n")
     closeList()

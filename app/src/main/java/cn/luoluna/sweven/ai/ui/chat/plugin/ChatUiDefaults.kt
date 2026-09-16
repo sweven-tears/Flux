@@ -95,6 +95,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -127,6 +128,7 @@ import cn.luoluna.sweven.ai.ui.chat.FluxVideoPlayer
 import cn.luoluna.sweven.ai.ui.common.ConfirmDialog
 import cn.luoluna.sweven.ai.ui.common.openImageExternally
 import cn.luoluna.sweven.ai.ui.common.openVideoExternally
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -749,19 +751,22 @@ object ChatUiDefaults {
                         message.content.lines().size > 12 || message.content.length > 600
                     }
                     var collapsed by rememberSaveable(message.id) { mutableStateOf(false) }
-                    // 折叠长消息时列表项高度骤减，LazyList 会保持视口跳到后面的消息；滚回本条顶部便于继续阅读
+                    val scrollAnchorCh = remember { Channel<Long>(Channel.CONFLATED) }
+                    // 折叠长消息时列表项高度骤减，LazyList 会保持视口跳到后面的消息；
+                    // 用本地 Channel 锚定：折叠后等重组布局完成，再 requestScrollToItem 锚定顶部
+                    LaunchedEffect(Unit) {
+                        for (targetId in scrollAnchorCh) {
+                            val index = env.messages.indexOfFirst { it.id == targetId }
+                            if (index < 0) continue
+                            withFrameNanos { } // 等折叠状态触发的重组和布局完成
+                            env.listState.requestScrollToItem(index, 0)
+                        }
+                    }
                     fun toggleCollapse() {
                         val willCollapse = !collapsed
                         collapsed = !collapsed
                         if (willCollapse && isLong) {
-                            val info = env.listState.layoutInfo.visibleItemsInfo
-                                .firstOrNull { it.key == message.id }
-                            if (info != null && info.offset < 0) {
-                                val index = env.messages.indexOfFirst { it.id == message.id }
-                                if (index >= 0) {
-                                    env.scope.launch { env.listState.animateScrollToItem(index) }
-                                }
-                            }
+                            scrollAnchorCh.trySend(message.id)
                         }
                     }
                     if (message.content.isNotBlank() || !message.reasoning.isNullOrBlank()) {

@@ -71,7 +71,12 @@ fun InAppBrowser(
 
     Dialog(
         onDismissRequest = onDismiss,
-        properties = DialogProperties(usePlatformDefaultWidth = false),
+        // decorFitsSystemWindows=false：Dialog 子窗口 edge-to-edge，insets 原样传入
+        // Compose 层；默认 true 时部分机型全屏子窗口 safeDrawing=0，底部被裁
+        properties = DialogProperties(
+            usePlatformDefaultWidth = false,
+            decorFitsSystemWindows = false,
+        ),
     ) {
         Surface(modifier = Modifier.fillMaxSize()) {
             Column(

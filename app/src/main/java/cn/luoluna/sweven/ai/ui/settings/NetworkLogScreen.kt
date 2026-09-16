@@ -242,7 +242,13 @@ private fun NetworkLogRow(log: NetworkLogEntity, onClick: () -> Unit) {
 private fun NetworkLogDetailDialog(log: NetworkLogEntity, onDismiss: () -> Unit) {
     Dialog(
         onDismissRequest = onDismiss,
-        properties = DialogProperties(usePlatformDefaultWidth = false),
+        // decorFitsSystemWindows=false：Dialog 子窗口进入 edge-to-edge，
+        // insets 原样传给 Compose 层——默认 true 时部分机型全屏子窗口
+        // 拿到的 safeDrawing 为 0，底部内容被手势条裁掉且滑不出来
+        properties = DialogProperties(
+            usePlatformDefaultWidth = false,
+            decorFitsSystemWindows = false,
+        ),
     ) {
         Surface(Modifier.fillMaxSize()) {
             Column(

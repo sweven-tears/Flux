@@ -3,6 +3,7 @@ package cn.luoluna.sweven.ai.net.video
 import cn.luoluna.sweven.ai.net.ApiException
 import cn.luoluna.sweven.ai.net.ChatJson
 import cn.luoluna.sweven.ai.net.HttpApiException
+import cn.luoluna.sweven.ai.net.NetworkLog
 import cn.luoluna.sweven.ai.net.ProviderProtocol
 import cn.luoluna.sweven.ai.net.parseErrorMessage
 import kotlinx.coroutines.Dispatchers
@@ -68,6 +69,8 @@ internal object VideoHttp {
         .connectTimeout(20, TimeUnit.SECONDS)
         .readTimeout(180, TimeUnit.SECONDS)
         .writeTimeout(60, TimeUnit.SECONDS)
+        // 全局网络日志打点（设置页开关，关闭时零开销直通）；downloadClient 由本 client 派生自动继承
+        .addInterceptor(NetworkLog.interceptor)
         .build()
 
     val downloadClient: OkHttpClient = client.newBuilder()

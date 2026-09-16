@@ -73,6 +73,14 @@ class AppSettings(context: Context) {
     private val _logRequestsEnabled = MutableStateFlow(prefs.getBoolean(KEY_LOG_REQUESTS, true))
     val logRequestsEnabled: StateFlow<Boolean> = _logRequestsEnabled
 
+    /** 全局网络日志：记录 App 发出的每条出站 HTTP 请求（设置页查看） */
+    private val _networkLogEnabled = MutableStateFlow(prefs.getBoolean(KEY_NETWORK_LOG, false))
+    val networkLogEnabled: StateFlow<Boolean> = _networkLogEnabled
+
+    /** 全局网络日志保留条数（写入时自动修剪） */
+    private val _networkLogKeep = MutableStateFlow(prefs.getInt(KEY_NETWORK_LOG_KEEP, DEFAULT_NETWORK_LOG_KEEP))
+    val networkLogKeep: StateFlow<Int> = _networkLogKeep
+
     /** 文件打开方式：图片/视频点击时交给系统应用查看（true=外部，false=内置预览） */
     private val _imageOpenExternal = MutableStateFlow(prefs.getBoolean(KEY_IMAGE_OPEN_EXTERNAL, false))
     val imageOpenExternal: StateFlow<Boolean> = _imageOpenExternal
@@ -163,6 +171,17 @@ class AppSettings(context: Context) {
         _logRequestsEnabled.value = enabled
     }
 
+    fun setNetworkLogEnabled(enabled: Boolean) {
+        prefs.edit().putBoolean(KEY_NETWORK_LOG, enabled).apply()
+        _networkLogEnabled.value = enabled
+    }
+
+    fun setNetworkLogKeep(count: Int) {
+        val v = count.coerceIn(50, 2000)
+        prefs.edit().putInt(KEY_NETWORK_LOG_KEEP, v).apply()
+        _networkLogKeep.value = v
+    }
+
     fun setImageOpenExternal(external: Boolean) {
         prefs.edit().putBoolean(KEY_IMAGE_OPEN_EXTERNAL, external).apply()
         _imageOpenExternal.value = external
@@ -209,6 +228,9 @@ class AppSettings(context: Context) {
         const val DEFAULT_SMART_LEISURE_FIRST_TOKEN = 120
         const val DEFAULT_SMART_COOLDOWN_THRESHOLD = 2
         const val DEFAULT_SMART_COOLDOWN_SECONDS = 60
+
+        /** 全局网络日志默认保留条数 */
+        const val DEFAULT_NETWORK_LOG_KEEP = 300
         private const val KEY_LAN_ENABLED = "lan_enabled"
         private const val KEY_LAN_PORT = "lan_port"
         private const val KEY_LAN_HOSTNAME = "lan_hostname_label"
@@ -224,6 +246,8 @@ class AppSettings(context: Context) {
         private const val KEY_SMART_COOLDOWN_THRESHOLD = "smart_cooldown_threshold"
         private const val KEY_SMART_COOLDOWN_SECONDS = "smart_cooldown_seconds"
         private const val KEY_LOG_REQUESTS = "log_requests_enabled"
+        private const val KEY_NETWORK_LOG = "network_log_enabled"
+        private const val KEY_NETWORK_LOG_KEEP = "network_log_keep"
         private const val KEY_IMAGE_OPEN_EXTERNAL = "image_open_external"
         private const val KEY_VIDEO_OPEN_EXTERNAL = "video_open_external"
         private const val KEY_CHAT_PLUGIN = "chat_ui_plugin"

@@ -66,6 +66,8 @@ class ProviderClient {
         .connectTimeout(20, TimeUnit.SECONDS)
         .readTimeout(180, TimeUnit.SECONDS)
         .writeTimeout(60, TimeUnit.SECONDS)
+        // 全局网络日志打点（设置页开关，关闭时零开销直通）；streamHttp 由本 client 派生自动继承
+        .addInterceptor(NetworkLog.interceptor)
         .build()
 
     // 流式请求读超时置 0，避免长回复被截断

@@ -474,6 +474,22 @@ interface RequestLogDao {
 }
 
 @Dao
+interface NetworkLogDao {
+    @Query("SELECT * FROM network_logs ORDER BY id DESC LIMIT :limit")
+    fun observeRecent(limit: Int): Flow<List<NetworkLogEntity>>
+
+    @Insert
+    suspend fun insert(e: NetworkLogEntity): Long
+
+    /** 只保留最近 keep 条，写入时调用防表无限膨胀 */
+    @Query("DELETE FROM network_logs WHERE id NOT IN (SELECT id FROM network_logs ORDER BY id DESC LIMIT :keep)")
+    suspend fun prune(keep: Int)
+
+    @Query("DELETE FROM network_logs")
+    suspend fun clear()
+}
+
+@Dao
 interface VideoJobDao {
     @Query("SELECT * FROM video_jobs WHERE status IN ('pending','running') ORDER BY createdAt ASC")
     fun observeActive(): Flow<List<VideoJobEntity>>

@@ -380,3 +380,34 @@ data class RequestLogEntity(
     val promptTokens: Long? = null,
     val completionTokens: Long? = null,
 )
+
+/**
+ * 全局网络日志：App 发出的每条出站 HTTP 请求一条（聊天/模型列表/连接测试/生图/视频任务等，
+ * 含局域网网关转发的上游请求），开关关闭时不记录，自动修剪保留最近 N 条。
+ */
+@Entity(
+    tableName = "network_logs",
+    indices = [Index("at")],
+)
+data class NetworkLogEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val at: Long,
+    /** 请求类别：chat / models / image / video / other */
+    val tag: String,
+    val method: String,
+    val url: String,
+    /** HTTP 状态码；连接失败等未拿到响应时为 null */
+    val httpCode: Int? = null,
+    val ok: Boolean = false,
+    val durationMs: Long? = null,
+    /** 请求头（JSON 对象文本） */
+    val requestHeaders: String? = null,
+    /** 请求体原文（截断存储） */
+    val requestBody: String? = null,
+    /** 响应头（JSON 对象文本） */
+    val responseHeaders: String? = null,
+    /** 响应体原文/流式帧前缀（截断存储；二进制响应不落） */
+    val responseBody: String? = null,
+    /** 失败原因摘要 */
+    val error: String? = null,
+)

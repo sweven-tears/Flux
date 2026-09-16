@@ -18,6 +18,7 @@ import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -41,6 +42,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import cn.luoluna.sweven.ai.App
 import cn.luoluna.sweven.ai.data.BackupManager
 import cn.luoluna.sweven.ai.ui.common.SectionCard
+import cn.luoluna.sweven.ai.ui.common.TextFieldDialog
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -52,7 +54,11 @@ private val backupTimeFmt = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefau
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun SettingsScreen(onBack: () -> Unit, onOpenCreations: () -> Unit) {
+fun SettingsScreen(
+    onBack: () -> Unit,
+    onOpenCreations: () -> Unit,
+    onOpenNetworkLog: () -> Unit = {},
+) {
     val context = LocalContext.current
     val settings = remember { (context.applicationContext as App).settings }
     val backup = remember { BackupManager(context.applicationContext as App) }
@@ -65,6 +71,8 @@ fun SettingsScreen(onBack: () -> Unit, onOpenCreations: () -> Unit) {
         }
     }
     val logRequestsEnabled by settings.logRequestsEnabled.collectAsStateWithLifecycle()
+    val networkLogEnabled by settings.networkLogEnabled.collectAsStateWithLifecycle()
+    val networkLogKeep by settings.networkLogKeep.collectAsStateWithLifecycle()
     val imageOpenExternal by settings.imageOpenExternal.collectAsStateWithLifecycle()
     val videoOpenExternal by settings.videoOpenExternal.collectAsStateWithLifecycle()
 
@@ -73,6 +81,8 @@ fun SettingsScreen(onBack: () -> Unit, onOpenCreations: () -> Unit) {
     var exportIncludeKeys by remember { mutableStateOf(true) }
     // 导入：选文件解析校验后暂存文本，确认弹窗展示摘要再落库
     var pendingImportText by remember { mutableStateOf<String?>(null) }
+    // 网络日志保留条数编辑
+    var showLogKeepEdit by remember { mutableStateOf(false) }
 
     val exportLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.CreateDocument("application/json")
@@ -151,6 +161,52 @@ fun SettingsScreen(onBack: () -> Unit, onOpenCreations: () -> Unit) {
                         checked = logRequestsEnabled,
                         onCheckedChange = { settings.setLogRequestsEnabled(it) },
                     )
+                }
+            }
+            SectionCard(title = "网络日志") {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text("记录全局网络日志", style = MaterialTheme.typography.bodyMedium)
+                        Text(
+                            "记录 App 发出的每条网络请求（聊天/模型列表/生图/视频任务等）的" +
+                                "地址、请求头、请求体与响应；流式响应记录帧原文前缀",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    Switch(
+                        checked = networkLogEnabled,
+                        onCheckedChange = { settings.setNetworkLogEnabled(it) },
+                    )
+                }
+                HorizontalDivider(Modifier.padding(vertical = 6.dp))
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable(onClick = onOpenNetworkLog),
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text("查看网络日志", style = MaterialTheme.typography.bodyMedium)
+                        Text(
+                            "按时间倒序查看每条请求详情，JSON 可视化展开折叠",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    Icon(
+                        Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                HorizontalDivider(Modifier.padding(vertical = 6.dp))
+                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+                    Text("保留条数", style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
+                    TextButton(onClick = { showLogKeepEdit = true }) { Text("$networkLogKeep 条  修改") }
                 }
             }
             SectionCard(title = "数据") {
@@ -272,6 +328,26 @@ fun SettingsScreen(onBack: () -> Unit, onOpenCreations: () -> Unit) {
                 }) { Text("导出") }
             },
             dismissButton = { TextButton(onClick = { showExportDialog = false }) { Text("取消") } },
+        )
+    }
+
+    if (showLogKeepEdit) {
+        TextFieldDialog(
+            title = "网络日志保留条数",
+            initial = networkLogKeep.toString(),
+            onDismiss = { showLogKeepEdit = false },
+            onValidate = { v ->
+                val n = v.trim().toIntOrNull()
+                when {
+                    n == null -> "请输入数字"
+                    n < 50 || n > 2000 -> "范围 50 ~ 2000 条"
+                    else -> null
+                }
+            },
+            onConfirm = { v ->
+                v.trim().toIntOrNull()?.let { settings.setNetworkLogKeep(it) }
+                showLogKeepEdit = false
+            },
         )
     }
 

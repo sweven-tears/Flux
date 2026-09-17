@@ -337,14 +337,17 @@ fun LanScreen(
                         append("2. 客户端 Base URL 填上方地址（如 http://192.168.1.5:$lanPort/v1）\n")
                         append("   支持 mDNS 的设备（iOS/macOS/Win10+）可直接填 http://$mdnsName:$lanPort/v1\n")
                         append("3. API Key 随意填写（如 sk-phone），真正的鉴权是设备授权\n")
-                        append("4. 模型名称格式：厂商别名/模型名，完整列表见 GET /v1/models\n")
+                        append(
+                            "4. 模型名：单个模型写「厂商别名/模型名」（需开启上方「开放所有模型」），" +
+                                "聚合路由写 ${SmartAi.MODEL_NAME} 或 flux-组名；完整列表见 GET /v1/models\n",
+                        )
                         append("5. 新设备首次访问会产生「待授权申请」，在上方批准后即可使用\n")
                         append("6. 客户端可携带请求头 X-Device-Id 自定义设备标识\n")
                         append("7. 进入「已授权设备」页长按设备卡片，可撤销/拉黑或单独设置响应模式，${SmartAi.MODEL_NAME} 请求按设备生效\n")
                         append(
                             "8. 视频生成（Sora 兼容）：POST /v1/videos {\"model\":\"厂商别名/模型名\",\"prompt\":\"...\"} " +
                                 "→ 轮询 GET /v1/videos/{id} 至 completed → GET /v1/videos/{id}/content 下载 mp4" +
-                                "（model 须为标记了视频输出的模型）",
+                                "（model 须为标记了视频输出的模型，且已开启「开放所有模型」）",
                         )
                     },
                     style = MaterialTheme.typography.bodySmall,

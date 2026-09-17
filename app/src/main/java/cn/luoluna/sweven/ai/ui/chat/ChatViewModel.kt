@@ -72,6 +72,7 @@ import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 
@@ -632,33 +633,60 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         else -> null
     }
 
-    /** 构建聊天请求体（单个模型与 smartAi 候选共用）；模型窗口已知时把历史裁进预算 */
+    /**
+     * 一次请求内的消息数组缓存：命中同一窗口的候选（含全部未配置窗口的候选）复用同一份 JSON。
+     * flux-auto 的候选是全部启用模型，逐个重编码整段历史（含图片 data URL）会成倍放大耗时与内存。
+     */
+    private class MessagesCache {
+        private val entries = HashMap<Int, CachedMessages>()
+        fun keyOf(model: ModelEntity): Int = model.contextWindow?.takeIf { it > 0 } ?: 0
+        fun get(key: Int): CachedMessages? = entries[key]
+        fun put(key: Int, value: CachedMessages) { entries[key] = value }
+    }
+
+    private data class CachedMessages(val json: JsonArray, val dropped: Int, val stripped: Int)
+
+    /**
+     * 构建聊天请求体（单个模型与路由候选共用）；模型窗口已知时把历史裁进预算。
+     * [cache] 非空时按窗口复用消息数组，裁剪统计随缓存一并取出。
+     */
     private suspend fun buildRequestBody(
         provider: ProviderEntity,
         model: ModelEntity,
         conversation: ConversationEntity?,
         history: List<MessageEntity>,
+        cache: MessagesCache? = null,
     ): BuiltBody {
-        var chatMessages = history.map {
-            // 助手消息里的图片是模型产出（生图结果），不回传上游：Anthropic 不允许 assistant 携带图片
-            Triple(it.role, it.content, if (it.role == Role.ASSISTANT) emptyList() else it.images)
-        }
         val systemPrompt = conversation?.systemPrompt?.takeIf { it.isNotBlank() }
         var dropped = 0
         var strippedImages = 0
-        val window = model.contextWindow
-        if (window != null && window > 0) {
-            // 预算取窗口的 90%，先扣除 systemPrompt 的份额
-            val systemTokens = systemPrompt?.let { estimateTextTokens(it) + 4 } ?: 0
-            val trimmed = trimToBudget(chatMessages, window * 9 / 10 - systemTokens)
-            chatMessages = trimmed.items
-            dropped = trimmed.droppedCount
-            strippedImages = trimmed.strippedImageCount
-        }
-        val messagesJson = if (systemPrompt != null) {
-            buildMessagesJson(listOf(Triple(Role.SYSTEM, systemPrompt, emptyList<String>())) + chatMessages)
+        val cacheKey = cache?.keyOf(model)
+        val cached = cacheKey?.let { cache?.get(it) }
+        val messagesJson: JsonArray
+        if (cached != null) {
+            messagesJson = cached.json
+            dropped = cached.dropped
+            strippedImages = cached.stripped
         } else {
-            buildMessagesJson(chatMessages)
+            var chatMessages = history.map {
+                // 助手消息里的图片是模型产出（生图结果），不回传上游：Anthropic 不允许 assistant 携带图片
+                Triple(it.role, it.content, if (it.role == Role.ASSISTANT) emptyList() else it.images)
+            }
+            val window = model.contextWindow
+            if (window != null && window > 0) {
+                // 预算取窗口的 90%，先扣除 systemPrompt 的份额
+                val systemTokens = systemPrompt?.let { estimateTextTokens(it) + 4 } ?: 0
+                val trimmed = trimToBudget(chatMessages, window * 9 / 10 - systemTokens)
+                chatMessages = trimmed.items
+                dropped = trimmed.droppedCount
+                strippedImages = trimmed.strippedImageCount
+            }
+            messagesJson = if (systemPrompt != null) {
+                buildMessagesJson(listOf(Triple(Role.SYSTEM, systemPrompt, emptyList<String>())) + chatMessages)
+            } else {
+                buildMessagesJson(chatMessages)
+            }
+            if (cacheKey != null) cache?.put(cacheKey, CachedMessages(messagesJson, dropped, strippedImages))
         }
         var body = buildChatBody(
             modelName = model.name,
@@ -869,8 +897,9 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         // 各候选按各自窗口裁剪上下文，取最坏情况作提示
         var maxDropped = 0
         var maxStripped = 0
+        val messagesCache = MessagesCache()
         val prepared = routes.mapNotNull { (providerId, modelName) ->
-            val resolved = resolveRouteMember(providerId, modelName, conversation, history)
+            val resolved = resolveRouteMember(providerId, modelName, conversation, history, messagesCache)
                 ?: return@mapNotNull null
             if (resolved.dropped > maxDropped) maxDropped = resolved.dropped
             if (resolved.stripped > maxStripped) maxStripped = resolved.stripped
@@ -918,8 +947,9 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         )
         var maxDropped = 0
         var maxStripped = 0
+        val messagesCache = MessagesCache()
         val prepared = members.mapNotNull { member ->
-            val resolved = resolveRouteMember(member.providerId, member.modelName, conversation, history)
+            val resolved = resolveRouteMember(member.providerId, member.modelName, conversation, history, messagesCache)
                 ?: return@mapNotNull null
             if (resolved.dropped > maxDropped) maxDropped = resolved.dropped
             if (resolved.stripped > maxStripped) maxStripped = resolved.stripped
@@ -952,12 +982,16 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         val stripped: Int,
     )
 
-    /** 解析一个路由成员（smartAi 候选/分组成员共用）：跳过停用厂商、缺 Key、自连网关；附上下文裁剪统计 */
+    /**
+     * 解析一个路由成员（flux-auto 候选/分组成员共用）：跳过停用厂商、缺 Key、自连网关；附上下文裁剪统计。
+     * [cache] 用于同一次请求内复用消息数组（全部候选枚举一遍时避免重复编码历史）。
+     */
     private suspend fun resolveRouteMember(
         providerId: Long,
         modelName: String,
         conversation: ConversationEntity?,
         history: List<MessageEntity>,
+        cache: MessagesCache? = null,
     ): ResolvedMember? {
         val resolved = router.resolveById(providerId, modelName) ?: return null
         val key = resolved.apiKey ?: return null
@@ -966,7 +1000,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         // 模型配置行可能已被删除，此时退回空配置继续路由
         val model = resolved.model
             ?: ModelEntity(providerId = resolved.provider.id, name = modelName)
-        val built = buildRequestBody(resolved.provider, model, conversation, history)
+        val built = buildRequestBody(resolved.provider, model, conversation, history, cache)
         val candidate = SmartCandidate(
             label = "${resolved.provider.alias}/${model.alias?.takeIf { it.isNotBlank() } ?: model.name}",
             providerId = resolved.provider.id,

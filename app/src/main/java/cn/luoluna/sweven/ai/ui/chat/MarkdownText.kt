@@ -56,7 +56,8 @@ import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import cn.luoluna.sweven.ai.ui.common.InAppBrowser
+import cn.luoluna.sweven.ai.ui.common.InAppBrowserPayload
+import cn.luoluna.sweven.ai.ui.common.LocalInAppBrowser
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
@@ -345,12 +346,7 @@ fun buildPreviewHtml(lang: String?, code: String): String {
     return if (isHtml) ensureViewport(trimmed) else "$PREVIEW_SHELL_HEAD$trimmed</body></html>"
 }
 
-/** 点击入口：内置浏览器打开网页 / 内置 WebView 渲染代码块预览 */
-private sealed interface Preview {
-    data class Web(val url: String) : Preview
-    data class Html(val html: String) : Preview
-}
-
+/** 点击入口：链接交给内置浏览器页打开；代码块生成 HTML 后同样交给内置浏览器页 */
 @Composable
 fun MarkdownText(
     text: String,
@@ -358,7 +354,7 @@ fun MarkdownText(
     style: TextStyle = MaterialTheme.typography.bodyMedium,
 ) {
     val context = LocalContext.current
-    var preview by remember { mutableStateOf<Preview?>(null) }
+    val openBrowser = LocalInAppBrowser.current
     val blocks = remember(text) { parseBlocks(text) }
 
     Column(modifier = modifier, verticalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -367,7 +363,7 @@ fun MarkdownText(
                 is MdBlock.Text -> MarkdownParagraph(block.content, style) { raw ->
                     val url = normalizeUrl(raw)
                     if (url.startsWith("http://", true) || url.startsWith("https://", true)) {
-                        preview = Preview.Web(url)
+                        openBrowser(InAppBrowserPayload(url = url))
                     } else {
                         // mailto:、tel: 等非网页链接交给系统处理
                         runCatching {
@@ -378,18 +374,14 @@ fun MarkdownText(
                 is MdBlock.Code -> CodeBlockView(
                     code = block,
                     onPreview = {
-                        preview = Preview.Html(buildPreviewHtml(block.lang, block.content))
+                        openBrowser(
+                            InAppBrowserPayload(content = buildPreviewHtml(block.lang, block.content))
+                        )
                     },
                 )
                 is MdBlock.Table -> MdTableView(block)
             }
         }
-    }
-
-    when (val p = preview) {
-        is Preview.Web -> InAppBrowser(url = p.url, onDismiss = { preview = null })
-        is Preview.Html -> InAppBrowser(content = p.html, onDismiss = { preview = null })
-        null -> Unit
     }
 }
 

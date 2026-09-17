@@ -71,7 +71,8 @@ import cn.luoluna.sweven.ai.ui.chat.plugin.ChatUiRegistry
 import cn.luoluna.sweven.ai.ui.chat.plugin.PluginPickerDialog
 import cn.luoluna.sweven.ai.ui.chat.plugin.activePlugin
 import cn.luoluna.sweven.ai.ui.common.ConfirmDialog
-import cn.luoluna.sweven.ai.ui.common.InAppBrowser
+import cn.luoluna.sweven.ai.ui.common.InAppBrowserPayload
+import cn.luoluna.sweven.ai.ui.common.LocalInAppBrowser
 import cn.luoluna.sweven.ai.ui.common.TextFieldDialog
 import cn.luoluna.sweven.ai.ui.common.formatTokens
 import cn.luoluna.sweven.ai.ui.common.openImageExternally
@@ -87,12 +88,15 @@ import kotlinx.coroutines.launch
 fun ChatScreen(
     onGoProviders: () -> Unit,
     onOpenSettings: () -> Unit,
+    onOpenFreeCopy: (Long) -> Unit,
     pendingConversationId: Long? = null,
     onConsumePendingConversation: () -> Unit = {},
     vm: ChatViewModel = viewModel(),
 ) {
     val context = LocalContext.current
     val app = context.applicationContext as App
+    // 内置浏览器打开入口（CompositionLocal 由 PhoneRouterApp 提供），消息网页视图渲染等用
+    val openInAppBrowser = LocalInAppBrowser.current
     val drawerState = rememberDrawerState(DrawerValue.Closed)
     val scope = rememberCoroutineScope()
     val focusManager = LocalFocusManager.current
@@ -186,7 +190,7 @@ fun ChatScreen(
     }
 
     var attachments by remember { mutableStateOf(listOf<android.net.Uri>()) }
-    var input by remember { mutableStateOf("") }
+    var input by rememberSaveable { mutableStateOf("") }
     var detailMessage by remember { mutableStateOf<MessageEntity?>(null) }
     var fullImage by remember { mutableStateOf<androidx.compose.ui.graphics.ImageBitmap?>(null) }
     var showNewFolder by remember { mutableStateOf(false) }
@@ -200,8 +204,6 @@ fun ChatScreen(
     var selectedFolderTab by remember { mutableStateOf<Long?>(null) }
     // 消息「更多」相关弹层
     var actionMessage by remember { mutableStateOf<MessageEntity?>(null) }
-    var freeCopyMessage by remember { mutableStateOf<MessageEntity?>(null) }
-    var webRenderMessage by remember { mutableStateOf<MessageEntity?>(null) }
     var deleteMessageTarget by remember { mutableStateOf<MessageEntity?>(null) }
     var systemPromptOpen by remember { mutableStateOf(false) }
     // 消息编辑态：正在编辑的原消息 + 保留的原图（已是 data URL，不再压缩）
@@ -597,8 +599,10 @@ fun ChatScreen(
             message = msg,
             onDismiss = { actionMessage = null },
             actions = MessageActions(
-                onFreeCopy = { freeCopyMessage = msg },
-                onWebRender = { webRenderMessage = msg },
+                onFreeCopy = { onOpenFreeCopy(msg.id) },
+                onWebRender = {
+                    openInAppBrowser(InAppBrowserPayload(content = buildMessageHtml(msg.content)))
+                },
                 onEdit = if (msg.role == Role.USER) {
                     {
                         input = msg.content
@@ -637,12 +641,6 @@ fun ChatScreen(
                 attachEnabled = showImageInput,
             ),
         )
-    }
-    freeCopyMessage?.let { msg ->
-        FullScreenCopyDialog(message = msg, onDismiss = { freeCopyMessage = null })
-    }
-    webRenderMessage?.let { msg ->
-        InAppBrowser(content = buildMessageHtml(msg.content), onDismiss = { webRenderMessage = null })
     }
     deleteMessageTarget?.let { msg ->
         DeleteMessageDialog(

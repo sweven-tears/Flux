@@ -346,6 +346,10 @@ interface MessageDao {
     @Query("SELECT * FROM messages WHERE conversationId = :conversationId ORDER BY id ASC")
     fun observeForConversation(conversationId: Long): Flow<List<MessageEntity>>
 
+    /** 单条消息实时观察，供自由复制等按 id 打开的页面 */
+    @Query("SELECT * FROM messages WHERE id = :id")
+    fun observeById(id: Long): Flow<MessageEntity?>
+
     @Query("SELECT * FROM messages WHERE conversationId = :conversationId ORDER BY id ASC")
     suspend fun forConversation(conversationId: Long): List<MessageEntity>
 
@@ -477,6 +481,10 @@ interface RequestLogDao {
 interface NetworkLogDao {
     @Query("SELECT * FROM network_logs ORDER BY id DESC LIMIT :limit")
     fun observeRecent(limit: Int): Flow<List<NetworkLogEntity>>
+
+    /** 单条日志实时观察，供请求详情页按 id 打开 */
+    @Query("SELECT * FROM network_logs WHERE id = :id")
+    fun observeById(id: Long): Flow<NetworkLogEntity?>
 
     @Insert
     suspend fun insert(e: NetworkLogEntity): Long

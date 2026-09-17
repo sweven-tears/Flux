@@ -11,14 +11,10 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.only
-import androidx.compose.foundation.layout.safeDrawing
-import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
@@ -31,7 +27,6 @@ import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -53,20 +48,20 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.window.Dialog
-import androidx.compose.ui.window.DialogProperties
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
 import cn.luoluna.sweven.ai.App
 import cn.luoluna.sweven.ai.data.db.NetworkLogEntity
+import cn.luoluna.sweven.ai.ui.common.FullPageScaffold
 import cn.luoluna.sweven.ai.ui.common.JsonViewer
 import cn.luoluna.sweven.ai.ui.common.MonoFont
 import cn.luoluna.sweven.ai.ui.common.isJsonText
 import cn.luoluna.sweven.ai.ui.common.prettyJson
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
@@ -75,7 +70,7 @@ import java.util.Locale
 
 /**
  * 全局网络日志页：App 发出的每条出站 HTTP 请求（开关在设置页打开后开始记录）。
- * 列表按时间倒序；点条目进全屏详情，请求/响应体 JSON 提供树形可视化。
+ * 列表按时间倒序；点条目进请求详情页，请求/响应体 JSON 提供树形可视化。
  */
 class NetworkLogViewModel(app: Application) : AndroidViewModel(app) {
     private val db = (app as App).database
@@ -93,10 +88,10 @@ private val logTimeFmt = SimpleDateFormat("MM-dd HH:mm:ss", Locale.getDefault())
 @Composable
 fun NetworkLogScreen(
     onBack: () -> Unit,
+    onOpenDetail: (Long) -> Unit,
     vm: NetworkLogViewModel = viewModel(),
 ) {
     val logs by vm.logs.collectAsStateWithLifecycle()
-    var detailTarget by remember { mutableStateOf<NetworkLogEntity?>(null) }
     var clearConfirm by remember { mutableStateOf(false) }
 
     Scaffold(
@@ -144,14 +139,10 @@ fun NetworkLogScreen(
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 items(logs, key = { it.id }) { log ->
-                    NetworkLogRow(log = log, onClick = { detailTarget = log })
+                    NetworkLogRow(log = log, onClick = { onOpenDetail(log.id) })
                 }
             }
         }
-    }
-
-    detailTarget?.let { log ->
-        NetworkLogDetailDialog(log = log, onDismiss = { detailTarget = null })
     }
 
     if (clearConfirm) {
@@ -237,60 +228,45 @@ private fun NetworkLogRow(log: NetworkLogEntity, onClick: () -> Unit) {
     }
 }
 
-/** 全屏请求详情：基本信息 + 请求头/体 + 响应头/体，JSON 提供树形/原文切换，各段可复制 */
+/** 请求详情页：基本信息 + 请求头/体 + 响应头/体，JSON 提供树形/原文切换，各段可复制 */
 @Composable
-private fun NetworkLogDetailDialog(log: NetworkLogEntity, onDismiss: () -> Unit) {
-    Dialog(
-        onDismissRequest = onDismiss,
-        // decorFitsSystemWindows=false：Dialog 子窗口进入 edge-to-edge，
-        // insets 原样传给 Compose 层——默认 true 时部分机型全屏子窗口
-        // 拿到的 safeDrawing 为 0，底部内容被手势条裁掉且滑不出来
-        properties = DialogProperties(
-            usePlatformDefaultWidth = false,
-            decorFitsSystemWindows = false,
-        ),
-    ) {
-        Surface(Modifier.fillMaxSize()) {
+fun NetworkLogDetailScreen(id: Long, onBack: () -> Unit) {
+    val app = LocalContext.current.applicationContext as App
+    var loaded by remember(id) { mutableStateOf(false) }
+    val log by remember(id) {
+        app.database.networkLogDao().observeById(id).onEach { loaded = true }
+    }.collectAsStateWithLifecycle(initialValue = null)
+
+    FullPageScaffold(title = "请求详情", onBack = onBack) { padding ->
+        val l = log
+        if (l == null) {
             Column(
                 Modifier
                     .fillMaxSize()
-                    .windowInsetsPadding(
-                        WindowInsets.safeDrawing.only(
-                            androidx.compose.foundation.layout.WindowInsetsSides.Top +
-                                androidx.compose.foundation.layout.WindowInsetsSides.Bottom
-                        )
-                    ),
+                    .padding(padding)
+                    .padding(32.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.Center,
             ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(end = 8.dp),
-                ) {
-                    IconButton(onClick = onDismiss) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
-                    }
-                    Text(
-                        "请求详情",
-                        style = MaterialTheme.typography.titleMedium,
-                        modifier = Modifier.weight(1f),
-                    )
-                }
-                HorizontalDivider()
-                Column(
-                    Modifier
-                        .weight(1f)
-                        .fillMaxWidth()
-                        .verticalScroll(rememberScrollState())
-                        .padding(12.dp),
-                    verticalArrangement = Arrangement.spacedBy(12.dp),
-                ) {
-                    InfoSection(log)
-                    log.requestHeaders?.let { BodySection("请求头", it) }
-                    log.requestBody?.let { BodySection("请求体", it) }
-                    log.responseHeaders?.let { BodySection("响应头", it) }
-                    log.responseBody?.let { BodySection("响应体", it) }
-                }
+                Text(
+                    if (loaded) "该记录已被清除" else "加载中…",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        } else {
+            Column(
+                Modifier
+                    .fillMaxSize()
+                    .padding(padding)
+                    .verticalScroll(rememberScrollState())
+                    .padding(12.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                InfoSection(l)
+                l.requestHeaders?.let { BodySection("请求头", it) }
+                l.requestBody?.let { BodySection("请求体", it) }
+                l.responseHeaders?.let { BodySection("响应头", it) }
+                l.responseBody?.let { BodySection("响应体", it) }
             }
         }
     }

@@ -6,14 +6,12 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
@@ -26,10 +24,8 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Block
 import androidx.compose.material.icons.filled.Delete
-import androidx.compose.material.icons.filled.Category
 import androidx.compose.material.icons.filled.DragIndicator
 import androidx.compose.material.icons.filled.Hub
 import androidx.compose.material.icons.filled.KeyboardArrowDown
@@ -71,12 +67,10 @@ import cn.luoluna.sweven.ai.data.SmartModes
 import cn.luoluna.sweven.ai.data.db.ModelEntity
 import cn.luoluna.sweven.ai.data.db.ModelType
 import cn.luoluna.sweven.ai.data.db.ProviderEntity
-import cn.luoluna.sweven.ai.data.db.SmartRouteEntity
 import cn.luoluna.sweven.ai.data.db.SmartRouteGroupEntity
 import cn.luoluna.sweven.ai.data.db.SmartRouteMemberEntity
 import cn.luoluna.sweven.ai.data.repo.CapabilityGap
 import cn.luoluna.sweven.ai.data.repo.ModelIdGrouper
-import cn.luoluna.sweven.ai.data.repo.SmartAi
 import cn.luoluna.sweven.ai.data.repo.SmartHealth
 import cn.luoluna.sweven.ai.data.repo.capabilityGaps
 import cn.luoluna.sweven.ai.data.repo.intersectCapability
@@ -94,16 +88,16 @@ import cn.luoluna.sweven.ai.ui.common.reorderHandle
 import kotlinx.coroutines.launch
 
 /**
- * 智能路由配置：分段切换「路由分组」（flux-xxx 组，组内自动切换）与「聚合模型」
- * （smartAi 回退链：长按拖动排序，侧滑可禁用/移除候选，右上角分类查看/添加候选）。
+ * 智能路由配置：路由参数（响应模式/各档首字超时/轮巡/冷却）+ 路由分组
+ * （flux-xxx 组，组内自动切换；长按拖动排序，侧滑可禁用/删除）。
+ * flux-auto 聚合路由不再是这里配置的候选链——它固定聚合全部启用模型（厂商顺序×模型顺序），
+ * 因此本页不再有它的开关与说明。
  */
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
 fun SmartRouteScreen(onBack: () -> Unit) {
     val app = LocalContext.current.applicationContext as App
     val scope = rememberCoroutineScope()
-    val entries by remember { app.database.smartRouteDao().observeAll() }
-        .collectAsStateWithLifecycle(emptyList())
     val providers by remember { app.database.providerDao().observeAll() }
         .collectAsStateWithLifecycle(emptyList())
     val models by remember { app.database.modelDao().observeEnabled() }
@@ -135,8 +129,6 @@ fun SmartRouteScreen(onBack: () -> Unit) {
     var showModeDialog by remember { mutableStateOf(false) }
     var showFastEdit by remember { mutableStateOf(false) }
     var showLeisureEdit by remember { mutableStateOf(false) }
-    var showAddModels by remember { mutableStateOf(false) }
-    var showCategoryView by remember { mutableStateOf(false) }
     var showAddGroup by remember { mutableStateOf(false) }
     var showParamsSheet by remember { mutableStateOf(false) }
     // 分组添加成员半窗的目标分组
@@ -145,23 +137,16 @@ fun SmartRouteScreen(onBack: () -> Unit) {
     // 短板明细半窗目标分组；「调整能力」打开模型编辑器的目标模型
     var gapSheetGroup by remember { mutableStateOf<SmartRouteGroupEntity?>(null) }
     var editGapModel by remember { mutableStateOf<ModelEntity?>(null) }
-    // flux-auto 聚合卡展开状态（候选管理/只读聚合链）
-    var smartAutoExpanded by remember { mutableStateOf(false) }
-    // 开放所有模型：flux-auto 候选 = 启用厂商×启用模型聚合链（局域网页「聚合路由服务」切换）
-    val smartAutoAllModels by app.settings.smartAutoAllModels.collectAsStateWithLifecycle(false)
     // 路由分组：手风琴展开状态（一次最多展开一个，默认收起）
     var expandedGroupId by remember { mutableStateOf<Long?>(null) }
 
-    // 拖拽换位后的本地顺序，落库完成前临时覆盖 Flow 数据
-    var localOrder by remember { mutableStateOf<List<SmartRouteEntity>?>(null) }
-    val display = localOrder ?: entries
     val listState = rememberLazyListState()
-    // 侧滑操作：同一时间至多一行滑开（候选 c<id> / 分组 g<id> / 成员 m<id> 共用），滚动列表时收回
+    // 侧滑操作：同一时间至多一行滑开（分组卡 g<id> / 成员 m<id> 共用），滚动列表时收回
     var openSwipeKey by remember { mutableStateOf<String?>(null) }
     LaunchedEffect(listState.isScrollInProgress) {
         if (listState.isScrollInProgress) openSwipeKey = null
     }
-    // 单列表单拖序状态：key 分三类——候选 Long、分组卡 g<id>、分组成员 m<id>，换位时按类型分发
+    // 单列表单拖序状态：key 两类——分组卡 g<id>、分组成员 m<id>，换位时按类型分发
     val reorderState = rememberReorderState(
         listState,
         onDragStart = { key ->
@@ -173,20 +158,6 @@ fun SmartRouteScreen(onBack: () -> Unit) {
             }
         },
     ) { fromKey, toKey ->
-        // smartAi 候选换位（key 为条目 id Long），sortOrder 重编号落库
-        if (fromKey is Long && toKey is Long) {
-            val from = display.indexOfFirst { it.id == fromKey }
-            val to = display.indexOfFirst { it.id == toKey }
-            if (from < 0 || to < 0 || from == to) return@rememberReorderState
-            val reordered = display.toMutableList().apply { add(to, removeAt(from)) }
-                .mapIndexed { index, e -> e.copy(sortOrder = index) }
-            localOrder = reordered
-            scope.launch {
-                app.database.smartRouteDao().updateAll(reordered)
-                localOrder = null
-            }
-            return@rememberReorderState
-        }
         if (fromKey is String && toKey is String) {
             // 分组卡片换位（key 形如 g<id>），sortOrder 重编号落库
             if (fromKey.startsWith("g") && toKey.startsWith("g")) {
@@ -251,69 +222,6 @@ fun SmartRouteScreen(onBack: () -> Unit) {
                 state = listState,
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
-                // ---------------- flux-auto 聚合模型 ----------------
-                item(key = "smart_auto") {
-                    SmartAutoCard(
-                        candidateCount = display.size,
-                        allModels = smartAutoAllModels,
-                        expanded = smartAutoExpanded,
-                        onToggleExpand = { smartAutoExpanded = !smartAutoExpanded },
-                        modifier = Modifier.animateItem(),
-                    )
-                }
-                if (smartAutoExpanded) {
-                    if (smartAutoAllModels) {
-                        item(key = "smart_all") {
-                            AllModelsChainCard(
-                                providers = providers,
-                                models = models,
-                                modifier = Modifier.animateItem(),
-                            )
-                        }
-                    } else {
-                        item(key = "smart_actions") {
-                            Row(modifier = Modifier.fillMaxWidth()) {
-                                TextButton(onClick = { showAddModels = true }) { Text("添加候选模型") }
-                                TextButton(onClick = { showCategoryView = true }) { Text("分类查看") }
-                            }
-                        }
-                        if (display.isEmpty()) {
-                            item(key = "smart_empty") {
-                                Column(
-                                    Modifier.fillMaxWidth().padding(vertical = 16.dp),
-                                    horizontalAlignment = Alignment.CenterHorizontally,
-                                ) {
-                                    Text("还没有候选模型", style = MaterialTheme.typography.titleSmall)
-                                    Text(
-                                        "添加模型后即可在聊天中选择 ${SmartAi.MODEL_NAME}",
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                        modifier = Modifier.padding(top = 4.dp),
-                                    )
-                                }
-                            }
-                        } else {
-                            items(display, key = { it.id }) { entry ->
-                                SmartRouteRow(
-                                    entry = entry,
-                                    providers = providers,
-                                    models = models,
-                                    reorderState = reorderState,
-                                    modifier = Modifier.animateItem(),
-                                    isOpen = openSwipeKey == "c${entry.id}",
-                                    onOpenChange = { open -> openSwipeKey = if (open) "c${entry.id}" else null },
-                                    onToggle = { nv ->
-                                        scope.launch { app.database.smartRouteDao().update(entry.copy(enabled = nv)) }
-                                    },
-                                    onRemove = {
-                                        scope.launch { app.database.smartRouteDao().delete(entry) }
-                                    },
-                                )
-                            }
-                        }
-                    }
-                }
-
                 // ---------------- 路由分组 ----------------
                 item(key = "groups_header") {
                     Row(
@@ -546,14 +454,6 @@ fun SmartRouteScreen(onBack: () -> Unit) {
             },
         )
     }
-    if (showCategoryView) {
-        CategoryViewSheet(
-            entries = display,
-            providers = providers,
-            models = models,
-            onDismiss = { showCategoryView = false },
-        )
-    }
     if (showParamsSheet) {
         RouteParamsSheet(
             responseMode = responseMode,
@@ -571,27 +471,6 @@ fun SmartRouteScreen(onBack: () -> Unit) {
             onEditRounds = { showRoundsEdit = true },
             onEditCooldownThreshold = { showCooldownThresholdEdit = true },
             onEditCooldownSeconds = { showCooldownSecondsEdit = true },
-        )
-    }
-    if (showAddModels) {
-        AddCandidatesSheet(
-            candidates = availableCandidates(providers, models, display),
-            onDismiss = { showAddModels = false },
-            onConfirm = { selected ->
-                scope.launch {
-                    val base = (app.database.smartRouteDao().maxSortOrder() ?: -1) + 1
-                    app.database.smartRouteDao().insertAll(
-                        selected.mapIndexed { i, m ->
-                            SmartRouteEntity(
-                                providerId = m.providerId,
-                                modelName = m.name,
-                                sortOrder = base + i,
-                            )
-                        }
-                    )
-                    showAddModels = false
-                }
-            },
         )
     }
     if (showAddGroup) {
@@ -702,239 +581,6 @@ fun SmartRouteScreen(onBack: () -> Unit) {
     }
 }
 
-/** 可加入智能路由的候选：启用中的 chat 模型或具备图像输出能力的模型（如 Gemini 图像生成），且尚未在列表里 */
-private fun availableCandidates(
-    providers: List<ProviderEntity>,
-    models: List<ModelEntity>,
-    entries: List<SmartRouteEntity>,
-): List<Pair<ProviderEntity, ModelEntity>> {
-    val existing = entries.map { it.providerId to it.modelName }.toSet()
-    return models.filter { m ->
-        (m.type == ModelType.CHAT || m.outputImage) && (m.providerId to m.name) !in existing
-    }.mapNotNull { m -> providers.firstOrNull { it.id == m.providerId }?.let { it to m } }
-}
-
-/** flux-auto 聚合卡：手动候选链 / 开放所有模型双模式摘要，点击展开管理（候选管理或只读聚合链） */
-@Composable
-private fun SmartAutoCard(
-    candidateCount: Int,
-    allModels: Boolean,
-    expanded: Boolean,
-    onToggleExpand: () -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    Card(modifier) {
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            modifier = Modifier
-                .fillMaxWidth()
-                .clickable(onClick = onToggleExpand)
-                .padding(horizontal = 12.dp, vertical = 10.dp),
-        ) {
-            Icon(
-                Icons.Filled.AutoAwesome,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.primary,
-            )
-            Column(
-                Modifier
-                    .weight(1f)
-                    .padding(start = 10.dp),
-            ) {
-                Text(
-                    "${SmartAi.MODEL_NAME}（聚合模型）",
-                    style = MaterialTheme.typography.bodyMedium,
-                    fontFamily = FontFamily.Monospace,
-                )
-                Text(
-                    if (allModels) {
-                        "已开放所有模型：按厂商顺序+模型顺序聚合，健康度动态调度取长补短"
-                    } else {
-                        "手动候选链 · $candidateCount 个候选，按顺序回退；可在局域网页切换为开放所有模型"
-                    },
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-            Icon(
-                if (expanded) Icons.Filled.KeyboardArrowUp else Icons.Filled.KeyboardArrowDown,
-                contentDescription = if (expanded) "收起聚合模型" else "展开聚合模型",
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
-    }
-}
-
-/** 开放所有模型时的 flux-auto 聚合链只读视图：启用厂商 × 启用模型，按厂商配置顺序与模型顺序排列 */
-@Composable
-private fun AllModelsChainCard(
-    providers: List<ProviderEntity>,
-    models: List<ModelEntity>,
-    modifier: Modifier = Modifier,
-) {
-    val chain = remember(providers, models) {
-        providers.filter { it.enabled }.flatMap { provider ->
-            models.filter {
-                it.providerId == provider.id && (it.type == ModelType.CHAT || it.outputImage)
-            }.map { provider to it }
-        }
-    }
-    Card(modifier) {
-        Column(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 10.dp)) {
-            Text("全部启用模型聚合链", style = MaterialTheme.typography.titleSmall)
-            Text(
-                "按「厂商配置顺序 × 模型顺序」聚合全部启用模型；健康度三桶动态排序，冷却/失败候选自动垫底，" +
-                    "极速模式首轮只发实测达标的候选。候选来源在「局域网 → 聚合路由服务 · 开放所有模型」切换。",
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(top = 4.dp),
-            )
-            HorizontalDivider(Modifier.padding(vertical = 8.dp))
-            if (chain.isEmpty()) {
-                Text(
-                    "没有可聚合的启用模型（请先在厂商页添加并启用）",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            } else {
-                chain.forEach { (provider, model) ->
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(vertical = 3.dp),
-                    ) {
-                        Text(
-                            "${provider.alias} / ${model.alias?.takeIf { it.isNotBlank() } ?: model.name}",
-                            style = MaterialTheme.typography.bodySmall,
-                            maxLines = 1,
-                            modifier = Modifier
-                                .weight(1f)
-                                .basicMarquee(),
-                        )
-                        Text(
-                            model.name,
-                            style = MaterialTheme.typography.labelSmall,
-                            fontFamily = FontFamily.Monospace,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            maxLines = 1,
-                            modifier = Modifier
-                                .padding(start = 8.dp)
-                                .basicMarquee(),
-                        )
-                    }
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun SmartRouteRow(
-    entry: SmartRouteEntity,
-    providers: List<ProviderEntity>,
-    models: List<ModelEntity>,
-    reorderState: ReorderState,
-    modifier: Modifier = Modifier,
-    isOpen: Boolean,
-    onOpenChange: (Boolean) -> Unit,
-    onToggle: (Boolean) -> Unit,
-    onRemove: () -> Unit,
-) {
-    val provider = providers.firstOrNull { it.id == entry.providerId }
-    val model = models.firstOrNull { it.providerId == entry.providerId && it.name == entry.modelName }
-    val displayName = model?.alias?.takeIf { it.isNotBlank() } ?: entry.modelName
-    // 进程内健康度快照（静态读取，进页面时可见，不实时刷新）
-    val health = SmartHealth.info(entry.providerId, entry.modelName)
-
-    SwipeRevealActions(
-        modifier = modifier.reorderDragged(reorderState, entry.id),
-        actions = listOf(
-            SwipeAction(
-                label = if (entry.enabled) "禁用" else "启用",
-                icon = if (entry.enabled) Icons.Filled.Block else Icons.Filled.PlayArrow,
-                container = MaterialTheme.colorScheme.tertiaryContainer,
-                content = MaterialTheme.colorScheme.onTertiaryContainer,
-                onClick = { onToggle(!entry.enabled) },
-            ),
-            SwipeAction(
-                label = "移除",
-                icon = Icons.Filled.Delete,
-                container = MaterialTheme.colorScheme.errorContainer,
-                content = MaterialTheme.colorScheme.onErrorContainer,
-                onClick = onRemove,
-            ),
-        ),
-        isOpen = isOpen,
-        onOpenChange = onOpenChange,
-    ) {
-        Card {
-            Row(
-                Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 12.dp, vertical = 10.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Column(Modifier.weight(1f)) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text(
-                            "${provider?.alias ?: "?"} / $displayName",
-                            style = MaterialTheme.typography.bodyMedium,
-                            maxLines = 1,
-                            modifier = Modifier
-                                .weight(1f, fill = false)
-                                .basicMarquee(),
-                        )
-                        if (!entry.enabled) {
-                            Text(
-                                "  已禁用",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        }
-                        if (entry.enabled && health.cooling) {
-                            Text(
-                                "  冷却中",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.error,
-                            )
-                        }
-                        if (entry.enabled && !health.cooling && health.consecutiveFails > 0) {
-                            Text(
-                                "  连续失败 ${health.consecutiveFails} 次",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.tertiary,
-                            )
-                        }
-                    }
-                    Text(
-                        entry.modelName,
-                        style = MaterialTheme.typography.labelSmall,
-                        fontFamily = FontFamily.Monospace,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 1,
-                        modifier = Modifier.basicMarquee(),
-                    )
-                    if (health.firstTokenEwmaMs != null) {
-                        Text(
-                            "首字 ~${health.firstTokenEwmaMs}ms",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                }
-                Icon(
-                    Icons.Filled.DragIndicator,
-                    contentDescription = "长按拖动排序",
-                    tint = MaterialTheme.colorScheme.outlineVariant,
-                    modifier = Modifier.reorderHandle(reorderState, entry.id),
-                )
-            }
-        }
-    }
-}
-
-/** 两分段共用的路由参数摘要卡：一行摘要 + 「修改」打开参数半窗 */
 @Composable
 private fun RouteParamsSummaryCard(
     summary: String,
@@ -1595,273 +1241,6 @@ private fun sanitizeGroupKey(raw: String): String =
     raw.trim().lowercase()
         .replace(Regex("\\s+"), "-")
         .replace(Regex("[^a-z0-9._-]"), "")
-
-private data class CandidateRow(
-    val provider: ProviderEntity,
-    val model: ModelEntity,
-    val showHeader: Boolean,
-)
-
-/** 添加候选模型：搜索 + 厂商过滤 + 分组列表，多选后追加到回退链末尾 */
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-private fun AddCandidatesSheet(
-    candidates: List<Pair<ProviderEntity, ModelEntity>>,
-    onDismiss: () -> Unit,
-    onConfirm: (List<ModelEntity>) -> Unit,
-) {
-    var query by remember { mutableStateOf("") }
-    var providerFilter by remember { mutableStateOf<String?>(null) }
-    var checked by remember { mutableStateOf(emptySet<Pair<Long, String>>()) }
-
-    val providerAliases = remember(candidates) { candidates.map { it.first.alias }.distinct() }
-    val q = normalizeModelId(query)
-    val filtered = candidates.filter { (p, m) ->
-        (providerFilter == null || p.alias == providerFilter) &&
-            (q.isEmpty() || normalizeModelId("${m.name} ${m.alias.orEmpty()}").contains(q))
-    }
-    val rows = remember(filtered) {
-        buildList {
-            var lastAlias: String? = null
-            filtered.forEach { (p, m) ->
-                add(CandidateRow(p, m, p.alias != lastAlias))
-                lastAlias = p.alias
-            }
-        }
-    }
-
-    ModalBottomSheet(
-        onDismissRequest = onDismiss,
-        sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
-    ) {
-        Text(
-            "添加候选模型",
-            style = MaterialTheme.typography.titleMedium,
-            modifier = Modifier.padding(horizontal = 16.dp),
-        )
-        if (providerAliases.size > 1) {
-            Row(
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 16.dp)
-                    .horizontalScroll(rememberScrollState())
-                    .padding(bottom = 8.dp),
-            ) {
-                FilterChip(
-                    selected = providerFilter == null,
-                    onClick = { providerFilter = null },
-                    label = { Text("全部厂商") },
-                )
-                providerAliases.forEach { alias ->
-                    FilterChip(
-                        selected = providerFilter == alias,
-                        onClick = { providerFilter = if (providerFilter == alias) null else alias },
-                        label = { Text(alias, maxLines = 1) },
-                    )
-                }
-            }
-        }
-        if (rows.isEmpty()) {
-            Column(
-                Modifier
-                    .fillMaxWidth()
-                    .weight(1f)
-                    .padding(32.dp),
-                horizontalAlignment = Alignment.CenterHorizontally,
-            ) {
-                Text(
-                    if (candidates.isEmpty()) "没有可添加的模型：候选需为启用中的 chat 或图像生成模型"
-                    else "没有匹配的模型",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-        } else {
-            LazyColumn(Modifier.fillMaxWidth().weight(1f)) {
-                items(rows, key = { "${it.provider.id}_${it.model.name}" }) { row ->
-                    if (row.showHeader) {
-                        Text(
-                            row.provider.alias,
-                            style = MaterialTheme.typography.labelMedium,
-                            color = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier.padding(start = 16.dp, top = 8.dp, bottom = 2.dp),
-                        )
-                    }
-                    val key = row.model.providerId to row.model.name
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp),
-                    ) {
-                        Checkbox(
-                            checked = key in checked,
-                            onCheckedChange = { v -> checked = if (v) checked + key else checked - key },
-                        )
-                        Column(Modifier.weight(1f).padding(vertical = 6.dp)) {
-                            Text(
-                                row.model.alias?.takeIf { it.isNotBlank() }
-                                    ?.let { "${it}（${row.model.name}）" } ?: row.model.name,
-                                style = MaterialTheme.typography.bodySmall,
-                                maxLines = 1,
-                                modifier = Modifier.basicMarquee(),
-                            )
-                            ModelBadgesRow(row.model, Modifier.padding(top = 2.dp))
-                        }
-                    }
-                }
-                item(key = "footer") { Spacer(Modifier.height(8.dp)) }
-            }
-        }
-        OutlinedTextField(
-            value = query,
-            onValueChange = { query = it },
-            placeholder = { Text("搜索模型") },
-            singleLine = true,
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 8.dp),
-        )
-        Row(
-            Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 12.dp),
-            horizontalArrangement = Arrangement.End,
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            TextButton(onClick = onDismiss) { Text("取消") }
-            Spacer(Modifier.width(8.dp))
-            Button(
-                onClick = {
-                    onConfirm(
-                        filtered.filter { (it.first.id to it.second.name) in checked }.map { it.second },
-                    )
-                },
-                enabled = checked.isNotEmpty(),
-            ) {
-                Text(if (checked.isEmpty()) "添加所选" else "添加所选（${checked.size}）")
-            }
-        }
-    }
-}
-
-private const val CAT_VISION = "视觉理解（文图→文）"
-private const val CAT_IMAGE_GEN = "图像生成（文→图）"
-private const val CAT_TEXT = "纯文本对话（文→文）"
-private const val CAT_OTHER = "其他 / 未标记"
-
-/** 候选按模态类别归类：视觉理解 > 图像生成 > 纯文本 > 其他（未标记或模型行已删除） */
-private fun categoryOf(m: ModelEntity?): String = when {
-    m == null -> CAT_OTHER
-    m.inputImage || m.inputVideo -> CAT_VISION
-    m.outputImage || m.outputVideo || m.type == ModelType.IMAGE -> CAT_IMAGE_GEN
-    m.inputText || m.outputText -> CAT_TEXT
-    else -> CAT_OTHER
-}
-
-private data class CategoryEntry(
-    /** 在回退列表中的序号（含禁用项，与主列表一致） */
-    val index: Int,
-    val entry: SmartRouteEntity,
-    val provider: ProviderEntity?,
-    val model: ModelEntity?,
-)
-
-/** 候选分类查看：按模态类别分组只读展示，不影响主列表拖拽排序 */
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-private fun CategoryViewSheet(
-    entries: List<SmartRouteEntity>,
-    providers: List<ProviderEntity>,
-    models: List<ModelEntity>,
-    onDismiss: () -> Unit,
-) {
-    val groups = remember(entries, providers, models) {
-        val all = entries.mapIndexed { i, e ->
-            CategoryEntry(
-                index = i,
-                entry = e,
-                provider = providers.firstOrNull { it.id == e.providerId },
-                model = models.firstOrNull { it.providerId == e.providerId && it.name == e.modelName },
-            )
-        }
-        listOf(CAT_VISION, CAT_IMAGE_GEN, CAT_TEXT, CAT_OTHER)
-            .map { cat -> cat to all.filter { categoryOf(it.model) == cat } }
-            .filter { it.second.isNotEmpty() }
-    }
-    ModalBottomSheet(onDismissRequest = onDismiss) {
-        Text(
-            "候选分类",
-            style = MaterialTheme.typography.titleMedium,
-            modifier = Modifier.padding(horizontal = 16.dp),
-        )
-        LazyColumn(Modifier.fillMaxWidth().padding(top = 4.dp, bottom = 24.dp)) {
-            groups.forEach { (title, list) ->
-                item(key = "header_$title") {
-                    Row(
-                        Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 16.dp, vertical = 6.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Text(
-                            title,
-                            style = MaterialTheme.typography.labelMedium,
-                            color = MaterialTheme.colorScheme.primary,
-                        )
-                        Spacer(Modifier.weight(1f))
-                        Text(
-                            "${list.size} 个",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                }
-                items(list, key = { it.entry.id }) { e ->
-                    val displayName =
-                        e.model?.alias?.takeIf { it.isNotBlank() } ?: e.entry.modelName
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 16.dp, vertical = 4.dp),
-                    ) {
-                        Text(
-                            "${e.index + 1}",
-                            style = MaterialTheme.typography.labelSmall,
-                            fontFamily = FontFamily.Monospace,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.width(24.dp),
-                        )
-                        Column(Modifier.weight(1f)) {
-                            Text(
-                                "${e.provider?.alias ?: "?"} / $displayName",
-                                style = MaterialTheme.typography.bodySmall,
-                                maxLines = 1,
-                                modifier = Modifier.basicMarquee(),
-                            )
-                            Text(
-                                e.entry.modelName,
-                                style = MaterialTheme.typography.labelSmall,
-                                fontFamily = FontFamily.Monospace,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                maxLines = 1,
-                                modifier = Modifier.basicMarquee(),
-                            )
-                            e.model?.let { ModelBadgesRow(it, Modifier.padding(top = 2.dp)) }
-                        }
-                        if (!e.entry.enabled) {
-                            Text(
-                                "已禁用",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
 
 /** 成员列表末尾的「添加成员」入口行 */
 @Composable

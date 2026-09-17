@@ -95,7 +95,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
-import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -128,7 +127,6 @@ import cn.luoluna.sweven.ai.ui.chat.FluxVideoPlayer
 import cn.luoluna.sweven.ai.ui.common.ConfirmDialog
 import cn.luoluna.sweven.ai.ui.common.openImageExternally
 import cn.luoluna.sweven.ai.ui.common.openVideoExternally
-import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -751,23 +749,20 @@ object ChatUiDefaults {
                         message.content.lines().size > 12 || message.content.length > 600
                     }
                     var collapsed by rememberSaveable(message.id) { mutableStateOf(false) }
-                    val scrollAnchorCh = remember { Channel<Long>(Channel.CONFLATED) }
-                    // 折叠长消息时列表项高度骤减，LazyList 会保持视口跳到后面的消息；
-                    // 用本地 Channel 锚定：折叠后等重组布局完成，再 requestScrollToItem 锚定顶部
-                    LaunchedEffect(Unit) {
-                        for (targetId in scrollAnchorCh) {
-                            val index = env.messages.indexOfFirst { it.id == targetId }
-                            if (index < 0) continue
-                            withFrameNanos { } // 等折叠状态触发的重组和布局完成
-                            env.listState.requestScrollToItem(index, 0)
-                        }
-                    }
+                    // 折叠长消息后本条高度骤减，LazyList 按 key 锚定第一个可见项，视口会被甩到后面的消息。
+                    // 锚定必须与折叠同帧提交给同一次重测量：requestScrollToItem 只标记位置并让测量失效，
+                    // 本次重测量就会以「本条顶部对齐视口顶部」为起点，不会先跳一次再纠正；
+                    // 也正因为没有再等一帧，不依赖本条列表项存活——列表项一旦被甩出视口即被销毁，
+                    // 挂在它上面的协程（含 withFrameNanos 等待）会被取消，锚定就永远不会发生。
                     fun toggleCollapse() {
                         val willCollapse = !collapsed
-                        collapsed = !collapsed
-                        if (willCollapse && isLong) {
-                            scrollAnchorCh.trySend(message.id)
-                        }
+                        collapsed = willCollapse
+                        if (!willCollapse || !isLong) return
+                        // 索引取自最新布局（点击的那条必然可见），比从消息列表里找更耐受列表快照过期
+                        val index = env.listState.layoutInfo.visibleItemsInfo
+                            .firstOrNull { it.key == message.id }?.index
+                            ?: env.messages.indexOfFirst { it.id == message.id }
+                        if (index >= 0) env.listState.requestScrollToItem(index, 0)
                     }
                     if (message.content.isNotBlank() || !message.reasoning.isNullOrBlank()) {
                         Surface(

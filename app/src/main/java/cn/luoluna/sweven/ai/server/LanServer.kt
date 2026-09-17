@@ -10,7 +10,6 @@ import cn.luoluna.sweven.ai.data.db.ProviderDao
 import cn.luoluna.sweven.ai.data.db.ProviderEntity
 import cn.luoluna.sweven.ai.data.db.RequestLogDao
 import cn.luoluna.sweven.ai.data.db.RequestLogEntity
-import cn.luoluna.sweven.ai.data.db.SmartRouteDao
 import cn.luoluna.sweven.ai.data.db.SmartRouteGroupDao
 import cn.luoluna.sweven.ai.data.db.SmartRouteGroupEntity
 import cn.luoluna.sweven.ai.data.db.SmartRouteMemberDao
@@ -22,9 +21,11 @@ import cn.luoluna.sweven.ai.data.repo.SmartAi
 import cn.luoluna.sweven.ai.data.repo.SmartHealth
 import cn.luoluna.sweven.ai.data.repo.SmartPolicy
 import cn.luoluna.sweven.ai.data.repo.aggregateCapability
+import cn.luoluna.sweven.ai.data.repo.eligibleCandidates
 import cn.luoluna.sweven.ai.data.repo.featuresOfRequestBody
 import cn.luoluna.sweven.ai.data.repo.intersectCapability
 import cn.luoluna.sweven.ai.data.repo.isSelfGatewayUrl
+import cn.luoluna.sweven.ai.data.repo.modalityLabel
 import cn.luoluna.sweven.ai.data.repo.orderCandidates
 import cn.luoluna.sweven.ai.data.repo.pickFastRound
 import cn.luoluna.sweven.ai.data.repo.SMART_FAST_ROUND_LIMIT
@@ -68,6 +69,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
@@ -79,7 +81,7 @@ import kotlin.coroutines.coroutineContext
 
 /**
  * 局域网聚合路由服务器（OpenAI 兼容协议）：
- * - GET  /v1/models            聚合模型列表，id 格式：厂商别名/模型名（可选 smartAi）
+ * - GET  /v1/models            模型列表：开启「开放所有模型」时含 厂商别名/模型名，另含路由分组与 flux-auto 聚合路由
  * - POST /v1/chat/completions  按 model 聚合 id 路由到对应厂商并代理转发
  * - 首次使用的设备需在 App 内批准（401 + 待授权申请）
  */
@@ -90,7 +92,6 @@ class LanServer(
     private val client: ProviderClient,
     private val providerDao: ProviderDao,
     private val modelDao: ModelDao,
-    private val smartRouteDao: SmartRouteDao,
     private val smartRouteGroupDao: SmartRouteGroupDao,
     private val smartRouteMemberDao: SmartRouteMemberDao,
     private val settings: AppSettings,
@@ -272,50 +273,47 @@ class LanServer(
         // 停用厂商的模型不对外提供
         val providers = providerDao.all().filter { it.enabled }.associateBy { it.id }
         val enabled = modelDao.observeEnabled().first()
-        val data = enabled.mapNotNull { m ->
-            val p = providers[m.providerId] ?: return@mapNotNull null
-            buildJsonObject {
-                put("id", "${p.alias}/${m.name}")
-                put("object", "model")
-                put("owned_by", p.alias)
-                put(
-                    "phone_router",
-                    buildJsonObject {
-                        put("display", m.alias?.takeIf { it.isNotBlank() } ?: m.name)
-                        put("type", m.type)
-                        put("input", modalities(m.inputText, m.inputImage, m.inputVideo))
-                        put("output", modalities(m.outputText, m.outputImage, m.outputVideo))
-                        put("capabilities", modalities(m.capabilityTools, m.capabilityReasoning, false))
-                    }
-                )
-            }
-        }.toMutableList()
-        // 开关开启且存在启用候选时，追加 smartAi 聚合模型（候选厂商停用后同样剔除）
-        val smartRoutes = if (settings.lanSmartAiEnabled.value) {
-            smartRouteDao.all().filter { it.enabled && it.providerId in providers }
-        } else emptyList()
-        if (smartRoutes.isNotEmpty()) {
-            // 聚合能力 = 启用候选的模态/能力并集（模型行已删除的候选按无能力参与并集）
-            val agg = aggregateCapability(
-                smartRoutes.mapNotNull { modelDao.find(it.providerId, it.modelName) },
-            )
-            data.add(
+        val data = mutableListOf<JsonElement>()
+        // 单个模型（厂商别名/模型名）：仅在「开放所有模型」时对外暴露，关闭后客户端只能选聚合路由
+        if (settings.lanOpenAllModels.value) {
+            data += enabled.mapNotNull { m ->
+                val p = providers[m.providerId] ?: return@mapNotNull null
                 buildJsonObject {
-                    put("id", SmartAi.MODEL_NAME)
+                    put("id", "${p.alias}/${m.name}")
                     put("object", "model")
-                    put("owned_by", SmartAi.MODEL_NAME)
+                    put("owned_by", p.alias)
                     put(
                         "phone_router",
                         buildJsonObject {
-                            put("display", "${SmartAi.MODEL_NAME}（智能路由聚合）")
-                            put("type", "chat")
-                            put("input", modalities(agg.inputText, agg.inputImage, agg.inputVideo))
-                            put("output", modalities(agg.outputText, agg.outputImage, agg.outputVideo))
-                            put("capabilities", modalities(agg.tools, agg.reasoning, false))
+                            put("display", m.alias?.takeIf { it.isNotBlank() } ?: m.name)
+                            put("type", m.type)
+                            put("input", modalities(m.inputText, m.inputImage, m.inputVideo))
+                            put("output", modalities(m.outputText, m.outputImage, m.outputVideo))
+                            put("capabilities", modalities(m.capabilityTools, m.capabilityReasoning, false))
                         }
                     )
                 }
-            )
+            }
+        }
+        // 聚合路由 flux-auto：候选为全部启用模型（厂商顺序+模型顺序），能力取并集；无候选时不出现
+        val chain = router.allModelsChain()
+        if (settings.lanSmartAiEnabled.value && chain.isNotEmpty()) {
+            val agg = aggregateCapability(chain.map { it.second })
+            data += buildJsonObject {
+                put("id", SmartAi.MODEL_NAME)
+                put("object", "model")
+                put("owned_by", SmartAi.MODEL_NAME)
+                put(
+                    "phone_router",
+                    buildJsonObject {
+                        put("display", "${SmartAi.MODEL_NAME}（全部模型聚合）")
+                        put("type", "chat")
+                        put("input", modalities(agg.inputText, agg.inputImage, agg.inputVideo))
+                        put("output", modalities(agg.outputText, agg.outputImage, agg.outputVideo))
+                        put("capabilities", modalities(agg.tools, agg.reasoning, false))
+                    }
+                )
+            }
         }
         // 路由分组：启用且至少有一个可用成员的分组以 flux-<groupKey> 对外暴露（能力取成员交集，短板口径）
         val groups = smartRouteGroupDao.all().filter { it.enabled }
@@ -327,23 +325,21 @@ class LanServer(
                     .mapNotNull { modelDao.find(it.providerId, it.modelName) }
                 if (memberModels.isEmpty()) return@forEach
                 val agg = intersectCapability(memberModels)
-                data.add(
-                    buildJsonObject {
-                        put("id", g.routeName)
-                        put("object", "model")
-                        put("owned_by", "flux")
-                        put(
-                            "phone_router",
-                            buildJsonObject {
-                                put("display", "${g.routeName}（路由分组 · ${memberModels.size} 成员组内切换）")
-                                put("type", "chat")
-                                put("input", modalities(agg.inputText, agg.inputImage, agg.inputVideo))
-                                put("output", modalities(agg.outputText, agg.outputImage, agg.outputVideo))
-                                put("capabilities", modalities(agg.tools, agg.reasoning, false))
-                            }
-                        )
-                    }
-                )
+                data += buildJsonObject {
+                    put("id", g.routeName)
+                    put("object", "model")
+                    put("owned_by", "flux")
+                    put(
+                        "phone_router",
+                        buildJsonObject {
+                            put("display", "${g.routeName}（路由分组 · ${memberModels.size} 成员组内切换）")
+                            put("type", "chat")
+                            put("input", modalities(agg.inputText, agg.inputImage, agg.inputVideo))
+                            put("output", modalities(agg.outputText, agg.outputImage, agg.outputVideo))
+                            put("capabilities", modalities(agg.tools, agg.reasoning, false))
+                        }
+                    )
+                }
             }
         }
         return buildJsonObject {
@@ -402,6 +398,16 @@ class LanServer(
                 handleGroupCompletion(group, body, device, device.responseMode, startedAt)
                 return
             }
+        }
+        // 单个模型：仅「开放所有模型」时可用，关闭后只留路由分组与 flux-auto 聚合路由
+        if (!settings.lanOpenAllModels.value) {
+            logRequest(device, aggregateId, null, false, startedAt, null, false, "未开放单个模型")
+            respondOpenAiError(
+                HttpStatusCode.NotFound,
+                "模型 '$aggregateId' 未开放：Flux App 的「局域网」页已关闭「开放所有模型」，" +
+                    "当前只提供路由分组与 ${SmartAi.MODEL_NAME} 聚合路由，可用模型见 GET /v1/models",
+            )
+            return
         }
         val route = router.resolveByAggregateId(aggregateId)
         if (route == null) {
@@ -546,7 +552,8 @@ class LanServer(
     }
 
     /**
-     * smartAi 聚合模型：按启用候选顺序回退。
+     * flux-auto 聚合模型：候选为全部启用模型（厂商顺序×模型顺序）的合集，
+     * 按请求模态剔除发过去必然失败的候选后逐个回退。
      * 流式候选限时建立连接，成功后原样透传 SSE；非流式候选请求完整 JSON 后转发。
      * 响应模式按请求设备区分（device.responseMode），构造 [SmartPolicy]；
      * 每次尝试结果打点 [SmartHealth]，与 App 内聊天共享健康状态；
@@ -564,26 +571,16 @@ class LanServer(
             logRequest(device, aggregateId, null, stream, startedAt, null, false, "${SmartAi.MODEL_NAME} 未开放")
             respondOpenAiError(
                 HttpStatusCode.NotFound,
-                "${SmartAi.MODEL_NAME} 未开放：请在 Flux App 的「局域网」页面开启 smartAi 聚合模型",
+                "${SmartAi.MODEL_NAME} 未开放：请在 Flux App 的「局域网」页面开启 ${SmartAi.MODEL_NAME} 聚合路由",
             )
             return
         }
-        // 开放所有模型：候选 = 启用厂商×启用模型聚合链；否则为手动候选链
-        val allModels = settings.smartAutoAllModels.value
-        val routes: List<Pair<Long, String>> = if (allModels) {
-            router.allModelsChain().map { (provider, model) -> provider.id to model.name }
-        } else {
-            smartRouteDao.all().filter { it.enabled }.map { it.providerId to it.modelName }
-        }
+        val routes = router.allModelsChain().map { (provider, model) -> provider.id to model.name }
         if (routes.isEmpty()) {
             logRequest(device, aggregateId, null, stream, startedAt, null, false, "${SmartAi.MODEL_NAME} 没有可用的候选模型")
             respondOpenAiError(
                 HttpStatusCode.NotFound,
-                if (allModels) {
-                    "${SmartAi.MODEL_NAME} 没有可聚合的启用模型，请检查厂商与模型是否已启用"
-                } else {
-                    "${SmartAi.MODEL_NAME} 没有启用的候选模型，请先在「智能路由」中配置"
-                },
+                "${SmartAi.MODEL_NAME} 没有可聚合的启用模型，请检查厂商与模型是否已启用",
             )
             return
         }
@@ -603,21 +600,31 @@ class LanServer(
         )
         val maxRounds = settings.smartRouteMaxRounds.value.coerceAtLeast(1)
 
-        // 先解析并校验全部候选，再按请求特征 + 健康桶稳定排序：
+        // 先解析并校验全部候选（自动选择：按请求模态剔除能力不匹配的），再按健康桶 + 特征匹配稳定排序：
         // 冷却/降权候选垫底兜底，桶内带图/视频输入优先多模态候选、带 tools 优先支持工具的
         val features = featuresOfRequestBody(rawBody, messages)
         val now = System.currentTimeMillis()
+        val resolved = routes.mapNotNull { (providerId, modelName) ->
+            val r = router.resolveById(providerId, modelName) ?: return@mapNotNull null
+            val apiKey = r.apiKey?.key?.takeIf { it.isNotBlank() } ?: return@mapNotNull null
+            // 指向本机网关自身的候选直接跳过，避免自连回环
+            if (isSelfGatewayUrl(r.provider.baseUrl, port)) return@mapNotNull null
+            // 模型配置行可能已被删除，此时退回空配置继续路由
+            val model = r.model ?: ModelEntity(providerId = r.provider.id, name = modelName)
+            SmartPrepared(r.provider, apiKey, model, r.advancedParams)
+        }
+        val eligible = eligibleCandidates(resolved, features, modelOf = { it.model })
+        if (eligible.isEmpty()) {
+            logRequest(device, aggregateId, null, stream, startedAt, null, false, "无候选支持请求模态")
+            respondOpenAiError(
+                HttpStatusCode.BadGateway,
+                "${SmartAi.MODEL_NAME} 没有支持${features.modalityLabel()}的可用模型" +
+                    "（厂商停用/缺 Key，或启用模型均不具备该能力）",
+            )
+            return
+        }
         val prepared = orderCandidates(
-            routes.mapNotNull { (providerId, modelName) ->
-                val resolved = router.resolveById(providerId, modelName) ?: return@mapNotNull null
-                val apiKey = resolved.apiKey?.key?.takeIf { it.isNotBlank() } ?: return@mapNotNull null
-                // 指向本机网关自身的候选直接跳过，避免自连回环
-                if (isSelfGatewayUrl(resolved.provider.baseUrl, port)) return@mapNotNull null
-                // 模型配置行可能已被删除，此时退回空配置继续路由
-                val model = resolved.model
-                    ?: ModelEntity(providerId = resolved.provider.id, name = modelName)
-                SmartPrepared(resolved.provider, apiKey, model, resolved.advancedParams)
-            },
+            eligible,
             features,
             modelOf = { it.model },
             bucketOf = { SmartHealth.bucket(it.provider.id, it.model.name, now) },
@@ -637,8 +644,8 @@ class LanServer(
 
     /**
      * 路由分组（flux-<groupKey>）：组内成员按顺序回退。
-     * 与 smartAi 的差别：按请求模态**严格过滤**成员（带图/视频输入时不支持的成员直接剔除），
-     * 保证组内参数一致；其余（健康桶排序、轮巡、透传、日志）走 [executeSmartCandidates]。
+     * 与 flux-auto 的差别：候选只在组内，且同样按请求模态剔除能力不匹配的成员，
+     * 保证「组内参数基本一致」；其余（健康桶排序、轮巡、透传、日志）走 [executeSmartCandidates]。
      */
     private suspend fun ApplicationCall.handleGroupCompletion(
         group: SmartRouteGroupEntity,
@@ -671,16 +678,14 @@ class LanServer(
             val model = r.model ?: ModelEntity(providerId = r.provider.id, name = member.modelName)
             SmartPrepared(r.provider, apiKey, model, r.advancedParams)
         }
-        // 严格过滤：模态不匹配的成员不参与本次路由（组内参数一致的承诺）
-        val eligible = resolved.filter {
-            (!features.needsImageInput || it.model.inputImage) &&
-                (!features.needsVideoInput || it.model.inputVideo)
-        }
+        // 自动选择：模态不匹配的成员不参与本次路由（组内参数一致的承诺）
+        val eligible = eligibleCandidates(resolved, features, modelOf = { it.model })
         if (eligible.isEmpty()) {
             logRequest(device, aggregateId, null, stream, startedAt, null, false, "分组内无支持当前模态的可用成员")
             respondOpenAiError(
                 HttpStatusCode.BadGateway,
-                "分组 '$aggregateId' 内没有支持当前请求模态的可用成员（厂商停用/缺 Key，或成员均不支持图像/视频输入）",
+                "分组 '$aggregateId' 内没有支持${features.modalityLabel()}的可用成员" +
+                    "（厂商停用/缺 Key，或成员均不具备该能力）",
             )
             return
         }

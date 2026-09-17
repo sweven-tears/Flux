@@ -79,7 +79,7 @@ fun LanScreen(
     val lanEnabled by vm.lanEnabled.collectAsStateWithLifecycle()
     val lanPort by vm.lanPort.collectAsStateWithLifecycle()
     val smartAiEnabled by vm.lanSmartAiEnabled.collectAsStateWithLifecycle()
-    val smartAutoAllModels by vm.smartAutoAllModels.collectAsStateWithLifecycle()
+    val openAllModels by vm.lanOpenAllModels.collectAsStateWithLifecycle()
     val running by vm.running.collectAsStateWithLifecycle()
     val serverError by vm.serverError.collectAsStateWithLifecycle()
     val lanHostnameLabel by vm.lanHostnameLabel.collectAsStateWithLifecycle()
@@ -219,30 +219,31 @@ fun LanScreen(
                     }
                     TextButton(onClick = { hostnameDialog = true }) { Text("$mdnsName  修改") }
                 }
-                // smartAi 聚合模型对局域网客户端的开放开关（即时生效）
+                // flux-auto 聚合路由对局域网客户端的开放开关（即时生效）
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Column(Modifier.weight(1f)) {
-                        Text("开放 ${SmartAi.MODEL_NAME} 聚合模型", style = MaterialTheme.typography.bodyMedium)
+                        Text("开放 ${SmartAi.MODEL_NAME} 聚合路由", style = MaterialTheme.typography.bodyMedium)
                         Text(
-                            "客户端请求 model=${SmartAi.MODEL_NAME} 时按智能路由候选顺序自动回退",
+                            "客户端请求 model=${SmartAi.MODEL_NAME} 时，按「厂商顺序 × 模型顺序」聚合全部启用模型，" +
+                                "自动挑出适合本次请求的候选并在失败/超时后自动切换",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     }
                     Switch(checked = smartAiEnabled, onCheckedChange = { vm.setSmartAiEnabled(it) })
                 }
-                // 开放所有模型：flux-auto 候选来源切换（本机聊天同样生效）
+                // 开放所有模型：客户端可选任意单个模型；关闭后只暴露分组路由与 flux-auto（即时生效）
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Column(Modifier.weight(1f)) {
                         Text("开放所有模型", style = MaterialTheme.typography.bodyMedium)
                         Text(
-                            "开启后 ${SmartAi.MODEL_NAME} 聚合全部启用模型（按厂商配置顺序+模型顺序，" +
-                                "健康度动态调度取长补短）；关闭则使用手动候选链",
+                            "开启后客户端可直接按「厂商别名/模型名」自由选择全部模型；" +
+                                "关闭则只暴露路由分组与 ${SmartAi.MODEL_NAME} 聚合路由",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     }
-                    Switch(checked = smartAutoAllModels, onCheckedChange = { vm.setSmartAutoAllModels(it) })
+                    Switch(checked = openAllModels, onCheckedChange = { vm.setOpenAllModels(it) })
                 }
             }
 

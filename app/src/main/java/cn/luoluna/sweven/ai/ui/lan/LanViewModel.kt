@@ -24,7 +24,7 @@ class LanViewModel(app: Application) : AndroidViewModel(app) {
     val lanEnabled: StateFlow<Boolean> = settings.lanEnabled
     val lanPort: StateFlow<Int> = settings.lanPort
     val lanSmartAiEnabled: StateFlow<Boolean> = settings.lanSmartAiEnabled
-    val smartAutoAllModels: StateFlow<Boolean> = settings.smartAutoAllModels
+    val lanOpenAllModels: StateFlow<Boolean> = settings.lanOpenAllModels
 
     /** mDNS 主机名前缀（null = 默认 flux.local） */
     val lanHostnameLabel: StateFlow<String?> = settings.lanHostnameLabel
@@ -39,9 +39,9 @@ class LanViewModel(app: Application) : AndroidViewModel(app) {
         settings.setLanSmartAiEnabled(on)
     }
 
-    /** 开关 flux-auto「开放所有模型」：聚合全部启用模型 vs 手动候选链（即时生效） */
-    fun setSmartAutoAllModels(on: Boolean) {
-        settings.setSmartAutoAllModels(on)
+    /** 开关「开放所有模型」：客户端可直接选任意单个模型 vs 只暴露分组路由与 flux-auto（即时生效） */
+    fun setOpenAllModels(on: Boolean) {
+        settings.setLanOpenAllModels(on)
     }
 
     val pendingDevices: StateFlow<List<AuthDeviceEntity>> =

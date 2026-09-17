@@ -180,6 +180,42 @@ fun <T> orderCandidates(
     )
 }
 
+/**
+ * 按请求模态剔除不能用的候选（自动选择）：输入/输出模态是硬条件——发错必然失败，
+ * 所以直接不发；工具与推理只参与 [orderCandidates] 的排序加分（能力标记是启发式，不据此剔除）。
+ * 模型配置行已被删除的候选无从判断能力，保留在链里兜底。
+ */
+fun <T> eligibleCandidates(
+    items: List<T>,
+    features: SmartRequestFeatures,
+    modelOf: (T) -> ModelEntity?,
+): List<T> = items.filter { item ->
+    val m = modelOf(item) ?: return@filter true
+    (!features.needsImageInput || m.inputImage) &&
+        (!features.needsVideoInput || m.inputVideo) &&
+        (!features.wantsImageOutput || m.outputImage) &&
+        (!features.wantsVideoOutput || m.outputVideo)
+}
+
+/**
+ * 候选准备：先按请求模态筛掉不能用的（[eligibleCandidates]），再按健康桶与特征匹配稳定排序
+ * （[orderCandidates]）。flux-auto（全模型合集）与路由分组共用同一口径，两步之间可插入空集提示。
+ */
+fun <T> selectCandidates(
+    items: List<T>,
+    features: SmartRequestFeatures,
+    modelOf: (T) -> ModelEntity?,
+    bucketOf: (T) -> Int = { 0 },
+): List<T> = orderCandidates(eligibleCandidates(items, features, modelOf), features, modelOf, bucketOf)
+
+/** 请求模态的文字描述（候选被筛空时用于说明缺什么能力） */
+fun SmartRequestFeatures.modalityLabel(): String = buildList {
+    if (needsImageInput) add("图像输入")
+    if (needsVideoInput) add("视频输入")
+    if (wantsImageOutput) add("图像输出")
+    if (wantsVideoOutput) add("视频输出")
+}.joinToString("、")
+
 /** 极速轮候选数量上限：限制速度未知候选的「学费」上界（被取消的尝试仍消耗上游输入 token） */
 const val SMART_FAST_ROUND_LIMIT = 3
 

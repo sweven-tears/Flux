@@ -40,9 +40,12 @@ class AppSettings(context: Context) {
     private val _lanSmartAiEnabled = MutableStateFlow(prefs.getBoolean(KEY_LAN_SMART_AI, false))
     val lanSmartAiEnabled: StateFlow<Boolean> = _lanSmartAiEnabled
 
-    /** flux-auto 候选来源：true = 聚合全部启用模型（厂商顺序+模型顺序），false = 手动候选链 */
-    private val _smartAutoAllModels = MutableStateFlow(prefs.getBoolean(KEY_SMART_AUTO_ALL_MODELS, false))
-    val smartAutoAllModels: StateFlow<Boolean> = _smartAutoAllModels
+    /**
+     * 局域网是否开放全部模型自由选择：
+     * true = 客户端可直接按「厂商别名/模型名」选任意模型；false = 只暴露路由分组与 flux-auto 聚合路由
+     */
+    private val _lanOpenAllModels = MutableStateFlow(prefs.getBoolean(KEY_LAN_OPEN_ALL_MODELS, true))
+    val lanOpenAllModels: StateFlow<Boolean> = _lanOpenAllModels
 
     /** 本机（App 内聊天）响应模式：极速 / 聊天 / 随缘 */
     private val _smartResponseMode =
@@ -131,9 +134,9 @@ class AppSettings(context: Context) {
         _lanSmartAiEnabled.value = enabled
     }
 
-    fun setSmartAutoAllModels(enabled: Boolean) {
-        prefs.edit().putBoolean(KEY_SMART_AUTO_ALL_MODELS, enabled).apply()
-        _smartAutoAllModels.value = enabled
+    fun setLanOpenAllModels(enabled: Boolean) {
+        prefs.edit().putBoolean(KEY_LAN_OPEN_ALL_MODELS, enabled).apply()
+        _lanOpenAllModels.value = enabled
     }
 
     fun setSmartResponseMode(mode: String) {
@@ -239,7 +242,7 @@ class AppSettings(context: Context) {
         private const val KEY_SMART_FIRST_TOKEN_TIMEOUT = "smart_first_token_timeout_seconds"
         private const val KEY_SMART_ROUTE_MAX_ROUNDS = "smart_route_max_rounds"
         private const val KEY_LAN_SMART_AI = "lan_smart_ai_enabled"
-        private const val KEY_SMART_AUTO_ALL_MODELS = "smart_auto_all_models"
+        private const val KEY_LAN_OPEN_ALL_MODELS = "lan_open_all_models"
         private const val KEY_SMART_RESPONSE_MODE = "smart_response_mode"
         private const val KEY_SMART_FAST_FIRST_TOKEN = "smart_fast_first_token_ms"
         private const val KEY_SMART_LEISURE_FIRST_TOKEN = "smart_leisure_first_token_seconds"

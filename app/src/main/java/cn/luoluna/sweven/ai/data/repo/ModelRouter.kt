@@ -32,7 +32,10 @@ data class ModelRoute(
     val displayKey: String get() = "${provider.alias}/${model?.name ?: ""}"
 }
 
-/** 智能路由聚合模型 smartAi：会话/设置中以哨兵 providerId 标识 */
+/**
+ * flux-auto 聚合路由：会话/设置中以哨兵 providerId 标识。
+ * 候选固定为全部启用模型（厂商顺序×模型顺序），按请求模态自动择优选发。
+ */
 object SmartAi {
     const val PROVIDER_ID = -1L
     const val MODEL_NAME = "flux-auto"
@@ -86,8 +89,9 @@ class ModelRouter(
     }
 
     /**
-     * 「开放所有模型」聚合链：启用厂商按配置顺序 × 其下启用 chat/图像输出模型按配置顺序。
-     * flux-auto 开关打开时候选来源，与本机聊天、局域网网关共用。
+     * flux-auto 的候选合集：启用厂商按配置顺序 × 其下启用的 chat/图像输出模型按配置顺序。
+     * 这是「直接路由所有大模型」的枚举口径——本机聊天与局域网网关共用同一份来源，
+     * 与任何开关无关；每次请求再由 selectCandidates 按请求模态自动挑出能用的子集。
      */
     suspend fun allModelsChain(): List<Pair<ProviderEntity, ModelEntity>> =
         providerDao.all().filter { it.enabled }.flatMap { provider ->

@@ -102,7 +102,7 @@ fun ModelPickerSheet(
     smartAiSelected: Boolean = false,
     onSelectSmartAi: () -> Unit = {},
     smartAiCapability: SmartAggregateCapability? = null,
-    /** 路由分组（flux-xxx）：列在 smartAi 之后，组内成员自动切换；筛选了厂商时隐藏 */
+    /** 路由分组（flux-xxx）：列在 flux-auto 之后，组内成员自动切换；筛选了厂商时隐藏 */
     routeGroups: List<SmartRouteGroupEntity> = emptyList(),
     selectedGroupKey: String? = null,
     onSelectGroup: (SmartRouteGroupEntity) -> Unit = {},
@@ -224,7 +224,7 @@ fun ModelPickerSheet(
                                 Text(SmartAi.MODEL_NAME, style = MaterialTheme.typography.bodyMedium)
                                 Text(
                                     buildList {
-                                        add("智能路由")
+                                        add("全部模型聚合 · 按请求择优选发")
                                         smartAiCapabilitySummary(smartAiCapability)
                                             .takeIf { it.isNotEmpty() }
                                             ?.let { add(it) }

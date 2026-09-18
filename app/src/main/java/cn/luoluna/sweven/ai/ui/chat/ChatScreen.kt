@@ -89,6 +89,8 @@ fun ChatScreen(
     onGoProviders: () -> Unit,
     onOpenSettings: () -> Unit,
     onOpenFreeCopy: (Long) -> Unit,
+    /** 打开当前会话的聊天记录页（按会话 id） */
+    onOpenChatHistory: (Long) -> Unit,
     pendingConversationId: Long? = null,
     onConsumePendingConversation: () -> Unit = {},
     vm: ChatViewModel = viewModel(),
@@ -367,6 +369,7 @@ fun ChatScreen(
         editUserProfile = { userProfileOpen = true },
         onGoProviders = onGoProviders,
         onOpenSettings = onOpenSettings,
+        onOpenHistory = onOpenChatHistory,
     )
     // 供默认槽位内部互调时回落到插件覆写（messageList 里的气泡、inputBar 里的附件行）
     env.activePlugin = plugin

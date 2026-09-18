@@ -450,6 +450,16 @@ object ChatUiDefaults {
                         Icon(Icons.Filled.MoreVert, contentDescription = "更多")
                     }
                     DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                        // 聊天记录按会话打开，尚无会话时不给入口
+                        env.current?.let { conv ->
+                            DropdownMenuItem(
+                                text = { Text("聊天记录") },
+                                onClick = {
+                                    menuOpen = false
+                                    env.onOpenHistory(conv.id)
+                                },
+                            )
+                        }
                         DropdownMenuItem(
                             text = { Text("界面风格") },
                             onClick = {

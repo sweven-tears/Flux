@@ -156,4 +156,6 @@ class ChatUiEnv(
     // ---- 导航 ----
     val onGoProviders: () -> Unit,
     val onOpenSettings: () -> Unit,
+    /** 打开某会话的聊天记录页（顶栏「更多」入口） */
+    val onOpenHistory: (Long) -> Unit,
 )

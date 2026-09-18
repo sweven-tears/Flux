@@ -29,6 +29,7 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
+import cn.luoluna.sweven.ai.ui.chat.ChatHistoryScreen
 import cn.luoluna.sweven.ai.ui.chat.ChatScreen
 import cn.luoluna.sweven.ai.ui.chat.FreeCopyScreen
 import cn.luoluna.sweven.ai.ui.common.InAppBrowserPayload
@@ -60,6 +61,7 @@ object Routes {
     const val NETWORK_LOG = "network_log"
     const val NETWORK_LOG_DETAIL = "network_log_detail/{id}"
     const val FREE_COPY = "free_copy/{id}"
+    const val CHAT_HISTORY = "chat_history/{conversationId}"
     const val IN_APP_BROWSER = "in_app_browser"
 }
 
@@ -163,6 +165,7 @@ fun PhoneRouterApp(
                         onGoProviders = { gotoTab(Routes.PROVIDERS) },
                         onOpenSettings = { navController.navigate(Routes.SETTINGS) },
                         onOpenFreeCopy = { id -> navController.navigate("free_copy/$id") },
+                        onOpenChatHistory = { id -> navController.navigate("chat_history/$id") },
                         pendingConversationId = pendingChatConversation,
                         onConsumePendingConversation = { pendingChatConversation = null },
                     )
@@ -245,6 +248,16 @@ fun PhoneRouterApp(
                     val id = entry.arguments?.getLong("id") ?: 0L
                     FreeCopyScreen(
                         id = id,
+                        onBack = { navController.popBackStack() },
+                    )
+                }
+                composable(
+                    Routes.CHAT_HISTORY,
+                    arguments = listOf(navArgument("conversationId") { type = NavType.LongType }),
+                ) { entry ->
+                    val id = entry.arguments?.getLong("conversationId") ?: 0L
+                    ChatHistoryScreen(
+                        conversationId = id,
                         onBack = { navController.popBackStack() },
                     )
                 }

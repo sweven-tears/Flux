@@ -230,19 +230,35 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
 
     /**
      * 可选用的路由分组：启用且至少有一个可用成员（启用、厂商未停用）。
-     * 聊天选择器列出与 [currentTarget] 解析（哨兵 providerId + groupKey）共用这份列表。
+     * 每项附上对外声明能力（启用成员交集，短板口径），供选择器的类型筛选判断它属于哪一档；
+     * [currentTarget] 解析（哨兵 providerId + groupKey）与当前分组能力也取自这份列表。
      */
-    val routeGroups: StateFlow<List<SmartRouteGroupEntity>> =
+    val pickerRouteGroups: StateFlow<List<PickerRouteGroup>> =
         combine(
             smartRouteGroupDao.observeAll(),
             smartRouteMemberDao.observeAll(),
             providerDao.observeAll(),
-        ) { groups, members, providers ->
+            modelDao.observeAll(),
+        ) { groups, members, providers, models ->
             val enabledProviders = providers.filter { it.enabled }.map { it.id }.toSet()
-            groups.filter { g ->
-                g.enabled && members.any { it.groupId == g.id && it.enabled && it.providerId in enabledProviders }
-            }
+            val usable = members.filter { it.enabled && it.providerId in enabledProviders }
+            groups.filter { g -> g.enabled && usable.any { it.groupId == g.id } }
+                .map { g ->
+                    PickerRouteGroup(
+                        group = g,
+                        capability = intersectCapability(
+                            usable.filter { it.groupId == g.id }.mapNotNull { m ->
+                                models.firstOrNull { it.providerId == m.providerId && it.name == m.modelName }
+                            },
+                        ),
+                    )
+                }
         }.stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
+
+    /** 可选用的路由分组（能力另存于 [pickerRouteGroups]） */
+    val routeGroups: StateFlow<List<SmartRouteGroupEntity>> =
+        pickerRouteGroups.map { list -> list.map { it.group } }
+            .stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
 
     /** 当前生效目标：优先会话自己选的，否则回退到上次使用的目标 */
     val currentTarget: StateFlow<ChatTarget?> =
@@ -264,18 +280,9 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
 
     /** 当前分组目标的能力交集（短板口径，与对外报告一致；附件/思考按钮显隐依据）；非分组目标为 null */
     val currentGroupCapability: StateFlow<SmartAggregateCapability?> =
-        combine(
-            currentTarget,
-            smartRouteMemberDao.observeAll(),
-            modelDao.observeAll(),
-            providerDao.observeAll(),
-        ) { target, members, models, providers ->
-            val g = (target as? ChatTarget.Group)?.group ?: return@combine null
-            val enabledProviders = providers.filter { it.enabled }.map { it.id }.toSet()
-            intersectCapability(
-                members.filter { it.groupId == g.id && it.enabled && it.providerId in enabledProviders }
-                    .mapNotNull { m -> models.firstOrNull { it.providerId == m.providerId && it.name == m.modelName } },
-            )
+        combine(currentTarget, pickerRouteGroups) { target, groups ->
+            val key = (target as? ChatTarget.Group)?.group?.groupKey ?: return@combine null
+            groups.firstOrNull { it.group.groupKey == key }?.capability
         }.stateIn(viewModelScope, SharingStarted.Eagerly, null)
 
     /** 上下文用量粗估：当前会话 systemPrompt + 全部历史（含图片），按当前目标的窗口显示 */

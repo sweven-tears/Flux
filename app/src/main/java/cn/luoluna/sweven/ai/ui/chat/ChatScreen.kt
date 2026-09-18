@@ -112,8 +112,8 @@ fun ChatScreen(
     // 消息模型解析表（含禁用模型）：历史气泡按消息记录的 providerId+modelName 显示当时回复的模型
     val modelsByKey = allPickerModels.associate { (it.provider.id to it.model.name) to it }
     val smartAiCapability by vm.smartAiCapability.collectAsStateWithLifecycle()
-    // 路由分组：可选用列表 + 当前分组能力并集（附件/思考按钮显隐依据）
-    val routeGroups by vm.routeGroups.collectAsStateWithLifecycle()
+    // 路由分组：可选用列表（附声明能力，供选择器类型筛选）+ 当前分组能力（附件/思考按钮显隐依据）
+    val pickerRouteGroups by vm.pickerRouteGroups.collectAsStateWithLifecycle()
     val currentGroup = (currentTarget as? ChatTarget.Group)?.group
     val currentGroupCapability by vm.currentGroupCapability.collectAsStateWithLifecycle()
     // SmartAi/分组 聚合目标没有单个模型可看，按钮可见性按启用候选/成员的能力并集判断
@@ -464,7 +464,7 @@ fun ChatScreen(
                 vm.selectModel(SmartAi.PROVIDER_ID, SmartAi.MODEL_NAME)
                 pickerOpen = false
             },
-            routeGroups = routeGroups,
+            routeGroups = pickerRouteGroups,
             selectedGroupKey = currentGroup?.groupKey,
             onSelectGroup = { group ->
                 vm.selectModel(RouteGroupTarget.PROVIDER_ID, group.groupKey)

@@ -6,10 +6,7 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
@@ -17,17 +14,13 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AutoAwesome
-import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Hub
-import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -57,16 +50,22 @@ private enum class TypeFilter(val label: String) {
         IMAGE -> m.inputImage || m.outputImage
         VIDEO -> m.inputVideo || m.outputVideo
     }
+
+    /** 路由分组的归属判定：按分组对外声明的能力（启用成员交集），与分组卡片上那行摘要同口径 */
+    fun matches(cap: SmartAggregateCapability): Boolean = when (this) {
+        ALL -> true
+        TEXT -> cap.inputText || cap.outputText
+        IMAGE -> cap.inputImage || cap.outputImage
+        VIDEO -> cap.inputVideo || cap.outputVideo
+    }
 }
 
 private data class PickerRow(val item: PickerModel, val showHeader: Boolean)
 
-/** 搜索归一化：忽略大小写与分隔符，「gpt4o」也能命中「GPT-4o」 */
-private fun searchKey(text: String): String = text.lowercase().filter { it.isLetterOrDigit() }
-
-/** 单条模型的搜索命中串（厂商别名/显示 id/聚合 id/模型 id/模型别名） */
-private fun haystack(m: PickerModel): String = searchKey(
-    m.provider.alias + m.displayId + m.aggregateId + m.model.name + m.model.alias.orEmpty()
+/** 选择器里的路由分组：随行附上对外声明能力（启用成员交集），类型筛选据此判断它属于哪一档 */
+data class PickerRouteGroup(
+    val group: SmartRouteGroupEntity,
+    val capability: SmartAggregateCapability,
 )
 
 /** smartAi 聚合能力摘要：「文图→文图 · 支持工具/推理」 */
@@ -86,9 +85,6 @@ private fun smartAiCapabilitySummary(cap: SmartAggregateCapability?): String {
     return if (extras.isEmpty()) base else "$base · 支持${extras.joinToString("/")}"
 }
 
-/** 列表区最大高度：搜索框贴底，弹层不因模型多而一上来铺满整屏 */
-private val LIST_MAX_HEIGHT = 360.dp
-
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ModelPickerSheet(
@@ -102,14 +98,13 @@ fun ModelPickerSheet(
     smartAiSelected: Boolean = false,
     onSelectSmartAi: () -> Unit = {},
     smartAiCapability: SmartAggregateCapability? = null,
-    /** 路由分组（flux-xxx）：列在 flux-auto 之后，组内成员自动切换；筛选了厂商时隐藏 */
-    routeGroups: List<SmartRouteGroupEntity> = emptyList(),
+    /** 路由分组（flux-xxx）：列在 flux-auto 之后，组内成员自动切换；筛选了厂商时隐藏，类型筛选按声明能力过滤 */
+    routeGroups: List<PickerRouteGroup> = emptyList(),
     selectedGroupKey: String? = null,
     onSelectGroup: (SmartRouteGroupEntity) -> Unit = {},
 ) {
     var typeFilter by remember { mutableStateOf(TypeFilter.ALL) }
     var providerFilter by remember { mutableStateOf<String?>(null) }
-    var query by remember { mutableStateOf("") }
     // 厂商 chip 只列在当前类型筛选下仍有模型的厂商——筛出的结果里没有模型的厂商不出现
     val providerAliases = remember(models, typeFilter) {
         buildList {
@@ -122,16 +117,12 @@ fun ModelPickerSheet(
     LaunchedEffect(providerAliases) {
         if (providerFilter != null && providerFilter !in providerAliases) providerFilter = null
     }
-    val needle = searchKey(query)
     val filtered = models.filter { m ->
-        typeFilter.matches(m.model) &&
-            (providerFilter == null || m.provider.alias == providerFilter) &&
-            (needle.isEmpty() || haystack(m).contains(needle))
+        typeFilter.matches(m.model) && (providerFilter == null || m.provider.alias == providerFilter)
     }
-    // 路由分组与聚合路由不是普通模型：筛厂商时分组隐藏（只看该厂商的模型），搜索时按路由名过滤
-    val visibleGroups = routeGroups.filter { needle.isEmpty() || searchKey(it.routeName).contains(needle) }
+    // 分组：类型筛选按「成员交集」声明能力过滤（无能力项时不占位），筛厂商时整个分组区隐藏
+    val visibleGroups = routeGroups.filter { typeFilter.matches(it.capability) }
     val showRouteGroups = visibleGroups.isNotEmpty() && providerFilter == null
-    val showSmartAi = smartAiAvailable && (needle.isEmpty() || searchKey(SmartAi.MODEL_NAME).contains(needle))
     val rows = remember(filtered) {
         buildList {
             var lastAlias: String? = null
@@ -181,7 +172,7 @@ fun ModelPickerSheet(
                 }
             }
         }
-        if (models.isEmpty()) {
+        if (rows.isEmpty() && !showRouteGroups) {
             Column(
                 Modifier
                     .fillMaxWidth()
@@ -202,9 +193,9 @@ fun ModelPickerSheet(
                 TextButton(onClick = { onDismiss(); onGoProviders() }) { Text("去添加") }
             }
         } else {
-            LazyColumn(Modifier.fillMaxWidth().heightIn(max = LIST_MAX_HEIGHT)) {
-                // 聚合路由，固定置顶
-                if (showSmartAi) {
+            LazyColumn(Modifier.fillMaxWidth().padding(bottom = 24.dp)) {
+                // 聚合路由，固定置顶（不参与类型筛选：它的能力是全模型并集，几乎总能匹配）
+                if (smartAiAvailable) {
                     item(key = "smart_ai") {
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
@@ -239,7 +230,8 @@ fun ModelPickerSheet(
                     }
                 }
                 // 路由分组（flux-<groupKey>）：同族模型聚合，组内自动切换
-                if (showRouteGroups) visibleGroups.forEach { group ->
+                if (showRouteGroups) visibleGroups.forEach { entry ->
+                    val group = entry.group
                     item(key = "route_group_${group.id}") {
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
@@ -330,37 +322,7 @@ fun ModelPickerSheet(
                         }
                     }
                 }
-                if (rows.isEmpty() && !showRouteGroups && !showSmartAi) {
-                    item(key = "no_match") {
-                        Text(
-                            "没有匹配的模型",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 20.dp),
-                        )
-                    }
-                }
             }
-            // 搜索框贴底：列表在上方按内容高度收着，输字即时过滤（结果在当前类型/厂商筛选之上再收敛）
-            HorizontalDivider()
-            OutlinedTextField(
-                value = query,
-                onValueChange = { query = it },
-                placeholder = { Text("搜索模型 / 厂商") },
-                leadingIcon = { Icon(Icons.Filled.Search, contentDescription = null) },
-                trailingIcon = {
-                    if (query.isNotEmpty()) {
-                        IconButton(onClick = { query = "" }) {
-                            Icon(Icons.Filled.Close, contentDescription = "清空搜索")
-                        }
-                    }
-                },
-                singleLine = true,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 8.dp),
-            )
-            Spacer(Modifier.height(16.dp))
         }
     }
 }

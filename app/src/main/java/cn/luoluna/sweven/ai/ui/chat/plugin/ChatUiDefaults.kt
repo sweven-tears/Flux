@@ -53,8 +53,6 @@ import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Face
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.HideImage
-import androidx.compose.material.icons.filled.KeyboardArrowDown
-import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.Lightbulb
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.MoreVert
@@ -93,7 +91,6 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -745,31 +742,12 @@ object ChatUiDefaults {
                             }
                         }
                     }
-                    val isLong = remember(message.content) {
-                        message.content.lines().size > 12 || message.content.length > 600
-                    }
-                    var collapsed by rememberSaveable(message.id) { mutableStateOf(false) }
-                    // 折叠长消息后本条高度骤减，LazyList 按 key 锚定第一个可见项，视口会被甩到后面的消息。
-                    // 锚定必须与折叠同帧提交给同一次重测量：requestScrollToItem 只标记位置并让测量失效，
-                    // 本次重测量就会以「本条顶部对齐视口顶部」为起点，不会先跳一次再纠正；
-                    // 也正因为没有再等一帧，不依赖本条列表项存活——列表项一旦被甩出视口即被销毁，
-                    // 挂在它上面的协程（含 withFrameNanos 等待）会被取消，锚定就永远不会发生。
-                    fun toggleCollapse() {
-                        val willCollapse = !collapsed
-                        collapsed = willCollapse
-                        if (!willCollapse || !isLong) return
-                        // 索引取自最新布局（点击的那条必然可见），比从消息列表里找更耐受列表快照过期
-                        val index = env.listState.layoutInfo.visibleItemsInfo
-                            .firstOrNull { it.key == message.id }?.index
-                            ?: env.messages.indexOfFirst { it.id == message.id }
-                        if (index >= 0) env.listState.requestScrollToItem(index, 0)
-                    }
                     if (message.content.isNotBlank() || !message.reasoning.isNullOrBlank()) {
                         Surface(
                             color = MaterialTheme.colorScheme.surfaceVariant,
                             shape = RoundedCornerShape(4.dp, 16.dp, 16.dp, 16.dp),
                             modifier = Modifier.combinedClickable(
-                                onClick = { if (isLong) toggleCollapse() },
+                                onClick = {},
                                 onLongClick = { env.showDetail(message) },
                             ),
                         ) {
@@ -777,9 +755,7 @@ object ChatUiDefaults {
                                 if (!message.reasoning.isNullOrBlank()) {
                                     ReasoningSection(message.reasoning, inProgress = false)
                                 }
-                                CollapsibleMessageBody(message.content, isLong, collapsed) {
-                                    toggleCollapse()
-                                }
+                                MarkdownText(message.content)
                             }
                         }
                     }
@@ -1285,75 +1261,6 @@ object ChatUiDefaults {
                 },
                 modifier = Modifier.size(16.dp),
             )
-        }
-    }
-
-    /**
-     * 助手消息正文：长消息支持整体折叠，减少长回复刷屏。
-     * 点击气泡任意位置或「收起」折叠；折叠后仅保留首行摘要，点击摘要或气泡展开。
-     */
-    @Composable
-    fun CollapsibleMessageBody(
-        content: String,
-        isLong: Boolean,
-        collapsed: Boolean,
-        onToggleCollapse: () -> Unit,
-    ) {
-        if (collapsed) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(6.dp))
-                    .clickable(onClick = onToggleCollapse)
-                    .padding(vertical = 2.dp),
-            ) {
-                Text(
-                    content.lineSequence().firstOrNull { it.isNotBlank() }.orEmpty(),
-                    style = MaterialTheme.typography.bodyMedium,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.weight(1f),
-                )
-                Text(
-                    "展开",
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.primary,
-                )
-                Icon(
-                    Icons.Filled.KeyboardArrowDown,
-                    contentDescription = "展开消息",
-                    tint = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.size(16.dp),
-                )
-            }
-        } else {
-            MarkdownText(content)
-            if (isLong) {
-                Row(
-                    horizontalArrangement = Arrangement.End,
-                    verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(6.dp))
-                        .clickable(onClick = onToggleCollapse)
-                        .padding(vertical = 2.dp),
-                ) {
-                    Text(
-                        "收起",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                    Icon(
-                        Icons.Filled.KeyboardArrowUp,
-                        contentDescription = "收起消息",
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier
-                            .padding(start = 2.dp)
-                            .size(16.dp),
-                    )
-                }
-            }
         }
     }
 

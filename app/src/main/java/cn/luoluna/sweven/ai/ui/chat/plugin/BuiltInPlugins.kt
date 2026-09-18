@@ -34,9 +34,6 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -119,7 +116,7 @@ object FlatChatUiPlugin : ChatUiPlugin {
                     ChatUiDefaults.MessageUsageRow(message, alignEnd = true)
                 }
             } else {
-                // 助手：全宽无气泡，直接 Markdown；长消息仍支持折叠；生图消息图片在文本上方
+                // 助手：全宽无气泡，直接 Markdown；生图消息图片在文本上方
                 Column(Modifier.fillMaxWidth()) {
                     ChatUiDefaults.AssistantMessageHeader(env, message)
                     if (message.images.isNotEmpty()) {
@@ -132,17 +129,13 @@ object FlatChatUiPlugin : ChatUiPlugin {
                             }
                         }
                     }
-                    val isLong = remember(message.content) {
-                        message.content.lines().size > 12 || message.content.length > 600
-                    }
-                    var collapsed by rememberSaveable(message.id) { mutableStateOf(false) }
                     if (message.content.isNotBlank() || !message.reasoning.isNullOrBlank()) {
                         Column(
                             Modifier
                                 .fillMaxWidth()
                                 .clip(RoundedCornerShape(6.dp))
                                 .combinedClickable(
-                                    onClick = { if (isLong) collapsed = !collapsed },
+                                    onClick = {},
                                     onLongClick = { env.showDetail(message) },
                                 )
                                 .padding(horizontal = 4.dp, vertical = 4.dp),
@@ -150,9 +143,7 @@ object FlatChatUiPlugin : ChatUiPlugin {
                             if (!message.reasoning.isNullOrBlank()) {
                                 ReasoningSection(message.reasoning, inProgress = false)
                             }
-                            ChatUiDefaults.CollapsibleMessageBody(message.content, isLong, collapsed) {
-                                collapsed = !collapsed
-                            }
+                            MarkdownText(message.content)
                         }
                     }
                     ChatUiDefaults.MessageActionsRow(

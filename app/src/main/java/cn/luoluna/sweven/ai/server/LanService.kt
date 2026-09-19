@@ -13,6 +13,7 @@ import android.os.Build
 import android.os.IBinder
 import androidx.core.app.ServiceCompat
 import cn.luoluna.sweven.ai.App
+import cn.luoluna.sweven.ai.data.repo.ModelAbnormalRecorder
 import cn.luoluna.sweven.ai.data.repo.ModelRouter
 import cn.luoluna.sweven.ai.net.ProviderClient
 import kotlinx.coroutines.CoroutineScope
@@ -51,6 +52,7 @@ object ServerRunner {
             smartRouteMemberDao = app.database.smartRouteMemberDao(),
             settings = app.settings,
             logDao = app.database.requestLogDao(),
+            abnormalRecorder = ModelAbnormalRecorder(app.database),
             videoJobs = VideoJobManager.get(context),
             videoJobDao = app.database.videoJobDao(),
             authDao = app.database.authDeviceDao(),

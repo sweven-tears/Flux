@@ -22,6 +22,9 @@ import cn.luoluna.sweven.ai.data.db.Role
 import cn.luoluna.sweven.ai.data.db.SmartRouteGroupDao
 import cn.luoluna.sweven.ai.data.db.SmartRouteGroupEntity
 import cn.luoluna.sweven.ai.data.db.SmartRouteMemberDao
+import cn.luoluna.sweven.ai.data.repo.FailureKind
+import cn.luoluna.sweven.ai.data.repo.ModelAbnormalRecorder
+import cn.luoluna.sweven.ai.data.repo.ModelRoute
 import cn.luoluna.sweven.ai.data.repo.SmartAggregateCapability
 import cn.luoluna.sweven.ai.data.repo.RouteGroupTarget
 import cn.luoluna.sweven.ai.data.repo.SmartAi
@@ -111,6 +114,8 @@ data class ChatError(
     val message: String,
     val httpCode: Int? = null,
     val rawBody: String? = null,
+    /** 失败分类（仅智能路由路径给出）：错误条据此区分「请求有问题」与「上游都挂了」 */
+    val kind: FailureKind? = null,
 ) {
     /** 复制用的完整错误文本：状态码 + 原始响应体（缺省回退 message） */
     fun detailText(): String = buildString {
@@ -136,7 +141,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
     private val client: ProviderClient = ctx.providerClient
     private val router = ctx.modelRouter
     private val settings = ctx.settings
-    private val smartExecutor = SmartRouteExecutor(client)
+    private val smartExecutor = SmartRouteExecutor(client, ModelAbnormalRecorder(ctx.database))
 
     /** 进行中的视频生成任务数（聊天页「生成中」提示） */
     val activeVideoJobs: StateFlow<Int> = VideoJobManager.get(app).observeActiveCount()
@@ -888,9 +893,9 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
     }
     /** flux-auto：合集=全部启用模型（厂商序×模型序），本次请求按模态筛出能用的候选，首字前失败/超时自动切换 */
     private suspend fun streamSmart(convId: Long) {
-        val routes: List<Pair<Long, String>> = router.allModelsChain()
+        val chain: List<Pair<Long, String>> = router.allModelsChain()
             .map { (provider, model) -> provider.id to model.name }
-        if (routes.isEmpty()) {
+        if (chain.isEmpty()) {
             _error.value = ChatError("${SmartAi.MODEL_NAME} 没有可聚合的启用模型，请检查厂商与模型是否已启用")
             return
         }
@@ -905,12 +910,23 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         var maxDropped = 0
         var maxStripped = 0
         val messagesCache = MessagesCache()
-        val prepared = routes.mapNotNull { (providerId, modelName) ->
-            val resolved = resolveRouteMember(providerId, modelName, conversation, history, messagesCache)
+        val resolved = chain.mapNotNull { (providerId, modelName) ->
+            val route = router.resolveById(providerId, modelName) ?: return@mapNotNull null
+            route to modelName
+        }
+        // 用户手动熔断的厂商：候选整体跳过（人工决策覆盖自动健康状态），先过滤再谈「没有可用模型」
+        val usable = resolved.filter { !it.first.provider.circuitOpen }
+        val breakerSkipped = resolved.size - usable.size
+        if (usable.isEmpty() && breakerSkipped > 0) {
+            _error.value = ChatError(breakerMessage(breakerSkipped, resolved.size))
+            return
+        }
+        val prepared = usable.mapNotNull { (route, modelName) ->
+            val member = resolveRouteMember(route, modelName, conversation, history, messagesCache)
                 ?: return@mapNotNull null
-            if (resolved.dropped > maxDropped) maxDropped = resolved.dropped
-            if (resolved.stripped > maxStripped) maxStripped = resolved.stripped
-            resolved.candidate to resolved.model
+            if (member.dropped > maxDropped) maxDropped = member.dropped
+            if (member.stripped > maxStripped) maxStripped = member.stripped
+            member.candidate to member.model
         }
         _notice.value = trimNotice(maxDropped, maxStripped)
         // 自动选择：先按请求模态剔除发过去必然失败的候选，再按健康桶与特征匹配排序（冷却候选垫底）
@@ -955,12 +971,22 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         var maxDropped = 0
         var maxStripped = 0
         val messagesCache = MessagesCache()
-        val prepared = members.mapNotNull { member ->
-            val resolved = resolveRouteMember(member.providerId, member.modelName, conversation, history, messagesCache)
+        val resolvedMembers = members.mapNotNull { member ->
+            router.resolveById(member.providerId, member.modelName)?.let { it to member.modelName }
+        }
+        // 用户手动熔断的厂商：候选整体跳过（人工决策覆盖自动健康状态）
+        val usable = resolvedMembers.filter { !it.first.provider.circuitOpen }
+        val breakerSkipped = resolvedMembers.size - usable.size
+        if (usable.isEmpty() && breakerSkipped > 0) {
+            _error.value = ChatError(breakerMessage(breakerSkipped, resolvedMembers.size))
+            return
+        }
+        val prepared = usable.mapNotNull { (route, modelName) ->
+            val member = resolveRouteMember(route, modelName, conversation, history, messagesCache)
                 ?: return@mapNotNull null
-            if (resolved.dropped > maxDropped) maxDropped = resolved.dropped
-            if (resolved.stripped > maxStripped) maxStripped = resolved.stripped
-            resolved.candidate to resolved.model
+            if (member.dropped > maxDropped) maxDropped = member.dropped
+            if (member.stripped > maxStripped) maxStripped = member.stripped
+            member.candidate to member.model
         }
         val eligible = eligibleCandidates(prepared, features, modelOf = { it.second })
         if (eligible.isEmpty()) {
@@ -994,32 +1020,37 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
      * [cache] 用于同一次请求内复用消息数组（全部候选枚举一遍时避免重复编码历史）。
      */
     private suspend fun resolveRouteMember(
-        providerId: Long,
+        resolved: ModelRoute,
         modelName: String,
         conversation: ConversationEntity?,
         history: List<MessageEntity>,
         cache: MessagesCache? = null,
     ): ResolvedMember? {
-        val resolved = router.resolveById(providerId, modelName) ?: return null
         val key = resolved.apiKey ?: return null
         if (key.key.isBlank()) return null
         if (isSelfGatewayUrl(resolved.provider.baseUrl, settings.lanPort.value)) return null
         // 模型配置行可能已被删除，此时退回空配置继续路由
-        val model = resolved.model
-            ?: ModelEntity(providerId = resolved.provider.id, name = modelName)
+        val model = resolved.model ?: ModelEntity(providerId = resolved.provider.id, name = modelName)
         val built = buildRequestBody(resolved.provider, model, conversation, history, cache)
         val candidate = SmartCandidate(
             label = "${resolved.provider.alias}/${model.alias?.takeIf { it.isNotBlank() } ?: model.name}",
             providerId = resolved.provider.id,
             modelName = model.name,
+            providerAlias = resolved.provider.alias,
             baseUrl = resolved.provider.baseUrl,
             apiKey = key.key,
             extraHeaders = parseCustomHeaders(model.customHeaders),
             body = built.body,
             protocol = resolved.provider.protocol,
+            retryable = resolved.provider.retryable,
         )
         return ResolvedMember(candidate, model, built.droppedCount, built.strippedImageCount)
     }
+
+    /** 候选全被手动熔断时的提示（区别于「没有可用模型」的缺 Key / 停用场景） */
+    private fun breakerMessage(skipped: Int, total: Int): String =
+        "全部 $total 个候选所在厂商均处于手动熔断状态（$skipped 个），" +
+            "请到「局域网 → 模型异常记录」页对相关厂商点「可重试」解除"
 
     /** 智能路由策略（本机聊天）：App 内 smartAi 与路由分组共用同一组参数 */
     private fun smartPolicy() = SmartPolicy(
@@ -1053,7 +1084,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                             publisher.reasoning(ev.text)
                         }
                         is SmartEvent.Usage -> mergeStreamUsage(ev.info)
-                        is SmartEvent.Failed -> failed = ChatError(ev.message, ev.httpCode, ev.rawBody)
+                        is SmartEvent.Failed -> failed = ChatError(ev.message, ev.httpCode, ev.rawBody, ev.kind)
                         // 出内容后不再有 Trying，首个内容出现时的最新候选即胜出者
                         is SmartEvent.Trying -> activeStreamModel = ev.providerId to ev.modelName
                         SmartEvent.Done -> Unit

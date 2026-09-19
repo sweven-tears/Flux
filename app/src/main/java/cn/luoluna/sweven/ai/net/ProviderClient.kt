@@ -47,6 +47,8 @@ sealed interface ChatEvent {
         val message: String,
         val httpCode: Int? = null,
         val rawBody: String? = null,
+        /** 429 上游要求的等待时长（Retry-After 折算为毫秒），用于给该候选设定冷却 */
+        val retryAfterMs: Long? = null,
     ) : ChatEvent
     data object Done : ChatEvent
 }
@@ -278,7 +280,14 @@ class ProviderClient {
         resp.use { r ->
             if (!r.isSuccessful) {
                 val body = readBody(r)
-                emit(ChatEvent.Failed(parseErrorMessage(r.code, body), r.code, body.takeIf { it.isNotBlank() }))
+                emit(
+                    ChatEvent.Failed(
+                        parseErrorMessage(r.code, body),
+                        r.code,
+                        body.takeIf { it.isNotBlank() },
+                        parseRetryAfterMs(r.header("Retry-After")),
+                    )
+                )
                 return@flow
             }
             val source = r.body?.source()
@@ -344,7 +353,10 @@ class ProviderClient {
             http.newCall(request).execute().use { resp ->
                 val respBody = resp.body?.string().orEmpty()
                 if (!resp.isSuccessful) {
-                    throw HttpApiException(resp.code, respBody, parseErrorMessage(resp.code, respBody))
+                    throw HttpApiException(
+                        resp.code, respBody, parseErrorMessage(resp.code, respBody),
+                        parseRetryAfterMs(resp.header("Retry-After")),
+                    )
                 }
                 toOpenAiChatResponse(protocol, ChatJson.json.parseToJsonElement(respBody).jsonObject)
             }

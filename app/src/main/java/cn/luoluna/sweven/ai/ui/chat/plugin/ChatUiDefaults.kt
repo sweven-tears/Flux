@@ -111,6 +111,7 @@ import cn.luoluna.sweven.ai.data.db.MessageEntity
 import cn.luoluna.sweven.ai.data.db.PresetEntity
 import cn.luoluna.sweven.ai.data.db.Role
 import cn.luoluna.sweven.ai.data.repo.SmartAi
+import cn.luoluna.sweven.ai.data.repo.label
 import cn.luoluna.sweven.ai.net.ThinkingDepth
 import cn.luoluna.sweven.ai.ui.chat.ChatError
 import cn.luoluna.sweven.ai.ui.chat.ConversationHit
@@ -592,16 +593,28 @@ object ChatUiDefaults {
                 verticalAlignment = Alignment.CenterVertically,
                 modifier = Modifier.padding(start = 12.dp),
             ) {
-                Text(
-                    error.message,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onErrorContainer,
-                    maxLines = 4,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier
+                Column(
+                    Modifier
                         .weight(1f)
                         .padding(vertical = 10.dp),
-                )
+                ) {
+                    // 分类标签：区分「请求参数问题」（换模型也没用）与「候选全部不可用」（上游的锅）
+                    error.kind?.let { kind ->
+                        Text(
+                            kind.label(),
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onErrorContainer,
+                            maxLines = 1,
+                        )
+                    }
+                    Text(
+                        error.message,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onErrorContainer,
+                        maxLines = 4,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
                 IconButton(onClick = {
                     copyText(context, error.detailText())
                     Toast.makeText(context, "已复制", Toast.LENGTH_SHORT).show()

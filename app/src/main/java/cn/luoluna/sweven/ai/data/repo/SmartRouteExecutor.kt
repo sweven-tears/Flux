@@ -1,6 +1,7 @@
 package cn.luoluna.sweven.ai.data.repo
 
 import cn.luoluna.sweven.ai.data.SmartModes
+import cn.luoluna.sweven.ai.data.db.AbnormalVia
 import cn.luoluna.sweven.ai.net.ChatEvent
 import cn.luoluna.sweven.ai.net.ProviderClient
 import cn.luoluna.sweven.ai.net.ProviderProtocol
@@ -23,13 +24,20 @@ data class SmartCandidate(
     /** 厂商 id + 模型名：健康度打点的唯一键 */
     val providerId: Long,
     val modelName: String,
+    /** 厂商别名：异常记录落库时的快照（别名改动后历史仍可读） */
+    val providerAlias: String,
     val baseUrl: String,
     val apiKey: String,
     val extraHeaders: Map<String, String>,
     val body: JsonObject,
     /** 厂商接口协议（ProviderProtocol 取值）：请求构建与 SSE 解析按协议分发 */
     val protocol: String = ProviderProtocol.OPENAI,
-)
+    /** 厂商是否允许重试（用户手动标记）：false 时首字前失败过一次就不再进入后续轮次 */
+    val retryable: Boolean = true,
+) {
+    /** 健康度/异常记录的唯一键 */
+    val key: String get() = "$providerId:$modelName"
+}
 
 /** 智能路由策略：响应模式 + 各档首字超时 + 冷却参数（App 内与局域网链路共用） */
 data class SmartPolicy(
@@ -64,6 +72,8 @@ sealed interface SmartEvent {
         val message: String,
         val httpCode: Int? = null,
         val rawBody: String? = null,
+        /** 失败分类：聊天页据此区分「请求有问题」与「上游都挂了」 */
+        val kind: FailureKind = FailureKind.EXHAUSTED,
     ) : SmartEvent
 }
 
@@ -77,7 +87,10 @@ sealed interface SmartEvent {
  * 超时只记「慢」不记失败，一轮无成功后放宽为完整链 + 聊天档超时。
  * 每次尝试结果实时打点到 [SmartHealth]，驱动三桶排序与极速轮过滤。
  */
-class SmartRouteExecutor(private val client: ProviderClient) {
+class SmartRouteExecutor(
+    private val client: ProviderClient,
+    private val recorder: ModelAbnormalRecorder,
+) {
 
     fun stream(
         candidates: List<SmartCandidate>,
@@ -92,38 +105,63 @@ class SmartRouteExecutor(private val client: ProviderClient) {
         val fastRound = policy.mode == SmartModes.FAST
         // 每个候选保留最后一次失败原因（跨轮覆盖），终态汇总展示
         val lastErrors = LinkedHashMap<String, String>()
+        // 用户标记为不可重试的候选：首字前失败过一次就不再进入后续轮次（等效「不参与重试链」）
+        val retired = HashSet<String>()
         for (round in 1..rounds) {
             // 健康桶整轮取同一时刻，避免轮内冷却状态漂移
             val now = System.currentTimeMillis()
+            val pool = candidates.filter { it.key !in retired }
             // 极速模式首轮只发健康且速度未知/实测达标的候选；一轮无成功后放宽为完整链
             val roundCandidates = if (fastRound && round == 1) {
                 pickFastRound(
-                    candidates,
+                    pool,
                     SMART_FAST_ROUND_LIMIT,
                     bucketOf = { SmartHealth.bucket(it.providerId, it.modelName, now) },
                     fastCapableOf = { SmartHealth.fastCapable(it.providerId, it.modelName, policy.fastMs) },
                 )
             } else {
-                candidates
+                pool
             }
             if (roundCandidates.isEmpty()) continue
 
-            // 极速轮「等首字超时」只记慢（上游正在生成，只是没赶上极短窗口）；
-            // 其余失败（连接错误/HTTP 错误/其他轮次超时/流中断）都是病，累积连续失败
-            fun recordTimeoutSlow(candidate: SmartCandidate) {
-                if (fastRound && round == 1) {
-                    SmartHealth.recordSlow(candidate.providerId, candidate.modelName, policy.fastMs)
-                } else {
-                    SmartHealth.recordFailure(
-                        candidate.providerId, candidate.modelName, now, policy.cooldownThreshold, policy.cooldownMs,
+            // 本轮各候选的失败分类：本轮全部鉴权失败时提前终态（换谁都没用，别再轮巡）
+            val roundKinds = mutableListOf<FailureKind>()
+
+            /**
+             * 一次候选失败：落一条模型异常记录 + 按分类打点健康度。
+             * 参数错误 / 鉴权失败 / 模型不存在不进冷却（见 [FailureKind.countsTowardCooldown]）；
+             * 极速轮的「等首字超时」只记慢（上游正在生成，只是没赶上极短窗口）。
+             */
+            suspend fun reportFailure(
+                candidate: SmartCandidate,
+                kind: FailureKind,
+                message: String,
+                httpCode: Int? = null,
+                retryAfterMs: Long? = null,
+            ) {
+                lastErrors[candidate.label] = message
+                roundKinds += kind
+                if (!candidate.retryable) retired += candidate.key
+                recorder.record(
+                    candidate.providerId,
+                    candidate.providerAlias,
+                    candidate.modelName,
+                    AbnormalVia.APP,
+                    httpCode,
+                    message,
+                )
+                when {
+                    kind == FailureKind.TIMEOUT && fastRound && round == 1 ->
+                        SmartHealth.recordSlow(candidate.providerId, candidate.modelName, policy.fastMs)
+                    kind == FailureKind.RATE_LIMIT ->
+                        SmartHealth.recordCooldown(
+                            candidate.providerId, candidate.modelName, now, retryAfterMs ?: policy.cooldownMs,
+                        )
+                    else -> SmartHealth.recordFailure(
+                        candidate.providerId, candidate.modelName, now,
+                        policy.cooldownThreshold, policy.cooldownMs, kind,
                     )
                 }
-            }
-
-            fun recordFailure(candidate: SmartCandidate) {
-                SmartHealth.recordFailure(
-                    candidate.providerId, candidate.modelName, now, policy.cooldownThreshold, policy.cooldownMs,
-                )
             }
 
             candidateLoop@ for ((index, candidate) in roundCandidates.withIndex()) {
@@ -141,8 +179,7 @@ class SmartRouteExecutor(private val client: ProviderClient) {
                 } catch (e: CancellationException) {
                     throw e
                 } catch (e: Exception) {
-                    lastErrors[candidate.label] = "连接失败（${e.message ?: e.javaClass.simpleName}）"
-                    recordFailure(candidate)
+                    reportFailure(candidate, FailureKind.NETWORK, "连接失败（${e.message ?: e.javaClass.simpleName}）")
                     continue@candidateLoop
                 }
                 val resp = try {
@@ -153,14 +190,12 @@ class SmartRouteExecutor(private val client: ProviderClient) {
                     throw e
                 } catch (e: Exception) {
                     call.cancel()
-                    lastErrors[candidate.label] = "连接失败（${e.message ?: e.javaClass.simpleName}）"
-                    recordFailure(candidate)
+                    reportFailure(candidate, FailureKind.NETWORK, "连接失败（${e.message ?: e.javaClass.simpleName}）")
                     continue@candidateLoop
                 }
                 if (resp == null) {
                     call.cancel()
-                    lastErrors[candidate.label] = "${timeoutLabel(timeoutMs)} 内未建立连接"
-                    recordFailure(candidate)
+                    reportFailure(candidate, FailureKind.TIMEOUT, "${timeoutLabel(timeoutMs)} 内未建立连接")
                     continue@candidateLoop
                 }
 
@@ -191,8 +226,7 @@ class SmartRouteExecutor(private val client: ProviderClient) {
                                 if (gotContent) {
                                     success = true
                                 } else {
-                                    lastErrors[candidate.label] = "${timeoutLabel(timeoutMs)} 内无输出"
-                                    recordTimeoutSlow(candidate)
+                                    reportFailure(candidate, FailureKind.TIMEOUT, "${timeoutLabel(timeoutMs)} 内无输出")
                                 }
                                 break
                             }
@@ -215,14 +249,34 @@ class SmartRouteExecutor(private val client: ProviderClient) {
                                 send(SmartEvent.Usage(ev.info))
                             }
                             is ChatEvent.Failed -> {
+                                val kind = classifyFailure(ev.httpCode)
                                 if (gotContent) {
                                     // 已开始输出后中断：不再回退，直接终态；中断本身也是上游不稳信号
-                                    recordFailure(candidate)
-                                    send(SmartEvent.Failed("${candidate.label}：${ev.message}", ev.httpCode, ev.rawBody))
+                                    reportFailure(candidate, FailureKind.UPSTREAM, ev.message, ev.httpCode)
+                                    send(
+                                        SmartEvent.Failed(
+                                            "${candidate.label}：${ev.message}",
+                                            ev.httpCode,
+                                            ev.rawBody,
+                                            FailureKind.UPSTREAM,
+                                        )
+                                    )
                                     return@channelFlow
                                 }
-                                lastErrors[candidate.label] = ev.message
-                                recordFailure(candidate)
+                                reportFailure(candidate, kind, ev.message, ev.httpCode, ev.retryAfterMs)
+                                if (kind.terminal) {
+                                    // 请求本身有问题：换候选、再轮巡都不会好，立刻把错误交回用户
+                                    send(
+                                        SmartEvent.Failed(
+                                            "${candidate.label} 返回 HTTP ${ev.httpCode}：${ev.message}" +
+                                                "（请求本身有问题，未再尝试其他候选）",
+                                            ev.httpCode,
+                                            ev.rawBody,
+                                            kind,
+                                        )
+                                    )
+                                    return@channelFlow
+                                }
                                 break
                             }
                             ChatEvent.Done -> {
@@ -242,6 +296,17 @@ class SmartRouteExecutor(private val client: ProviderClient) {
                     send(SmartEvent.Done)
                     return@channelFlow
                 }
+            }
+            // 本轮全部候选都是鉴权失败：换谁都没用，提前终态而不是把 N 轮轮巡跑满
+            if (roundKinds.isNotEmpty() && roundKinds.all { it == FailureKind.AUTH }) {
+                val summary = lastErrors.entries.joinToString("；") { "${it.key}：${it.value}" }
+                send(
+                    SmartEvent.Failed(
+                        "全部候选均鉴权失败（HTTP 401/403），已提前停止：$summary",
+                        kind = FailureKind.AUTH,
+                    )
+                )
+                return@channelFlow
             }
             // 一轮跑完仍未成功，继续下一轮（极速首轮放宽，末轮不做区分，由外层 for 控制）
         }

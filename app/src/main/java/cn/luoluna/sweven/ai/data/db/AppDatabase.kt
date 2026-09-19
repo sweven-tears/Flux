@@ -23,8 +23,9 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         RequestLogEntity::class,
         VideoJobEntity::class,
         NetworkLogEntity::class,
+        ModelAbnormalEntity::class,
     ],
-    version = 17,
+    version = 18,
     exportSchema = false,
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -42,6 +43,7 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun requestLogDao(): RequestLogDao
     abstract fun videoJobDao(): VideoJobDao
     abstract fun networkLogDao(): NetworkLogDao
+    abstract fun modelAbnormalDao(): ModelAbnormalDao
 
     companion object {
         /** v1 → v2：新增文件夹、预设对话表；会话表增加 folderId / systemPrompt */
@@ -236,12 +238,33 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        /** v17 → v18：新增模型异常记录表；厂商表增加手动熔断/可重试决策列 */
+        private val MIGRATION_17_18 = object : Migration(17, 18) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `model_abnormals` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, " +
+                        "`at` INTEGER NOT NULL, `providerId` INTEGER NOT NULL, `providerAlias` TEXT NOT NULL, " +
+                        "`modelName` TEXT NOT NULL, `via` TEXT NOT NULL, `httpCode` INTEGER, `error` TEXT, " +
+                        "`decision` TEXT NOT NULL DEFAULT 'PENDING', `decidedAt` INTEGER, " +
+                        "`routeTriggered` INTEGER NOT NULL DEFAULT 0, `count` INTEGER NOT NULL DEFAULT 1)"
+                )
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_model_abnormals_at` ON `model_abnormals` (`at`)")
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS `index_model_abnormals_providerId` ON `model_abnormals` (`providerId`)"
+                )
+                db.execSQL("ALTER TABLE `providers` ADD COLUMN `circuitOpen` INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("ALTER TABLE `providers` ADD COLUMN `circuitOpenAt` INTEGER")
+                db.execSQL("ALTER TABLE `providers` ADD COLUMN `retryable` INTEGER NOT NULL DEFAULT 1")
+            }
+        }
+
         fun build(context: Context): AppDatabase =
             Room.databaseBuilder(context, AppDatabase::class.java, "flux.db")
                 .addMigrations(
                     MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7,
                     MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12,
                     MIGRATION_12_13, MIGRATION_13_14, MIGRATION_14_15, MIGRATION_15_16, MIGRATION_16_17,
+                    MIGRATION_17_18,
                 )
                 .fallbackToDestructiveMigration()
                 .build()

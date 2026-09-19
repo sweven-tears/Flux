@@ -2,6 +2,7 @@ package cn.luoluna.sweven.ai.server
 
 import cn.luoluna.sweven.ai.data.AppSettings
 import cn.luoluna.sweven.ai.data.SmartModes
+import cn.luoluna.sweven.ai.data.db.AbnormalVia
 import cn.luoluna.sweven.ai.data.db.AuthDeviceDao
 import cn.luoluna.sweven.ai.data.db.AuthDeviceEntity
 import cn.luoluna.sweven.ai.data.db.ModelDao
@@ -15,12 +16,15 @@ import cn.luoluna.sweven.ai.data.db.SmartRouteGroupEntity
 import cn.luoluna.sweven.ai.data.db.SmartRouteMemberDao
 import cn.luoluna.sweven.ai.data.db.VideoJobDao
 import cn.luoluna.sweven.ai.data.db.VideoJobEntity
+import cn.luoluna.sweven.ai.data.repo.FailureKind
+import cn.luoluna.sweven.ai.data.repo.ModelAbnormalRecorder
 import cn.luoluna.sweven.ai.data.repo.ModelRouter
 import cn.luoluna.sweven.ai.data.repo.RouteGroupTarget
 import cn.luoluna.sweven.ai.data.repo.SmartAi
 import cn.luoluna.sweven.ai.data.repo.SmartHealth
 import cn.luoluna.sweven.ai.data.repo.SmartPolicy
 import cn.luoluna.sweven.ai.data.repo.aggregateCapability
+import cn.luoluna.sweven.ai.data.repo.classifyFailure
 import cn.luoluna.sweven.ai.data.repo.eligibleCandidates
 import cn.luoluna.sweven.ai.data.repo.featuresOfRequestBody
 import cn.luoluna.sweven.ai.data.repo.intersectCapability
@@ -28,10 +32,12 @@ import cn.luoluna.sweven.ai.data.repo.isSelfGatewayUrl
 import cn.luoluna.sweven.ai.data.repo.modalityLabel
 import cn.luoluna.sweven.ai.data.repo.orderCandidates
 import cn.luoluna.sweven.ai.data.repo.pickFastRound
+import cn.luoluna.sweven.ai.data.repo.terminal
 import cn.luoluna.sweven.ai.data.repo.SMART_FAST_ROUND_LIMIT
 import cn.luoluna.sweven.ai.net.AdvancedParams
 import cn.luoluna.sweven.ai.net.ChatEvent
 import cn.luoluna.sweven.ai.net.ChatJson
+import cn.luoluna.sweven.ai.net.HttpApiException
 import cn.luoluna.sweven.ai.net.ProviderClient
 import cn.luoluna.sweven.ai.net.ProviderProtocol
 import cn.luoluna.sweven.ai.net.applyBuiltinTools
@@ -39,6 +45,7 @@ import cn.luoluna.sweven.ai.net.buildChatBody
 import cn.luoluna.sweven.ai.net.extractUsage
 import cn.luoluna.sweven.ai.net.mergeCustomBody
 import cn.luoluna.sweven.ai.net.parseCustomHeaders
+import cn.luoluna.sweven.ai.net.parseRetryAfterMs
 import cn.luoluna.sweven.ai.net.stringAt
 import cn.luoluna.sweven.ai.net.streamFlagOf
 import cn.luoluna.sweven.ai.net.toOpenAiChatResponse
@@ -96,6 +103,8 @@ class LanServer(
     private val smartRouteMemberDao: SmartRouteMemberDao,
     private val settings: AppSettings,
     private val logDao: RequestLogDao,
+    /** 模型异常记录写入点（真实上游失败落库，供「模型异常记录」页决策） */
+    private val abnormalRecorder: ModelAbnormalRecorder,
     /** 视频生成（Sora 兼容 /v1/videos）：任务管理器与任务表 */
     private val videoJobs: VideoJobManager,
     private val videoJobDao: VideoJobDao,
@@ -147,6 +156,26 @@ class LanServer(
             )
             logDao.prune(LOG_KEEP)
         }
+    }
+
+    /**
+     * 落一条模型异常记录（真实上游失败：连接失败 / HTTP 错误 / 超时 / 流中断）。
+     * 网关自判的校验失败（messages 缺失、未授权、分组为空等）不记，避免把网关自身的问题记到厂商头上。
+     */
+    private suspend fun recordAbnormal(
+        provider: ProviderEntity,
+        modelName: String,
+        httpCode: Int?,
+        error: String?,
+    ) {
+        abnormalRecorder.record(
+            providerId = provider.id,
+            providerAlias = provider.alias,
+            modelName = modelName,
+            via = AbnormalVia.LAN,
+            httpCode = httpCode,
+            error = error,
+        )
     }
 
     /** 从流式载荷帧里提取 usage（仅帧内容含 "usage" 时才解析，避免每帧 parse） */
@@ -452,18 +481,19 @@ class LanServer(
         val upstream = try {
             client.openChat(route.provider.baseUrl, apiKey.key, payload, extraHeaders, protocol)
         } catch (e: Exception) {
-            logRequest(device, aggregateId, via, stream, startedAt, null, false, "上游连接失败: ${e.message ?: e.javaClass.simpleName}")
-            respondOpenAiError(HttpStatusCode.BadGateway, "上游连接失败: ${e.message ?: e.javaClass.simpleName}")
+            val message = "上游连接失败: ${e.message ?: e.javaClass.simpleName}"
+            logRequest(device, aggregateId, via, stream, startedAt, null, false, message)
+            recordAbnormal(route.provider, modelName, null, message)
+            respondOpenAiError(HttpStatusCode.BadGateway, message)
             return
         }
 
         if (!upstream.isSuccessful) {
             val errBody = client.readBody(upstream)
             upstream.close()
-            logRequest(
-                device, aggregateId, via, stream, startedAt, null, false,
-                "上游 HTTP ${upstream.code}: ${errBody.take(200)}",
-            )
+            val message = "上游 HTTP ${upstream.code}: ${errBody.take(200)}"
+            logRequest(device, aggregateId, via, stream, startedAt, null, false, message)
+            recordAbnormal(route.provider, modelName, upstream.code, message)
             respondText(
                 errBody.ifBlank { """{"error":{"message":"upstream HTTP ${upstream.code}"}}""" },
                 ContentType.Application.Json,
@@ -509,6 +539,7 @@ class LanServer(
                 throw e
             } catch (e: Exception) {
                 streamError = "流式传输中断: ${e.message ?: e.javaClass.simpleName}"
+                recordAbnormal(route.provider, modelName, null, streamError)
                 throw e
             } finally {
                 upstream.close()
@@ -541,6 +572,7 @@ class LanServer(
                     toOpenAiChatResponse(protocol, ChatJson.json.parseToJsonElement(respBody).jsonObject)
                 }.getOrNull()
                 val usage = normalized?.let { extractUsage(it) }
+                if (normalized == null) recordAbnormal(route.provider, modelName, null, "响应归一化失败")
                 logRequest(
                     device, aggregateId, via, stream, startedAt, null, normalized != null,
                     if (normalized == null) "响应归一化失败" else null,
@@ -613,7 +645,15 @@ class LanServer(
             val model = r.model ?: ModelEntity(providerId = r.provider.id, name = modelName)
             SmartPrepared(r.provider, apiKey, model, r.advancedParams)
         }
-        val eligible = eligibleCandidates(resolved, features, modelOf = { it.model })
+        // 用户手动熔断的厂商：候选整体跳过（人工决策覆盖自动健康状态），先过滤再谈「没有可用候选」
+        val usable = resolved.filter { !it.provider.circuitOpen }
+        if (usable.isEmpty() && resolved.isNotEmpty()) {
+            val message = "全部候选所在厂商均处于手动熔断状态，请在 Flux App 的「模型异常记录」页点「可重试」解除"
+            logRequest(device, aggregateId, null, stream, startedAt, null, false, message)
+            respondOpenAiError(HttpStatusCode.BadGateway, "${SmartAi.MODEL_NAME} $message")
+            return
+        }
+        val eligible = eligibleCandidates(usable, features, modelOf = { it.model })
         if (eligible.isEmpty()) {
             logRequest(device, aggregateId, null, stream, startedAt, null, false, "无候选支持请求模态")
             respondOpenAiError(
@@ -679,7 +719,15 @@ class LanServer(
             SmartPrepared(r.provider, apiKey, model, r.advancedParams)
         }
         // 自动选择：模态不匹配的成员不参与本次路由（组内参数一致的承诺）
-        val eligible = eligibleCandidates(resolved, features, modelOf = { it.model })
+        // 用户手动熔断的厂商：成员整体跳过（人工决策覆盖自动健康状态）
+        val usable = resolved.filter { !it.provider.circuitOpen }
+        if (usable.isEmpty() && resolved.isNotEmpty()) {
+            val message = "分组 '$aggregateId' 的成员所在厂商均处于手动熔断状态，请在 Flux App 的「模型异常记录」页点「可重试」解除"
+            logRequest(device, aggregateId, null, stream, startedAt, null, false, message)
+            respondOpenAiError(HttpStatusCode.BadGateway, message)
+            return
+        }
+        val eligible = eligibleCandidates(usable, features, modelOf = { it.model })
         if (eligible.isEmpty()) {
             logRequest(device, aggregateId, null, stream, startedAt, null, false, "分组内无支持当前模态的可用成员")
             respondOpenAiError(
@@ -709,7 +757,10 @@ class LanServer(
 
     /**
      * 智能路由候选执行核心（smartAi 与路由分组共用）：轮巡 [maxRounds] 轮逐个尝试候选，
-     * 非流式成功即转发 JSON，流式建连后透传/回译 SSE；每次尝试打点 [SmartHealth]，整次请求写日志。
+     * 非流式成功即转发 JSON，流式建连后透传/回译 SSE；每次尝试打点 [SmartHealth] 并落模型异常记录。
+     *
+     * 失败按 HTTP 状态码分类决定去留（见 [FailureKind]）：请求参数错误立即终态，
+     * 本轮全部鉴权失败也提前终态，其余换候选继续；用户标记为不可重试的厂商只给一次机会。
      */
     private suspend fun ApplicationCall.executeSmartCandidates(
         aggregateId: String,
@@ -725,40 +776,59 @@ class LanServer(
         // 轮巡 N 轮：每轮按顺序尝试全部候选，全部失败才进入下一轮；
         // 每个候选保留最后一次失败原因，轮巡结束汇总返回，明确「全部候选不可用」
         val lastErrors = LinkedHashMap<String, String>()
+        // 用户标记为不可重试的厂商：首字前失败过一次就不再进入后续轮次（等效「不参与重试链」）
+        val retired = HashSet<String>()
         for (round in 1..maxRounds) {
             // 健康桶整轮取同一时刻，避免轮内冷却状态漂移
             val roundNow = System.currentTimeMillis()
+            val pool = prepared.filter { "${it.provider.id}:${it.model.name}" !in retired }
             // 极速模式首轮只发健康且速度未知/实测达标的候选（限制学费上界）；一轮无成功后放宽为完整链
             val roundCandidates = if (policy.mode == SmartModes.FAST && round == 1) {
                 pickFastRound(
-                    prepared,
+                    pool,
                     SMART_FAST_ROUND_LIMIT,
                     bucketOf = { SmartHealth.bucket(it.provider.id, it.model.name, roundNow) },
                     fastCapableOf = { SmartHealth.fastCapable(it.provider.id, it.model.name, policy.fastMs) },
                 )
             } else {
-                prepared
+                pool
             }
             if (roundCandidates.isEmpty()) continue
 
-            // 极速轮「等首字超时」只记慢（不累积失败，放宽轮成功会带回真实测速）；
-            // 其余失败都是病，累积连续失败达到阈值进入冷却
-            fun recordTimeoutSlow(candidate: SmartPrepared) {
-                if (policy.mode == SmartModes.FAST && round == 1) {
-                    SmartHealth.recordSlow(candidate.provider.id, candidate.model.name, policy.fastMs)
-                } else {
-                    SmartHealth.recordFailure(
+            // 本轮各候选的失败分类：本轮全部鉴权失败时提前终态（换谁都没用，别再轮巡）
+            val roundKinds = mutableListOf<FailureKind>()
+
+            /**
+             * 一次候选失败：落一条模型异常记录 + 按分类打点健康度。
+             * 参数错误 / 鉴权失败 / 模型不存在不进冷却（见 [FailureKind.countsTowardCooldown]）；
+             * 极速轮的「等首字超时」只记慢（不累积失败，放宽轮成功会带回真实测速）。
+             */
+            suspend fun reportFailure(
+                candidate: SmartPrepared,
+                kind: FailureKind,
+                message: String,
+                httpCode: Int? = null,
+                retryAfterMs: Long? = null,
+            ) {
+                lastErrors[candidate.label] = message
+                roundKinds += kind
+                if (!candidate.provider.retryable) {
+                    retired += "${candidate.provider.id}:${candidate.model.name}"
+                }
+                recordAbnormal(candidate.provider, candidate.model.name, httpCode, message)
+                when {
+                    kind == FailureKind.TIMEOUT && policy.mode == SmartModes.FAST && round == 1 ->
+                        SmartHealth.recordSlow(candidate.provider.id, candidate.model.name, policy.fastMs)
+                    kind == FailureKind.RATE_LIMIT ->
+                        SmartHealth.recordCooldown(
+                            candidate.provider.id, candidate.model.name, roundNow,
+                            retryAfterMs ?: policy.cooldownMs,
+                        )
+                    else -> SmartHealth.recordFailure(
                         candidate.provider.id, candidate.model.name, roundNow,
-                        policy.cooldownThreshold, policy.cooldownMs,
+                        policy.cooldownThreshold, policy.cooldownMs, kind,
                     )
                 }
-            }
-
-            fun recordFailure(candidate: SmartPrepared) {
-                SmartHealth.recordFailure(
-                    candidate.provider.id, candidate.model.name, roundNow,
-                    policy.cooldownThreshold, policy.cooldownMs,
-                )
             }
 
             for (candidate in roundCandidates) {
@@ -791,8 +861,19 @@ class LanServer(
                     )
                     val resp = result.getOrNull()
                     if (resp == null) {
-                        lastErrors[candidate.label] = result.exceptionOrNull()?.message ?: "请求失败"
-                        recordFailure(candidate)
+                        val e = result.exceptionOrNull()
+                        val http = e as? HttpApiException
+                        val kind = classifyFailure(http?.httpCode)
+                        val message = e?.message ?: "请求失败"
+                        reportFailure(candidate, kind, message, http?.httpCode, http?.retryAfterMs)
+                        if (kind.terminal) {
+                            logRequest(device, aggregateId, candidate.label, stream, startedAt, null, false, message)
+                            respondOpenAiError(
+                                HttpStatusCode.BadRequest,
+                                "$aggregateId 请求参数有误（HTTP ${http?.httpCode}）：$message（未再尝试其他候选）",
+                            )
+                            return
+                        }
                         continue
                     }
                     SmartHealth.recordSuccess(
@@ -819,20 +900,33 @@ class LanServer(
                 } catch (e: CancellationException) {
                     throw e
                 } catch (e: Exception) {
-                    lastErrors[candidate.label] = "连接失败（${e.message ?: e.javaClass.simpleName}）"
-                    recordFailure(candidate)
+                    reportFailure(candidate, FailureKind.NETWORK, "连接失败（${e.message ?: e.javaClass.simpleName}）")
                     continue
                 }
                 if (upstream == null) {
-                    lastErrors[candidate.label] = "$timeoutLabel 内未建立连接"
-                    recordFailure(candidate)
+                    reportFailure(candidate, FailureKind.TIMEOUT, "$timeoutLabel 内未建立连接")
                     continue
                 }
                 if (!upstream.isSuccessful) {
-                    client.readBody(upstream)
+                    val code = upstream.code
+                    val retryAfterMs = parseRetryAfterMs(upstream.header("Retry-After"))
+                    val errBody = client.readBody(upstream)
                     upstream.close()
-                    lastErrors[candidate.label] = "上游 HTTP ${upstream.code}"
-                    recordFailure(candidate)
+                    val kind = classifyFailure(code)
+                    val message = buildString {
+                        append("上游 HTTP $code")
+                        val detail = errBody.take(200)
+                        if (detail.isNotBlank()) append(": $detail")
+                    }
+                    reportFailure(candidate, kind, message, code, retryAfterMs)
+                    if (kind.terminal) {
+                        logRequest(device, aggregateId, candidate.label, stream, startedAt, null, false, message)
+                        respondOpenAiError(
+                            HttpStatusCode.BadRequest,
+                            "$aggregateId 请求参数有误（HTTP $code）：$message（未再尝试其他候选）",
+                        )
+                        return
+                    }
                     continue
                 }
 
@@ -869,8 +963,7 @@ class LanServer(
                 if (firstPayload == null) {
                     producer.cancel()
                     upstream.close()
-                    lastErrors[candidate.label] = "$timeoutLabel 内无输出"
-                    recordTimeoutSlow(candidate)
+                    reportFailure(candidate, FailureKind.TIMEOUT, "$timeoutLabel 内无输出")
                     continue
                 }
                 SmartHealth.recordSuccess(
@@ -906,7 +999,7 @@ class LanServer(
                 } catch (e: Exception) {
                     // 透传中断：上游不稳信号，累积健康度失败后原样抛给 Ktor 断开客户端
                     streamError = "流式传输中断: ${e.message ?: e.javaClass.simpleName}"
-                    recordFailure(candidate)
+                    reportFailure(candidate, FailureKind.UPSTREAM, streamError)
                     throw e
                 } finally {
                     producer.cancel()
@@ -922,6 +1015,14 @@ class LanServer(
                         )
                     }
                 }
+                return
+            }
+            // 本轮全部候选都是鉴权失败：换谁都没用，提前终态而不是把 N 轮轮巡跑满
+            if (roundKinds.isNotEmpty() && roundKinds.all { it == FailureKind.AUTH }) {
+                val summary = lastErrors.entries.joinToString("；") { "${it.key}：${it.value}" }
+                val message = "$aggregateId 全部候选均鉴权失败（HTTP 401/403），已提前停止：$summary"
+                logRequest(device, aggregateId, null, stream, startedAt, null, false, message)
+                respondOpenAiError(HttpStatusCode.Unauthorized, message)
                 return
             }
         }

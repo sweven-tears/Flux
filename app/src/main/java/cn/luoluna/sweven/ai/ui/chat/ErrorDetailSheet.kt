@@ -21,6 +21,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
+import cn.luoluna.sweven.ai.data.repo.label
 import cn.luoluna.sweven.ai.ui.common.MonoFont
 
 /**
@@ -48,6 +49,13 @@ fun ErrorDetailSheet(error: ChatError, onDismiss: () -> Unit) {
                     copyMessageText(context, error.detailText())
                     Toast.makeText(context, "已复制", Toast.LENGTH_SHORT).show()
                 }) { Text("复制全部") }
+            }
+            error.kind?.let { kind ->
+                Text(
+                    kind.label(),
+                    style = MaterialTheme.typography.labelLarge,
+                    color = MaterialTheme.colorScheme.error,
+                )
             }
             error.httpCode?.let {
                 Text(

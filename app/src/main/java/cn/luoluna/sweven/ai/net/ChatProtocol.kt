@@ -49,7 +49,24 @@ class HttpApiException(
     val httpCode: Int,
     val rawBody: String,
     message: String,
+    /** 429 上游要求的等待时长（Retry-After 折算为毫秒），供智能路由给该候选设冷却 */
+    val retryAfterMs: Long? = null,
 ) : Exception(message)
+
+/**
+ * Retry-After 头折算为毫秒：支持秒数（`120`）与 HTTP-date（`Wed, 21 Oct 2026 07:28:00 GMT`）两种形态。
+ * 无法解析或时间已过返回 null（由调用方按默认冷却处理）。
+ */
+internal fun parseRetryAfterMs(value: String?): Long? {
+    val raw = value?.trim().orEmpty()
+    if (raw.isEmpty()) return null
+    raw.toLongOrNull()?.let { seconds -> return (seconds * 1000).takeIf { it > 0 } }
+    val at = runCatching {
+        java.time.ZonedDateTime.parse(raw, java.time.format.DateTimeFormatter.RFC_1123_DATE_TIME)
+            .toInstant().toEpochMilli()
+    }.getOrNull() ?: return null
+    return (at - System.currentTimeMillis()).takeIf { it > 0 }
+}
 
 /** 模型输入/输出类型 */
 object Modality {

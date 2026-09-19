@@ -28,6 +28,12 @@ data class ProviderEntity(
     /** 手动拖拽排序权重，小者在前；同值按 createdAt */
     val sortOrder: Int = 0,
     val createdAt: Long = System.currentTimeMillis(),
+    /** 用户手动熔断：为 true 时该厂商的全部候选被智能路由直接跳过（人工覆盖自动健康状态） */
+    val circuitOpen: Boolean = false,
+    /** 手动熔断时间（未熔断为 null） */
+    val circuitOpenAt: Long? = null,
+    /** 用户标记为可重试：false 时该厂商候选仍会试一次，但首字前失败后本轮不再换回给它 */
+    val retryable: Boolean = true,
 )
 
 @Entity(
@@ -379,6 +385,54 @@ data class RequestLogEntity(
     /** 上游 usage 的 token 计数，上游未返回时为 null */
     val promptTokens: Long? = null,
     val completionTokens: Long? = null,
+)
+
+/** 异常记录的触发链路：App 内聊天 / 局域网网关 */
+object AbnormalVia {
+    const val APP = "app"
+    const val LAN = "lan"
+}
+
+/** 异常记录的用户决策：待决策 / 可重试 / 熔断（熔断会写回厂商表的 circuitOpen） */
+object AbnormalDecision {
+    const val PENDING = "PENDING"
+    const val RETRYABLE = "RETRYABLE"
+    const val BREAK = "BREAK"
+}
+
+/**
+ * 模型异常记录：一次「真实上游失败」一条（连接失败 / 超时 / HTTP 错误 / 流中断），
+ * 网关自判的校验失败不记（那些不是厂商的问题）。
+ * 用户可在「模型异常记录」页把记录标记为可重试或熔断，结论写回 [ProviderEntity] 的
+ * retryable / circuitOpen，供智能路由决策使用。
+ *
+ * 故意不加外键：厂商被删除后历史异常仍要可读（providerAlias 是当时的快照），
+ * 页面按「厂商已删除」展示并禁用跳转。
+ */
+@Entity(
+    tableName = "model_abnormals",
+    indices = [Index("at"), Index("providerId")],
+)
+data class ModelAbnormalEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val at: Long,
+    val providerId: Long,
+    /** 异常发生时的厂商别名快照：别名改动或被删除后历史仍可读 */
+    val providerAlias: String,
+    val modelName: String,
+    /** 触发链路：[AbnormalVia] 取值 */
+    val via: String,
+    /** 上游 HTTP 状态码；连接失败/超时/流中断为 null */
+    val httpCode: Int? = null,
+    /** 状态信息摘要（错误消息，截断存储） */
+    val error: String? = null,
+    /** 用户决策：[AbnormalDecision] 取值 */
+    val decision: String = AbnormalDecision.PENDING,
+    val decidedAt: Long? = null,
+    /** 决策是否已写回厂商表（防止重复消费） */
+    val routeTriggered: Boolean = false,
+    /** 短窗口内同 (厂商, 模型, 状态码, 错误) 的合并计数，避免单次故障刷屏 */
+    val count: Int = 1,
 )
 
 /**

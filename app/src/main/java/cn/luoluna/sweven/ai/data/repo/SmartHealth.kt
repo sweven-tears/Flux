@@ -45,14 +45,35 @@ object SmartHealth {
         }
     }
 
-    /** 一次真实失败：连续失败 +1，达到阈值进入冷却期 */
-    fun recordFailure(providerId: Long, modelName: String, now: Long, threshold: Int, cooldownMs: Long) {
+    /**
+     * 一次真实失败：连续失败 +1，达到阈值进入冷却期。
+     * 只有 [FailureKind.countsTowardCooldown] 的分类才计数——参数错误 / 鉴权失败 / 模型不存在
+     * 都不是「这个候选病了」，把它们打进冷却会让后续请求绕开本来好用的候选。
+     */
+    fun recordFailure(
+        providerId: Long,
+        modelName: String,
+        now: Long,
+        threshold: Int,
+        cooldownMs: Long,
+        kind: FailureKind = FailureKind.UPSTREAM,
+    ) {
+        if (!kind.countsTowardCooldown) return
         val s = stateOf(key(providerId, modelName))
         synchronized(s) {
             s.consecutiveFails += 1
             if (s.consecutiveFails >= threshold.coerceAtLeast(1)) {
                 s.coolUntil = now + cooldownMs
             }
+        }
+    }
+
+    /** 上游明确要求等待（429 带 Retry-After）：直接冷却该候选，不累积连续失败 */
+    fun recordCooldown(providerId: Long, modelName: String, now: Long, cooldownMs: Long) {
+        if (cooldownMs <= 0) return
+        val s = stateOf(key(providerId, modelName))
+        synchronized(s) {
+            s.coolUntil = maxOf(s.coolUntil, now + cooldownMs)
         }
     }
 

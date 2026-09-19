@@ -50,6 +50,13 @@ interface ProviderDao {
 
     @Query("UPDATE providers SET lastTestOk = :ok, lastTestLatencyMs = :latencyMs, lastTestMessage = :message, lastTestAt = :at WHERE id = :providerId")
     suspend fun updateTestResult(providerId: Long, ok: Boolean, latencyMs: Long, message: String, at: Long)
+
+    /** 手动熔断开关（模型异常记录页的「熔断」/「可重试」写回） */
+    @Query("UPDATE providers SET circuitOpen = :open, circuitOpenAt = :at WHERE id = :providerId")
+    suspend fun setCircuitOpen(providerId: Long, open: Boolean, at: Long?)
+
+    @Query("UPDATE providers SET retryable = :retryable WHERE id = :providerId")
+    suspend fun setRetryable(providerId: Long, retryable: Boolean)
 }
 
 @Dao
@@ -475,6 +482,62 @@ interface RequestLogDao {
             "FROM request_logs WHERE at >= :since GROUP BY deviceId ORDER BY requests DESC"
     )
     fun observeUsageByDeviceSince(since: Long): Flow<List<DeviceUsageStat>>
+}
+
+/** 模型异常记录页的统计行（无记录时各列为 0） */
+data class AbnormalStats(
+    val today: Int,
+    val pending: Int,
+    val broken: Int,
+)
+
+@Dao
+interface ModelAbnormalDao {
+    @Query("SELECT * FROM model_abnormals ORDER BY at DESC, id DESC LIMIT :limit")
+    fun observeRecent(limit: Int): Flow<List<ModelAbnormalEntity>>
+
+    /** 待决策条数（局域网入口卡片的摘要） */
+    @Query("SELECT COUNT(*) FROM model_abnormals WHERE decision = :pending")
+    fun observeCountByDecision(pending: String): Flow<Int>
+
+    @Query(
+        "SELECT (SELECT COUNT(*) FROM model_abnormals WHERE at >= :since) AS today, " +
+            "(SELECT COUNT(*) FROM model_abnormals WHERE decision = :pending) AS pending, " +
+            "(SELECT COUNT(*) FROM model_abnormals WHERE decision = :broken) AS broken"
+    )
+    fun observeStats(since: Long, pending: String, broken: String): Flow<AbnormalStats>
+
+    /** 合并目标：短窗口内同 (厂商, 模型, 状态码, 错误) 且未决策的记录（httpCode 可空，用 IS 比较） */
+    @Query(
+        "SELECT * FROM model_abnormals WHERE providerId = :providerId AND modelName = :modelName " +
+            "AND httpCode IS :httpCode AND error IS :error AND decision = :pending AND at >= :since " +
+            "ORDER BY id DESC LIMIT 1"
+    )
+    suspend fun findMergeTarget(
+        providerId: Long,
+        modelName: String,
+        httpCode: Int?,
+        error: String?,
+        pending: String,
+        since: Long,
+    ): ModelAbnormalEntity?
+
+    @Insert
+    suspend fun insert(e: ModelAbnormalEntity): Long
+
+    /** 合并计数：时间与错误摘要按最后一次覆盖，避免窗口内的旧信息留在列表上 */
+    @Query("UPDATE model_abnormals SET count = count + 1, at = :at, error = :error WHERE id = :id")
+    suspend fun bump(id: Long, at: Long, error: String?)
+
+    @Query("UPDATE model_abnormals SET decision = :decision, decidedAt = :at, routeTriggered = 1 WHERE id = :id")
+    suspend fun markDecision(id: Long, decision: String, at: Long)
+
+    /** 只保留最近 keep 条，写入时调用防表无限膨胀 */
+    @Query("DELETE FROM model_abnormals WHERE id NOT IN (SELECT id FROM model_abnormals ORDER BY id DESC LIMIT :keep)")
+    suspend fun prune(keep: Int)
+
+    @Query("DELETE FROM model_abnormals")
+    suspend fun clear()
 }
 
 @Dao

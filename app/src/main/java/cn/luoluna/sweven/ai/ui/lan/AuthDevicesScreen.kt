@@ -17,6 +17,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Block
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.LinkOff
+import androidx.compose.material.icons.filled.ReceiptLong
 import androidx.compose.material.icons.filled.Speed
 import androidx.compose.material3.Card
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -55,8 +56,9 @@ import java.util.Date
 import java.util.Locale
 
 /**
- * 已授权设备管理页（从「局域网」页迁入）：
- * 卡片只读展示设备信息，长按弹半窗选择操作（响应模式 / 备注 / 拉黑 / 撤销授权）。
+ * 设备管理页（局域网页「设备管理」卡片进入）：
+ * 卡片只读展示设备信息，长按弹半窗选择操作（响应模式 / 备注 / 拉黑 / 撤销授权）；
+ * 顶栏的请求日志入口也收在这一页（局域网页首页只留一张入口卡）。
  */
 class AuthDevicesViewModel(app: Application) : AndroidViewModel(app) {
     private val authDao = (app as App).database.authDeviceDao()
@@ -95,6 +97,7 @@ private fun fmtAuthTime(ts: Long?): String =
 @Composable
 fun AuthDevicesScreen(
     onBack: () -> Unit,
+    onRequestLog: () -> Unit = {},
     vm: AuthDevicesViewModel = viewModel(),
 ) {
     val devices by vm.devices.collectAsStateWithLifecycle()
@@ -105,10 +108,16 @@ fun AuthDevicesScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("已授权设备") },
+                title = { Text("设备管理") },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
+                    }
+                },
+                actions = {
+                    // 请求日志入口随设备管理一并收在这一页（局域网首页只留「设备管理」一张卡）
+                    IconButton(onClick = onRequestLog) {
+                        Icon(Icons.Filled.ReceiptLong, contentDescription = "请求日志")
                     }
                 },
             )

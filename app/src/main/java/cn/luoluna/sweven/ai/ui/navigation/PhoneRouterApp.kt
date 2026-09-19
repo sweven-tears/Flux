@@ -37,6 +37,7 @@ import cn.luoluna.sweven.ai.ui.common.InAppBrowserScreen
 import cn.luoluna.sweven.ai.ui.common.LocalInAppBrowser
 import cn.luoluna.sweven.ai.ui.lan.AuthDevicesScreen
 import cn.luoluna.sweven.ai.ui.lan.LanScreen
+import cn.luoluna.sweven.ai.ui.lan.ModelAbnormalScreen
 import cn.luoluna.sweven.ai.ui.lan.RequestLogScreen
 import cn.luoluna.sweven.ai.ui.provider.AddProviderScreen
 import cn.luoluna.sweven.ai.ui.provider.ProviderDetailScreen
@@ -55,6 +56,7 @@ object Routes {
     const val SMART_ROUTE = "smart_route"
     const val REQUEST_LOG = "request_log"
     const val AUTH_DEVICES = "auth_devices"
+    const val MODEL_ABNORMAL = "model_abnormal"
     const val LAN = "lan"
     const val SETTINGS = "settings"
     const val CREATIONS = "creations"
@@ -204,7 +206,7 @@ fun PhoneRouterApp(
                 composable(Routes.LAN) {
                     LanScreen(
                         onSmartRoute = { navController.navigate(Routes.SMART_ROUTE) },
-                        onRequestLog = { navController.navigate(Routes.REQUEST_LOG) },
+                        onModelAbnormal = { navController.navigate(Routes.MODEL_ABNORMAL) },
                         onAuthDevices = { navController.navigate(Routes.AUTH_DEVICES) },
                     )
                 }
@@ -216,6 +218,13 @@ fun PhoneRouterApp(
                 composable(Routes.AUTH_DEVICES) {
                     AuthDevicesScreen(
                         onBack = { navController.popBackStack() },
+                        onRequestLog = { navController.navigate(Routes.REQUEST_LOG) },
+                    )
+                }
+                composable(Routes.MODEL_ABNORMAL) {
+                    ModelAbnormalScreen(
+                        onBack = { navController.popBackStack() },
+                        onOpenProvider = { id -> navController.navigate("provider/$id") },
                     )
                 }
                 composable(Routes.SETTINGS) {

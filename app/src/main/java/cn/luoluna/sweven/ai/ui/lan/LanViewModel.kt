@@ -6,6 +6,7 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import cn.luoluna.sweven.ai.App
+import cn.luoluna.sweven.ai.data.db.AbnormalDecision
 import cn.luoluna.sweven.ai.data.db.AuthDeviceEntity
 import cn.luoluna.sweven.ai.server.LanService
 import cn.luoluna.sweven.ai.server.NetUtil
@@ -53,6 +54,11 @@ class LanViewModel(app: Application) : AndroidViewModel(app) {
     val blockedDevices: StateFlow<List<AuthDeviceEntity>> =
         authDao.observeByStatus(AuthDeviceEntity.STATUS_BLOCKED)
             .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    /** 待决策的模型异常记录数（「模型异常记录」入口卡片摘要） */
+    val pendingAbnormals: StateFlow<Int> =
+        ctx.database.modelAbnormalDao().observeCountByDecision(AbnormalDecision.PENDING)
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 0)
 
     fun lanIps(): List<String> = NetUtil.lanIps()
 

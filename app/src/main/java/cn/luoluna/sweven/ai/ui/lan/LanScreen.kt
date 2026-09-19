@@ -22,7 +22,6 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.AltRoute
-import androidx.compose.material.icons.filled.ReceiptLong
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -71,7 +70,7 @@ private fun fmtTime(ts: Long?): String =
 @Composable
 fun LanScreen(
     onSmartRoute: () -> Unit = {},
-    onRequestLog: () -> Unit = {},
+    onModelAbnormal: () -> Unit = {},
     onAuthDevices: () -> Unit = {},
     vm: LanViewModel = viewModel(),
 ) {
@@ -87,6 +86,7 @@ fun LanScreen(
     val pending by vm.pendingDevices.collectAsStateWithLifecycle()
     val authorized by vm.authorizedDevices.collectAsStateWithLifecycle()
     val blocked by vm.blockedDevices.collectAsStateWithLifecycle()
+    val pendingAbnormals by vm.pendingAbnormals.collectAsStateWithLifecycle()
 
     val ips = remember { vm.lanIps() }
     var portDialog by remember { mutableStateOf(false) }
@@ -131,9 +131,6 @@ fun LanScreen(
             TopAppBar(
                 title = { Text("局域网路由") },
                 actions = {
-                    IconButton(onClick = onRequestLog) {
-                        Icon(Icons.Filled.ReceiptLong, contentDescription = "请求日志")
-                    }
                     IconButton(onClick = onSmartRoute) {
                         Icon(Icons.Filled.AltRoute, contentDescription = "智能路由")
                     }
@@ -287,8 +284,8 @@ fun LanScreen(
                 }
             }
 
-            // 已授权设备：迁至独立页面，长按设备卡片管理（撤销/拉黑/响应模式/备注）
-            SectionCard(title = "已授权设备") {
+            // 设备管理：设备列表与请求日志都收在这一页，长按设备卡片管理（撤销/拉黑/响应模式/备注）
+            SectionCard(title = "设备管理") {
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
                     modifier = Modifier
@@ -301,7 +298,40 @@ fun LanScreen(
                             style = MaterialTheme.typography.bodyMedium,
                         )
                         Text(
-                            "进入后长按设备卡片：撤销授权 / 拉黑 / 响应模式 / 备注",
+                            "已授权设备管理 + 请求日志；长按设备卡片：撤销授权 / 拉黑 / 响应模式 / 备注",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    Icon(
+                        Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+
+            // 模型异常记录：上游失败如实落库，用户手动决策（可重试 / 熔断）后由智能路由执行
+            SectionCard(title = "模型异常记录") {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable(onClick = onModelAbnormal),
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text(
+                            if (pendingAbnormals == 0) "暂无待决策记录" else "待决策 $pendingAbnormals 条",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = if (pendingAbnormals > 0) {
+                                MaterialTheme.colorScheme.error
+                            } else {
+                                MaterialTheme.colorScheme.onSurface
+                            },
+                        )
+                        Text(
+                            "模型请求失败（连接失败 / 超时 / HTTP 错误）如实记录，" +
+                                "可标记「可重试」或「熔断」，结论直接作用于智能路由",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
@@ -343,7 +373,7 @@ fun LanScreen(
                         )
                         append("5. 新设备首次访问会产生「待授权申请」，在上方批准后即可使用\n")
                         append("6. 客户端可携带请求头 X-Device-Id 自定义设备标识\n")
-                        append("7. 进入「已授权设备」页长按设备卡片，可撤销/拉黑或单独设置响应模式，${SmartAi.MODEL_NAME} 请求按设备生效\n")
+                        append("7. 进入「设备管理」页长按设备卡片，可撤销/拉黑或单独设置响应模式，${SmartAi.MODEL_NAME} 请求按设备生效\n")
                         append(
                             "8. 视频生成（Sora 兼容）：POST /v1/videos {\"model\":\"厂商别名/模型名\",\"prompt\":\"...\"} " +
                                 "→ 轮询 GET /v1/videos/{id} 至 completed → GET /v1/videos/{id}/content 下载 mp4" +

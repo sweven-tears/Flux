@@ -72,6 +72,7 @@ import cn.luoluna.sweven.ai.ui.chat.plugin.ChatUiRegistry
 import cn.luoluna.sweven.ai.ui.chat.plugin.PluginPickerDialog
 import cn.luoluna.sweven.ai.ui.chat.plugin.activePlugin
 import cn.luoluna.sweven.ai.ui.chat.style.ChatStyleCodec
+import cn.luoluna.sweven.ai.ui.chat.style.StyleJsonDialog
 import cn.luoluna.sweven.ai.ui.common.ConfirmDialog
 import cn.luoluna.sweven.ai.ui.common.InAppBrowserPayload
 import cn.luoluna.sweven.ai.ui.common.LocalInAppBrowser
@@ -166,6 +167,7 @@ fun ChatScreen(
 
     var pickerOpen by remember { mutableStateOf(false) }
     var pluginPickerOpen by remember { mutableStateOf(false) }
+    var styleJsonOpen by remember { mutableStateOf(false) }
     var toolPickerOpen by remember { mutableStateOf(false) }
 
     // 通知点击带回的会话跳转：切到目标会话并消费
@@ -519,6 +521,25 @@ fun ChatScreen(
             currentId = plugin.id,
             onSelect = { app.settings.setChatPluginId(it) },
             onDismiss = { pluginPickerOpen = false },
+            onEditCustomStyle = {
+                pluginPickerOpen = false
+                styleJsonOpen = true
+            },
+        )
+    }
+
+    if (styleJsonOpen) {
+        StyleJsonDialog(
+            initial = chatStyleJson.orEmpty(),
+            onDismiss = { styleJsonOpen = false },
+            onSave = { json ->
+                app.settings.setChatStyleJson(json)
+                styleJsonOpen = false
+            },
+            onReset = {
+                app.settings.setChatStyleJson(null)
+                styleJsonOpen = false
+            },
         )
     }
 

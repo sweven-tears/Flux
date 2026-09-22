@@ -21,6 +21,8 @@ fun PluginPickerDialog(
     currentId: String,
     onSelect: (String) -> Unit,
     onDismiss: () -> Unit,
+    /** 选中「自定义（JSON）」时显示「编辑样式 JSON」入口 */
+    onEditCustomStyle: () -> Unit = {},
 ) {
     val plugins = ChatUiRegistry.all()
     AlertDialog(
@@ -50,6 +52,9 @@ fun PluginPickerDialog(
                                 style = MaterialTheme.typography.labelSmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
+                        }
+                        if (plugin.id == ChatUiRegistry.CUSTOM_ID && currentId == plugin.id) {
+                            TextButton(onClick = onEditCustomStyle) { Text("编辑样式 JSON") }
                         }
                     }
                 }

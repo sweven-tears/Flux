@@ -88,6 +88,20 @@ class AppSettings(context: Context) {
     private val _imageOpenExternal = MutableStateFlow(prefs.getBoolean(KEY_IMAGE_OPEN_EXTERNAL, false))
     val imageOpenExternal: StateFlow<Boolean> = _imageOpenExternal
 
+    /**
+     * 单次提问内工具调用的最大轮数：0 = 不限（模型不再请求工具时自然结束）。
+     * 达到上限只停止继续调用工具，已产生的工具链与结果仍完整落库展示。
+     */
+    private val _toolMaxRounds =
+        MutableStateFlow(prefs.getInt(KEY_TOOL_MAX_ROUNDS, DEFAULT_TOOL_MAX_ROUNDS))
+    val toolMaxRounds: StateFlow<Int> = _toolMaxRounds
+
+    fun setToolMaxRounds(rounds: Int) {
+        val v = rounds.coerceIn(0, MAX_TOOL_ROUNDS_LIMIT)
+        prefs.edit().putInt(KEY_TOOL_MAX_ROUNDS, v).apply()
+        _toolMaxRounds.value = v
+    }
+
     private val _videoOpenExternal = MutableStateFlow(prefs.getBoolean(KEY_VIDEO_OPEN_EXTERNAL, false))
     val videoOpenExternal: StateFlow<Boolean> = _videoOpenExternal
 
@@ -185,6 +199,47 @@ class AppSettings(context: Context) {
         _networkLogKeep.value = v
     }
 
+    /** 联网搜索：搜索源（bing / duckduckgo / searxng），null = 默认 Bing 抓取 */
+    private val _searchProvider = MutableStateFlow(prefs.getString(KEY_SEARCH_PROVIDER, null))
+    val searchProvider: StateFlow<String?> = _searchProvider
+
+    /** SearXNG 自建实例地址（选择 searxng 时必填） */
+    private val _searchEndpoint =
+        MutableStateFlow(prefs.getString(KEY_SEARCH_ENDPOINT, null)?.takeIf { it.isNotBlank() })
+    val searchEndpoint: StateFlow<String?> = _searchEndpoint
+
+    /** 付费搜索源 API Key：本期 UI 未暴露，给后续 provider 留位 */
+    private val _searchApiKey = MutableStateFlow(prefs.getString(KEY_SEARCH_API_KEY, null))
+    val searchApiKey: StateFlow<String?> = _searchApiKey
+
+    /** 单次搜索默认条数（模型未指定 count 时使用） */
+    private val _searchCount = MutableStateFlow(prefs.getInt(KEY_SEARCH_COUNT, DEFAULT_SEARCH_COUNT))
+    val searchCount: StateFlow<Int> = _searchCount
+
+    fun setSearchProvider(kind: String?) {
+        val v = kind?.trim()?.lowercase()?.takeIf { it.isNotEmpty() }
+        prefs.edit().putString(KEY_SEARCH_PROVIDER, v).apply()
+        _searchProvider.value = v
+    }
+
+    fun setSearchEndpoint(url: String?) {
+        val v = url?.trim()?.trimEnd('/')?.takeIf { it.isNotEmpty() }
+        prefs.edit().putString(KEY_SEARCH_ENDPOINT, v).apply()
+        _searchEndpoint.value = v
+    }
+
+    fun setSearchApiKey(key: String?) {
+        val v = key?.trim()?.takeIf { it.isNotEmpty() }
+        prefs.edit().putString(KEY_SEARCH_API_KEY, v).apply()
+        _searchApiKey.value = v
+    }
+
+    fun setSearchCount(count: Int) {
+        val v = count.coerceIn(1, 10)
+        prefs.edit().putInt(KEY_SEARCH_COUNT, v).apply()
+        _searchCount.value = v
+    }
+
     fun setImageOpenExternal(external: Boolean) {
         prefs.edit().putBoolean(KEY_IMAGE_OPEN_EXTERNAL, external).apply()
         _imageOpenExternal.value = external
@@ -201,6 +256,18 @@ class AppSettings(context: Context) {
     fun setChatPluginId(id: String) {
         prefs.edit().putString(KEY_CHAT_PLUGIN, id).apply()
         _chatPluginId.value = id
+    }
+
+    /** 自定义（JSON）皮肤：整套样式表 JSON；null = 未自定义（回落内置预设） */
+    private val _chatStyleJson = MutableStateFlow(prefs.getString(KEY_CHAT_STYLE_JSON, null))
+    val chatStyleJson: StateFlow<String?> = _chatStyleJson
+
+    fun setChatStyleJson(json: String?) {
+        val normalized = json?.takeIf { it.isNotBlank() }
+        prefs.edit().apply {
+            if (normalized == null) remove(KEY_CHAT_STYLE_JSON) else putString(KEY_CHAT_STYLE_JSON, normalized)
+        }.apply()
+        _chatStyleJson.value = normalized
     }
 
     /**
@@ -247,6 +314,21 @@ class AppSettings(context: Context) {
 
         /** 全局网络日志默认保留条数 */
         const val DEFAULT_NETWORK_LOG_KEEP = 300
+
+        /** 联网搜索默认返回条数 */
+        const val DEFAULT_SEARCH_COUNT = 5
+
+        /** 工具调用轮数上限默认值：0 = 不限（不主动打断模型的工具循环，由模型自行收敛或用户点停止） */
+        const val DEFAULT_TOOL_MAX_ROUNDS = 0
+
+        /** 工具调用轮数上限可配置的最大值（UI 校验与 setter 钳制共用） */
+        const val MAX_TOOL_ROUNDS_LIMIT = 50
+
+        private const val KEY_TOOL_MAX_ROUNDS = "tool_max_rounds"
+        private const val KEY_SEARCH_PROVIDER = "search_provider"
+        private const val KEY_SEARCH_ENDPOINT = "search_endpoint"
+        private const val KEY_SEARCH_API_KEY = "search_api_key"
+        private const val KEY_SEARCH_COUNT = "search_count"
         private const val KEY_LAN_ENABLED = "lan_enabled"
         private const val KEY_LAN_PORT = "lan_port"
         private const val KEY_LAN_HOSTNAME = "lan_hostname_label"
@@ -267,6 +349,7 @@ class AppSettings(context: Context) {
         private const val KEY_IMAGE_OPEN_EXTERNAL = "image_open_external"
         private const val KEY_VIDEO_OPEN_EXTERNAL = "video_open_external"
         private const val KEY_CHAT_PLUGIN = "chat_ui_plugin"
+        private const val KEY_CHAT_STYLE_JSON = "chat_style_json"
         private const val KEY_DEFAULT_TOOLS = "default_tool_ids"
         private const val KEY_USER_NAME = "user_name"
         private const val KEY_USER_AVATAR = "user_avatar"

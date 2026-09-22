@@ -153,20 +153,33 @@ data class ChatStyleConfig(
     }
 }
 
-/** 内置风格预设（插件 id ↔ 样式表）；`custom`（JSON）皮肤不走这里，见 ChatStyleCodec */
-enum class ChatStylePreset(val id: String) {
-    BUBBLE("default"),
-    TERMINAL("mono"),
-    FLAT("flat"),
+/**
+ * 内置风格预设（插件 id ↔ 样式表）；`custom`（JSON）皮肤不走这里，见 ChatStyleCodec。
+ * **默认风格 = 扁平（FLAT）**：其 id 即 `ChatUiRegistry.DEFAULT_ID`。
+ */
+enum class ChatStylePreset(val id: String, val displayName: String) {
+    /** 默认：助手无气泡全宽 + 底部分隔线，用户浅色气泡右对齐 */
+    FLAT("flat", "扁平"),
+    /** 小圆角 + 右上切角 + 细描边 + 等宽字体 */
+    TERMINAL("mono", "等宽"),
+    /** 圆角 16dp + 无尾巴，用户主色、助手浅灰 */
+    BUBBLE("bubble", "气泡"),
     ;
 
     fun config(): ChatStyleConfig = when (this) {
-        BUBBLE -> ChatStyleConfig.bubble()
-        TERMINAL -> ChatStyleConfig.terminal()
         FLAT -> ChatStyleConfig.flat()
+        TERMINAL -> ChatStyleConfig.terminal()
+        BUBBLE -> ChatStyleConfig.bubble()
     }
 
     companion object {
-        fun of(pluginId: String?): ChatStylePreset = entries.firstOrNull { it.id == pluginId } ?: BUBBLE
+        /** 历史 id：旧版本的「默认」就是气泡式，改默认后仍要解析回来（老用户已保存的选择不丢） */
+        private val LEGACY_IDS = mapOf("default" to BUBBLE)
+
+        /** 未设置 / 未知 id 一律回落默认风格（扁平） */
+        fun of(pluginId: String?): ChatStylePreset =
+            entries.firstOrNull { it.id == pluginId }
+                ?: pluginId?.let { LEGACY_IDS[it] }
+                ?: FLAT
     }
 }

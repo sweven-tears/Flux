@@ -1,5 +1,6 @@
 package cn.luoluna.sweven.ai.ui.chat.plugin
 
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Test
@@ -15,10 +16,17 @@ import org.junit.Test
 class ChatUiPluginContractTest {
 
     private val builtInPlugins = listOf(
-        DefaultChatUiPlugin,
         FlatChatUiPlugin,
         MonoChatUiPlugin,
+        BubbleChatUiPlugin,
     )
+
+    /** 默认风格 = 扁平：改默认只改 ChatUiRegistry.DEFAULT_ID + ChatStylePreset 的回落值，这里钉住一致性 */
+    @Test
+    fun `默认 id 指向扁平插件`() {
+        assertEquals("flat", ChatUiRegistry.DEFAULT_ID)
+        assertEquals(ChatUiRegistry.DEFAULT_ID, ChatUiRegistry.resolve(ChatUiRegistry.DEFAULT_ID).id)
+    }
 
     @Test
     fun `覆写 messageBubble 的内置皮肤必须同时覆写 toolTurn`() {

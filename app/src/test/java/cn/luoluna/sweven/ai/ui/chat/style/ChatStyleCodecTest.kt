@@ -7,7 +7,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * JSON 样式表编解码：往返一致、部分覆盖语义（未写的字段继承气泡预设里该角色的样式）、
+ * JSON 样式表编解码：往返一致、部分覆盖语义（未写的字段继承默认（扁平）预设里该角色的样式）、
  * base 传导到角色、未知枚举回落、整体非法返回 null。
  */
 class ChatStyleCodecTest {
@@ -19,20 +19,20 @@ class ChatStyleCodecTest {
     }
 
     @Test
-    fun `气泡预设往返一致`() {
-        val config = ChatStyleConfig.bubble()
-        assertEquals(config, ChatStyleCodec.decode(ChatStyleCodec.encode(config)))
+    fun `扁平与气泡预设往返一致`() {
+        assertEquals(ChatStyleConfig.flat(), ChatStyleCodec.decode(ChatStyleCodec.encode(ChatStyleConfig.flat())))
+        assertEquals(ChatStyleConfig.bubble(), ChatStyleCodec.decode(ChatStyleCodec.encode(ChatStyleConfig.bubble())))
     }
 
     @Test
     fun `部分覆盖 未写的字段继承预设里该角色的样式`() {
         val config = ChatStyleCodec.decode("""{"user":{"cornerRadius":8}}""")
         assertEquals(8.dp, config!!.user.cornerRadius)
-        // 关键：没写的字段不该被清成硬默认，而是继承「气泡预设的用户样式」
-        assertEquals(BubbleFillRole.PRIMARY, config.user.fill)
-        assertEquals(9.dp, config.user.paddingV)
+        // 关键：没写的字段不该被清成硬默认，而是继承「默认（扁平）预设的用户样式」
+        assertEquals(BubbleFillRole.SECONDARY_CONTAINER, config.user.fill)
+        assertEquals(8.dp, config.user.paddingV)
         // 其它角色完全不受影响
-        assertEquals(ChatStyleConfig.bubble().ai, config.ai)
+        assertEquals(ChatStyleConfig.flat().ai, config.ai)
     }
 
     @Test
@@ -42,8 +42,8 @@ class ChatStyleCodecTest {
         assertEquals(2.dp, config.user.cornerRadius)
         assertEquals(2.dp, config.ai.cornerRadius)
         assertEquals(14.dp, config.ai.cutCornerSize)
-        // 角色自身特征（用户主色）不被 base 抹掉
-        assertEquals(BubbleFillRole.PRIMARY, config.user.fill)
+        // 角色自身特征（用户的浅色气泡）不被 base 抹掉
+        assertEquals(BubbleFillRole.SECONDARY_CONTAINER, config.user.fill)
     }
 
     @Test
@@ -51,9 +51,10 @@ class ChatStyleCodecTest {
         val config = ChatStyleCodec.decode(
             """{"base":{"fill":"不存在的颜色","stroke":"NOPE","cutCorner":"TOP_START"}}"""
         )
-        assertEquals(BubbleStyle().fill, config!!.base.fill)
-        assertEquals(BubbleStyle().stroke, config.base.stroke)
-        assertEquals(BubbleStyle().cutCorner, config.base.cutCorner)
+        // 回落「默认（扁平）预设 base 的继承值」，而不是硬编码默认
+        assertEquals(ChatStyleConfig.flat().base.fill, config!!.base.fill)
+        assertEquals(ChatStyleConfig.flat().base.stroke, config.base.stroke)
+        assertEquals(ChatStyleConfig.flat().base.cutCorner, config.base.cutCorner)
     }
 
     @Test
@@ -70,8 +71,8 @@ class ChatStyleCodecTest {
         assertEquals(RoleAlign.CENTER, config!!.userProfile.align)
         assertEquals(0.5f, config.userProfile.maxWidthFraction, 0.0001f)
         assertTrue(config.userProfile.showHeader)
-        // 样式部分整体继承预设
-        assertEquals(ChatStyleConfig.bubble().user, config.user)
+        // 样式部分整体继承默认（扁平）预设
+        assertEquals(ChatStyleConfig.flat().user, config.user)
     }
 
     @Test

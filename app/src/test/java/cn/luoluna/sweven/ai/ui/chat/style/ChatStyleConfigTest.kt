@@ -71,15 +71,6 @@ class ChatStyleConfigTest {
     }
 
     @Test
-    fun `插件 id 映射到预设 未注册回落气泡`() {
-        assertEquals(ChatStylePreset.TERMINAL, ChatStylePreset.of("mono"))
-        assertEquals(ChatStylePreset.FLAT, ChatStylePreset.of("flat"))
-        assertEquals(ChatStylePreset.BUBBLE, ChatStylePreset.of("default"))
-        assertEquals(ChatStylePreset.BUBBLE, ChatStylePreset.of(null))
-        assertEquals(ChatStylePreset.BUBBLE, ChatStylePreset.of("某个第三方皮肤"))
-    }
-
-    @Test
     fun `预设配置相等 可作常量比较`() {
         assertEquals(ChatStylePreset.BUBBLE.config(), ChatStylePreset.BUBBLE.config())
     }

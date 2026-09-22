@@ -10,8 +10,8 @@ import kotlinx.serialization.json.Json
  * 样式表 ⇄ JSON。
  *
  * **部分覆盖语义**（用户手写 JSON，只写想改的字段即可）：
- * - 某角色没写 → 用气泡预设里该角色的样式；
- * - 角色写了但缺字段 → 缺的字段继承「气泡预设里该角色 + base 的改动」；
+ * - 某角色没写 → 用默认预设（扁平）里该角色的样式；
+ * - 角色写了但缺字段 → 缺的字段继承「默认预设里该角色 + base 的改动」；
  * - `base` 的改动会传导到所有未单独写样式的角色（但不会抹掉角色自身特征，如用户主色）；
  * - 未知枚举名 → 回落该字段的继承值；整体不是合法 JSON 对象 → 返回 null，由调用方回落内置预设。
  *
@@ -141,7 +141,7 @@ data class ChatStyleDto(
      * 没写 base 时也会把 base 的字段盖到 tool 这类有自己特征的样式上（丢掉等宽）。
      */
     fun toStyle(): ChatStyleConfig {
-        val preset = ChatStyleConfig.bubble()
+        val preset = ChatStylePreset.FLAT.config()
         // 没写 base 时是恒等变换；写了则只覆盖 base 里出现的字段
         val withBase: (BubbleStyle) -> BubbleStyle = { style -> base?.applyTo(style) ?: style }
         return ChatStyleConfig(
@@ -173,6 +173,6 @@ data class ChatStyleDto(
 /** Float（dp 值）→ Dp */
 private fun Float.dp(): Dp = this.dp
 
-/** 枚举名 → 枚举值；未知/大小写不符 → 继承值（不抛异常） */
-private inline fun <reified T : Enum<T>> enumOf(name: String?, fallback: T): T =
+/** 枚举名 → 枚举值；未知/大小写不符 → 继承值（不抛异常）。跨文件复用（ChatBackgroundCodec 也用） */
+internal inline fun <reified T : Enum<T>> enumOf(name: String?, fallback: T): T =
     enumValues<T>().firstOrNull { it.name.equals(name, ignoreCase = true) } ?: fallback

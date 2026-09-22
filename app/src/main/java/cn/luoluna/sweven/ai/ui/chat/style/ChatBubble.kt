@@ -169,15 +169,18 @@ fun ChatBubble(
         shadowElevation = style.shadowElevation,
         modifier = bubbleModifier,
     ) {
-        Column(
-            Modifier.padding(
-                horizontal = style.paddingH,
-                vertical = style.paddingV,
-            ),
-            content = content,
-        )
-        if (style.dividerBottom) {
-            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+        // Surface 的 content 不是纵向容器：分隔线必须和内容同处一个 Column，否则会叠在内容上
+        Column {
+            Column(
+                Modifier.padding(
+                    horizontal = style.paddingH,
+                    vertical = style.paddingV,
+                ),
+                content = content,
+            )
+            if (style.dividerBottom) {
+                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+            }
         }
     }
 }

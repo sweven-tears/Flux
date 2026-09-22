@@ -130,3 +130,127 @@ fun buildExecutionNodes(turn: ChatItem.ToolTurn): List<ExecutionNode> {
     }
     return nodes
 }
+
+/** 轨迹摘要行内容 */
+data class TimelineSummary(
+    val headline: String,
+    val callCount: Int,
+    val stepCount: Int,
+    val durationMs: Long?,
+    val hasFailure: Boolean,
+)
+
+/** 实际渲染内容：摘要行文案 + 可见节点 + 被折叠的节点数 */
+data class TimelineView(
+    val headline: String,
+    val visibleNodes: List<ExecutionNode>,
+    val hiddenCount: Int,
+    val showAnswer: Boolean,
+)
+
+/**
+ * 该轮是否正在执行：正在流式输出**且**还没有最终答复。
+ * 达到轮数上限/中断的历史轮次（无答复但不在流式中）不算执行中——这是"历史轮次别显示成运行中"的关键。
+ */
+fun isTurnRunning(turn: ChatItem.ToolTurn, streaming: Boolean): Boolean =
+    streaming && turn.answer == null
+
+/**
+ * 把"正在执行的工具"合成为 RUNNING 节点（排在最后）。
+ * 只在 [running] 且 [liveToolCalls] 非空时合成；id 带序号，避免同名工具 id 重复。
+ */
+fun withLiveNodes(
+    nodes: List<ExecutionNode>,
+    liveToolCalls: List<String>,
+    running: Boolean,
+): List<ExecutionNode> {
+    if (!running || liveToolCalls.isEmpty()) return nodes
+    return nodes + liveToolCalls.mapIndexed { index, name ->
+        ExecutionNode.ToolCall(
+            nodeId = "live-$index-$name",
+            createdAt = Long.MAX_VALUE,
+            name = name,
+            arguments = "",
+            state = ToolState.RUNNING,
+        )
+    }
+}
+
+/**
+ * 摘要文案：
+ * - 执行中：`已完成 N 步 · 正在调用 web_search…`
+ * - 已结束：`已深度思考，调用 3 个工具，耗时 8.4s`（有失败追加 `· 有失败`）
+ * 耗时 = 末节点 createdAt − 首节点 createdAt（历史数据可用；中间轮没有单独耗时字段）。
+ */
+fun summarizeTimeline(nodes: List<ExecutionNode>, turnRunning: Boolean): TimelineSummary {
+    val calls = nodes.filterIsInstance<ExecutionNode.ToolCall>()
+    val hasFailure = calls.any { it.state == ToolState.FAILED }
+    val duration = if (nodes.size >= 2) {
+        (nodes.last().createdAt - nodes.first().createdAt).takeIf { it > 0 }
+    } else {
+        null
+    }
+    val headline = if (turnRunning) {
+        buildString {
+            append("已完成 ")
+            append(nodes.size)
+            append(" 步")
+            calls.lastOrNull()?.let { append(" · 正在调用 ${it.name}…") }
+        }
+    } else {
+        buildString {
+            if (nodes.any { it is ExecutionNode.Thinking && it.text.isNotBlank() }) append("已深度思考")
+            if (calls.isNotEmpty()) {
+                if (isNotEmpty()) append("，")
+                append("调用 ${calls.size} 个工具")
+            }
+            duration?.let {
+                if (isNotEmpty()) append("，")
+                append("耗时 ")
+                append(String.format(java.util.Locale.US, "%.1fs", it / 1000.0))
+            }
+            if (hasFailure) append(" · 有失败")
+            if (isEmpty()) append("执行过程")
+        }
+    }
+    return TimelineSummary(
+        headline = headline,
+        callCount = calls.size,
+        stepCount = nodes.size,
+        durationMs = duration,
+        hasFailure = hasFailure,
+    )
+}
+
+/**
+ * 折叠决策（与 UI 无关，可单测）：
+ * - 展开：全显示；
+ * - 执行中且未展开：只显示最新一个节点（其余计入 hiddenCount）；
+ * - 已结束且未展开：中间过程全折，只显示最终答复（答复永远展开，不参与折叠）。
+ */
+fun resolveTimelineView(
+    nodes: List<ExecutionNode>,
+    expanded: Boolean,
+    turnRunning: Boolean,
+): TimelineView {
+    val summary = summarizeTimeline(nodes, turnRunning)
+    if (expanded) {
+        return TimelineView(summary.headline, nodes, 0, showAnswer = true)
+    }
+    if (turnRunning) {
+        val latest = nodes.lastOrNull()
+        return TimelineView(
+            headline = summary.headline,
+            visibleNodes = listOfNotNull(latest),
+            hiddenCount = (nodes.size - 1).coerceAtLeast(0),
+            showAnswer = latest is ExecutionNode.Answer,
+        )
+    }
+    val answers = nodes.filterIsInstance<ExecutionNode.Answer>()
+    return TimelineView(
+        headline = summary.headline,
+        visibleNodes = answers,
+        hiddenCount = (nodes.size - answers.size).coerceAtLeast(0),
+        showAnswer = answers.isNotEmpty(),
+    )
+}

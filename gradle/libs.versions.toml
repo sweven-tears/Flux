@@ -12,6 +12,8 @@ okhttp = "4.9.3"
 kotlinxSerialization = "1.7.3"
 ktor = "2.3.12"
 jmdns = "3.6.3"
+quickjs = "1.0.15"
+junit = "4.13.2"
 
 [libraries]
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
@@ -32,6 +34,8 @@ kotlinx-serialization-json = { group = "org.jetbrains.kotlinx", name = "kotlinx-
 ktor-server-core = { group = "io.ktor", name = "ktor-server-core", version.ref = "ktor" }
 ktor-server-netty = { group = "io.ktor", name = "ktor-server-netty", version.ref = "ktor" }
 jmdns = { group = "org.jmdns", name = "jmdns", version.ref = "jmdns" }
+quickjs = { module = "io.github.dokar3:quickjs-kt", version.ref = "quickjs" }
+junit = { group = "junit", name = "junit", version.ref = "junit" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }

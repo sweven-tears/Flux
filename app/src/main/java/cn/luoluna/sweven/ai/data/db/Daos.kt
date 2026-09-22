@@ -256,6 +256,10 @@ interface ConversationDao {
     @Query("UPDATE conversations SET thinkingDepth = :depth WHERE id = :id")
     suspend fun setThinkingDepth(id: Long, depth: String?)
 
+    /** 写入本会话勾选的工具名集合（JSON 数组字符串，null 清空） */
+    @Query("UPDATE conversations SET toolsJson = :toolsJson WHERE id = :id")
+    suspend fun setTools(id: Long, toolsJson: String?)
+
     @Query("UPDATE conversations SET systemPrompt = :prompt WHERE id = :id")
     suspend fun setSystemPrompt(id: Long, prompt: String?)
 

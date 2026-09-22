@@ -42,6 +42,12 @@ sealed interface ChatEvent {
     /** 上游 usage 统计（流式中可能多次出现，各字段可空；消费方按「最后非空值」逐字段合并） */
     data class Usage(val info: UsageInfo) : ChatEvent
 
+    /**
+     * 本轮模型请求的工具调用（OpenAI 兼容流式：delta.tool_calls 分片聚合后于流结束时发出一次）。
+     * 收到该事件即表示本轮以工具调用收尾，调用方执行工具后携带结果发起下一轮。
+     */
+    data class ToolCalls(val calls: List<ToolCall>) : ChatEvent
+
     /** 流式失败；HTTP 错误时附带状态码与原始响应体，供聊天页错误详情展示 */
     data class Failed(
         val message: String,
@@ -295,6 +301,7 @@ class ProviderClient {
                 emit(ChatEvent.Failed("响应为空"))
                 return@flow
             }
+            val toolCalls = ToolCallAccumulator()
             loop@ while (true) {
                 val line = source.readUtf8Line() ?: break
                 if (!line.startsWith("data:")) continue
@@ -328,6 +335,7 @@ class ProviderClient {
                     }
                     else -> {
                         if (payload == "[DONE]") break@loop
+                        toolCalls.accept(parseToolCallDeltas(payload))
                         val reasoning = parseReasoningContent(payload)
                         if (!reasoning.isNullOrEmpty()) emit(ChatEvent.ReasoningDelta(reasoning))
                         val delta = parseDeltaContent(payload)
@@ -335,6 +343,11 @@ class ProviderClient {
                         parseOpenAiUsage(payload)?.let { emit(ChatEvent.Usage(it)) }
                     }
                 }
+            }
+            // 工具调用在流结束时统一发出：分片聚合完成后才可执行
+            if (!toolCalls.isEmpty) {
+                val calls = toolCalls.build()
+                if (calls.isNotEmpty()) emit(ChatEvent.ToolCalls(calls))
             }
             emit(ChatEvent.Done)
         }

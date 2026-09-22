@@ -1,6 +1,7 @@
 package cn.luoluna.sweven.ai.net
 
 import android.util.Base64
+import cn.luoluna.sweven.ai.tools.FluxTool
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
@@ -290,13 +291,31 @@ data class AdvancedParams(
 }
 
 /**
+ * 消息数组构建输入：普通消息 + 工具调用/结果消息（OpenAI 协议形态）。
+ * [toolCallsJson] 为 assistant 消息的工具调用数组 JSON 文本；
+ * [toolCallId] 为 role=tool 结果消息对应的 tool_call_id。
+ */
+data class ChatMessageInput(
+    val role: String,
+    val content: String,
+    val images: List<String> = emptyList(),
+    val toolCallsJson: String? = null,
+    val toolCallId: String? = null,
+)
+
+/**
  * 从消息实体列表构造 OpenAI messages 数组，图片以 image_url(base64 data URL) 附加。
  * 组装时保证 user/assistant 严格交替（协议转换类网关会把相邻同角色消息合并成一条）：
  * - 空 content 的 assistant（仅 reasoning 或失败轮次）以空格占位保留，不再整条丢弃
  * - 相邻同角色消息之间插入对方角色空格占位
+ * - 带工具调用的 assistant 与 role=tool 结果消息原样发出，不参与交替补齐（配对不可打断）
  */
 fun buildMessagesJson(
     items: List<Triple<String, String, List<String>>>,
+): JsonArray = buildMessagesJsonEx(items.map { ChatMessageInput(it.first, it.second, it.third) })
+
+fun buildMessagesJsonEx(
+    items: List<ChatMessageInput>,
 ): JsonArray = kotlinx.serialization.json.buildJsonArray {
     fun message(role: String, content: String, images: List<String>) {
         add(
@@ -335,9 +354,36 @@ fun buildMessagesJson(
     }
 
     var lastChatRole: String? = null
-    for ((role, content, images) in items) {
-        var emitContent = content
-        if (emitContent.isBlank() && images.isEmpty()) {
+    for (item in items) {
+        val role = item.role
+        // 工具结果消息：原样发出；其后可能紧跟 assistant 续写，交替跟踪清零避免插入占位打断配对
+        if (role == ROLE_TOOL) {
+            add(
+                buildJsonObject {
+                    put("role", ROLE_TOOL)
+                    put("tool_call_id", item.toolCallId.orEmpty())
+                    put("content", item.content)
+                }
+            )
+            lastChatRole = null
+            continue
+        }
+        val toolCalls = item.toolCallsJson
+            ?.takeIf { it.isNotBlank() }
+            ?.let { raw -> runCatching { ChatJson.json.parseToJsonElement(raw) as? JsonArray }.getOrNull() }
+        if (toolCalls != null) {
+            add(
+                buildJsonObject {
+                    put("role", ROLE_ASSISTANT)
+                    put("content", item.content.ifBlank { PLACEHOLDER_CONTENT })
+                    put("tool_calls", toolCalls)
+                }
+            )
+            lastChatRole = ROLE_ASSISTANT
+            continue
+        }
+        var emitContent = item.content
+        if (emitContent.isBlank() && item.images.isEmpty()) {
             if (role != ROLE_ASSISTANT) continue
             emitContent = PLACEHOLDER_CONTENT
         }
@@ -347,7 +393,7 @@ fun buildMessagesJson(
             }
             lastChatRole = role
         }
-        message(role, emitContent, images)
+        message(role, emitContent, item.images)
     }
 }
 
@@ -358,6 +404,7 @@ private const val PLACEHOLDER_CONTENT = " "
 private const val ROLE_SYSTEM = "system"
 private const val ROLE_USER = "user"
 private const val ROLE_ASSISTANT = "assistant"
+private const val ROLE_TOOL = "tool"
 
 fun streamFlagOf(body: JsonObject): Boolean =
     (body["stream"] as? JsonPrimitive)?.takeIf { it !is JsonNull }?.booleanOrNull ?: false
@@ -537,6 +584,17 @@ fun parseCustomHeaders(customHeaders: String?): Map<String, String> {
     return result
 }
 
+/**
+ * 本地工具 → OpenAI tools 数组注入（已有 tools 键则不覆盖，尊重模型级 customBody）。
+ * 仅用于 OpenAI 兼容协议；Gemini/Anthropic 原生协议的 function calling 形态不同，本期不注入。
+ */
+fun applyLocalTools(body: JsonObject, tools: List<FluxTool>): JsonObject {
+    if (tools.isEmpty()) return body
+    if (body["tools"] != null) return body
+    val arr = JsonArray(tools.map { it.toOpenAiSchema() })
+    return JsonObject(body + ("tools" to arr))
+}
+
 /** Gemini 官方 API 的内置工具 → 请求体注入（google_search / url_context / 图像输出） */
 fun applyBuiltinTools(
     body: JsonObject,
@@ -561,7 +619,69 @@ fun applyBuiltinTools(
 }
 
 /** 非流式响应中的工具调用项 */
-data class ToolCall(val name: String, val arguments: String)
+data class ToolCall(
+    val name: String,
+    val arguments: String,
+    /** 工具调用 id（流式聚合必填；非流式响应缺失时为空串） */
+    val id: String = "",
+)
+
+/** 流式 tool_calls 增量：OpenAI 协议按 index 分片下发 name/arguments */
+data class ToolCallDelta(
+    val index: Int,
+    val id: String? = null,
+    val name: String? = null,
+    val arguments: String? = null,
+)
+
+/** 解析 OpenAI 兼容流式帧中的 delta.tool_calls 增量（无则返回空列表） */
+fun parseToolCallDeltas(payload: String): List<ToolCallDelta> = try {
+    val obj = ChatJson.json.parseToJsonElement(payload).jsonObject
+    val delta = ((obj["choices"] as? JsonArray)?.firstOrNull() as? JsonObject)
+        ?.get("delta") as? JsonObject
+    val calls = delta?.get("tool_calls") as? JsonArray ?: return emptyList()
+    calls.mapNotNull { el ->
+        val o = el as? JsonObject ?: return@mapNotNull null
+        val fn = o["function"] as? JsonObject
+        ToolCallDelta(
+            index = o.intAt("index") ?: 0,
+            id = o.stringAt("id"),
+            name = fn?.stringAt("name"),
+            arguments = fn?.stringAt("arguments"),
+        )
+    }
+} catch (_: Exception) {
+    emptyList()
+}
+
+/** 流式 tool_calls 增量聚合器：按 index 归并 id/name/arguments 分片 */
+class ToolCallAccumulator {
+    private val order = mutableListOf<Int>()
+    private val ids = mutableMapOf<Int, String>()
+    private val names = mutableMapOf<Int, String>()
+    private val arguments = mutableMapOf<Int, StringBuilder>()
+
+    fun accept(deltas: List<ToolCallDelta>) {
+        for (d in deltas) {
+            if (d.index !in order) order.add(d.index)
+            d.id?.takeIf { it.isNotBlank() }?.let { ids[d.index] = it }
+            d.name?.takeIf { it.isNotBlank() }?.let { names[d.index] = it }
+            d.arguments?.let { arguments.getOrPut(d.index) { StringBuilder() }.append(it) }
+        }
+    }
+
+    val isEmpty: Boolean get() = order.isEmpty()
+
+    /** 按出现顺序产出完整工具调用；name 缺失的条目丢弃（协议异常，无法执行） */
+    fun build(): List<ToolCall> = order.mapNotNull { idx ->
+        val name = names[idx] ?: return@mapNotNull null
+        ToolCall(
+            name = name,
+            arguments = arguments[idx]?.toString().orEmpty().ifBlank { "{}" },
+            id = ids[idx].orEmpty(),
+        )
+    }
+}
 
 private fun JsonObject.firstChoiceMessage(): JsonObject? =
     ((this["choices"] as? JsonArray)?.firstOrNull() as? JsonObject)
@@ -577,9 +697,10 @@ fun extractToolCalls(response: JsonObject): List<ToolCall> {
     val message = response.firstChoiceMessage() ?: return emptyList()
     val calls = message["tool_calls"] as? JsonArray ?: return emptyList()
     return calls.mapNotNull { el ->
-        val fn = (el as? JsonObject)?.get("function") as? JsonObject ?: return@mapNotNull null
+        val o = el as? JsonObject ?: return@mapNotNull null
+        val fn = o["function"] as? JsonObject ?: return@mapNotNull null
         val name = (fn["name"] as? JsonPrimitive)?.content ?: return@mapNotNull null
-        ToolCall(name, (fn["arguments"] as? JsonPrimitive)?.content ?: "{}")
+        ToolCall(name, (fn["arguments"] as? JsonPrimitive)?.content ?: "{}", o.stringAt("id").orEmpty())
     }
 }
 

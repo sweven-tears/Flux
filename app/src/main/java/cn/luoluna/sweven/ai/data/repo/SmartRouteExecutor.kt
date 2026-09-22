@@ -248,6 +248,10 @@ class SmartRouteExecutor(
                                 // usage 不计入内容事件（Anthropic 首帧即带输入 token），只透传给消费方
                                 send(SmartEvent.Usage(ev.info))
                             }
+                            is ChatEvent.ToolCalls -> {
+                                // 智能路由/分组路径不注入本地工具，也不执行工具调用；
+                                // 客户端自带 tools 时上游返回的 tool_calls 在此忽略（与改造前一致）
+                            }
                             is ChatEvent.Failed -> {
                                 val kind = classifyFailure(ev.httpCode)
                                 if (gotContent) {

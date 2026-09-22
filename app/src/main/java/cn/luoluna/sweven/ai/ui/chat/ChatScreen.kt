@@ -91,6 +91,8 @@ fun ChatScreen(
     onOpenFreeCopy: (Long) -> Unit,
     /** 打开当前会话的聊天记录页（按会话 id） */
     onOpenChatHistory: (Long) -> Unit,
+    /** 打开工具中心（工具选择半窗右上角「管理」） */
+    onOpenToolsCenter: () -> Unit = {},
     pendingConversationId: Long? = null,
     onConsumePendingConversation: () -> Unit = {},
     vm: ChatViewModel = viewModel(),
@@ -152,9 +154,15 @@ fun ChatScreen(
     val thinkingDepth by vm.thinkingDepth.collectAsStateWithLifecycle()
     // 未设置(null) 视为自动挡；菜单勾选与图标状态都按生效档位判断
     val effectiveThinkingDepth = thinkingDepth ?: ThinkingDepth.AUTO
+    // 本地工具：当前会话勾选集合（半窗勾选/角标）与当前目标是否支持工具调用
+    val selectedToolNames by vm.selectedToolNames.collectAsStateWithLifecycle()
+    val showTools = currentPicker?.let {
+        it.model.capabilityTools && it.provider.protocol == cn.luoluna.sweven.ai.net.ProviderProtocol.OPENAI
+    } == true
 
     var pickerOpen by remember { mutableStateOf(false) }
     var pluginPickerOpen by remember { mutableStateOf(false) }
+    var toolPickerOpen by remember { mutableStateOf(false) }
 
     // 通知点击带回的会话跳转：切到目标会话并消费
     LaunchedEffect(pendingConversationId) {
@@ -302,6 +310,8 @@ fun ChatScreen(
         effectiveThinkingDepth = effectiveThinkingDepth,
         showReasoning = showReasoning,
         showImageInput = showImageInput,
+        showTools = showTools,
+        selectedToolCount = selectedToolNames.size,
         imageOpenExternal = imageOpenExternal,
         videoOpenExternal = videoOpenExternal,
         userName = userName,
@@ -355,6 +365,7 @@ fun ChatScreen(
         openModelPicker = { pickerOpen = true },
         openSystemPrompt = { systemPromptOpen = true },
         openPluginPicker = { pluginPickerOpen = true },
+        openToolPicker = { toolPickerOpen = true },
         showMessageActions = { actionMessage = it },
         copyMessage = { msg ->
             ChatUiDefaults.copyText(context, msg.content)
@@ -481,6 +492,20 @@ fun ChatScreen(
             currentId = plugin.id,
             onSelect = { app.settings.setChatPluginId(it) },
             onDismiss = { pluginPickerOpen = false },
+        )
+    }
+
+    if (toolPickerOpen) {
+        ToolPickerSheet(
+            selected = selectedToolNames,
+            onToggle = { name, on ->
+                vm.setTools(if (on) selectedToolNames + name else selectedToolNames - name)
+            },
+            onManage = {
+                toolPickerOpen = false
+                onOpenToolsCenter()
+            },
+            onDismiss = { toolPickerOpen = false },
         )
     }
 

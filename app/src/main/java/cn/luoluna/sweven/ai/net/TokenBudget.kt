@@ -35,7 +35,7 @@ fun estimateMessageTokens(content: String, imageCount: Int): Int =
 
 /** 裁剪结果：截断后的历史 + 被整丢弃的消息条数 + 被降级为占位文本的图片条数 */
 data class TrimmedHistory(
-    val items: List<Triple<String, String, List<String>>>,
+    val items: List<ChatMessageInput>,
     val droppedCount: Int,
     val strippedImageCount: Int,
 )
@@ -47,11 +47,11 @@ data class TrimmedHistory(
  * 最后一条（用户刚发的）永远保留，其图片也不降级。
  */
 fun trimToBudget(
-    history: List<Triple<String, String, List<String>>>,
+    history: List<ChatMessageInput>,
     budgetTokens: Int,
 ): TrimmedHistory {
-    fun total(items: List<Triple<String, String, List<String>>>): Int =
-        items.sumOf { estimateMessageTokens(it.second, it.third.size) }
+    fun total(items: List<ChatMessageInput>): Int =
+        items.sumOf { estimateMessageTokens(it.content, it.images.size) }
 
     if (total(history) <= budgetTokens) return TrimmedHistory(history, 0, 0)
 
@@ -61,11 +61,15 @@ fun trimToBudget(
     for (i in stripped.indices) {
         if (total(stripped) <= budgetTokens) break
         if (i >= stripped.lastIndex) break
-        val (role, content, images) = stripped[i]
-        if (images.isNotEmpty()) {
-            val note = if (content.isBlank()) "[图片×${images.size}]" else "$content\n[图片×${images.size}]"
-            stripped[i] = Triple(role, note, emptyList())
-            strippedImages += images.size
+        val item = stripped[i]
+        if (item.images.isNotEmpty()) {
+            val note = if (item.content.isBlank()) {
+                "[图片×${item.images.size}]"
+            } else {
+                "${item.content}\n[图片×${item.images.size}]"
+            }
+            stripped[i] = item.copy(content = note, images = emptyList())
+            strippedImages += item.images.size
         }
     }
     if (total(stripped) <= budgetTokens) return TrimmedHistory(stripped, 0, strippedImages)

@@ -49,9 +49,16 @@ import cn.luoluna.sweven.ai.net.ProviderClient
 import cn.luoluna.sweven.ai.net.ProviderProtocol
 import cn.luoluna.sweven.ai.net.UsageInfo
 import cn.luoluna.sweven.ai.net.ThinkParser
+import cn.luoluna.sweven.ai.net.ToolCall
 import cn.luoluna.sweven.ai.net.applyBuiltinTools
+import cn.luoluna.sweven.ai.net.applyLocalTools
 import cn.luoluna.sweven.ai.net.applyThinkingDepth
 import cn.luoluna.sweven.ai.net.buildChatBody
+import cn.luoluna.sweven.ai.net.buildMessagesJsonEx
+import cn.luoluna.sweven.ai.net.ChatJson
+import cn.luoluna.sweven.ai.net.ChatMessageInput
+import cn.luoluna.sweven.ai.tools.FluxTool
+import cn.luoluna.sweven.ai.tools.ToolRegistry
 import cn.luoluna.sweven.ai.net.buildMessagesJson
 import cn.luoluna.sweven.ai.net.estimateMessageTokens
 import cn.luoluna.sweven.ai.net.estimateTextTokens
@@ -75,9 +82,15 @@ import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonArray
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.put
 
 /** 模型选择器条目：厂商 + 模型 */
 data class PickerModel(val provider: ProviderEntity, val model: ModelEntity) {
@@ -126,6 +139,16 @@ data class ChatError(
 
 /** 聊天页上下文用量指示：按当前会话与目标模型的粗估 token；窗口未知时 window 为 null */
 data class ContextEstimate(val usedTokens: Int, val window: Int?)
+
+/** 工具名集合 → JSON 数组文本（空集合存 "[]"：与「未设置」区分，表示明确不启用任何工具） */
+private fun encodeToolNames(names: Set<String>): String =
+    ChatJson.json.encodeToString(names.sorted())
+
+/** JSON 数组文本 → 工具名集合；null 或解析失败返回 null（视为未设置，回落全局默认） */
+private fun decodeToolNames(json: String?): Set<String>? =
+    json?.let { raw ->
+        runCatching { ChatJson.json.decodeFromString<List<String>>(raw).toSet() }.getOrNull()
+    }
 
 class ChatViewModel(app: Application) : AndroidViewModel(app) {
 
@@ -200,6 +223,36 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         combine(current, _pendingThinkingDepth) { conv, pending ->
             conv?.thinkingDepth ?: pending
         }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
+
+    /** 尚无会话时勾选的工具名，待会话创建后写入（与思考深度同模式） */
+    private val _pendingTools = MutableStateFlow<Set<String>?>(null)
+
+    /**
+     * 当前会话生效的工具名集合：会话自身设置优先（"[]" = 明确不启用），
+     * 未设置（null）时回落到工具中心的全局默认，都没有则不启用。
+     */
+    val selectedToolNames: StateFlow<Set<String>> =
+        combine(current, _pendingTools, settings.defaultToolIds) { conv, pending, defaults ->
+            pending
+                ?: decodeToolNames(conv?.toolsJson)
+                ?: decodeToolNames(defaults)
+                ?: emptySet()
+        }.stateIn(viewModelScope, SharingStarted.Eagerly, emptySet())
+
+    /** 当前会话勾选且已注册的工具（发给模型的 tools 数组来源） */
+    val selectedTools: StateFlow<List<FluxTool>> =
+        selectedToolNames.map { ToolRegistry.byNames(it) }
+            .stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
+
+    /** 设置当前会话勾选的工具；尚无会话时先暂存，会话创建时写入 */
+    fun setTools(names: Set<String>) {
+        val convId = currentId.value
+        if (convId == null) {
+            _pendingTools.value = names
+        } else {
+            viewModelScope.launch { conversationDao.setTools(convId, encodeToolNames(names)) }
+        }
+    }
 
     /**
      * flux-auto 候选合集（providerId to modelName）：全部启用厂商 × 启用 chat/图像输出模型，
@@ -498,6 +551,10 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
             conversationDao.setThinkingDepth(id, it)
             _pendingThinkingDepth.value = null
         }
+        _pendingTools.value?.let {
+            conversationDao.setTools(id, encodeToolNames(it))
+            _pendingTools.value = null
+        }
     }
 
     fun selectConversation(id: Long) {
@@ -505,8 +562,9 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         stopStreamingInternal()
         currentId.value = id
         _notice.value = null
-        // 切到已有会话后以会话自身的思考深度为准
+        // 切到已有会话后以会话自身的思考深度/工具勾选为准
         _pendingThinkingDepth.value = null
+        _pendingTools.value = null
     }
 
     fun deleteConversation(id: Long) = viewModelScope.launch {
@@ -592,6 +650,10 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                     conversationDao.setThinkingDepth(convId, it)
                     _pendingThinkingDepth.value = null
                 }
+                _pendingTools.value?.let {
+                    conversationDao.setTools(convId, encodeToolNames(it))
+                    _pendingTools.value = null
+                }
             } else if (current.value?.providerId == null) {
                 // 会话没有固定模型时，把实际使用的目标写回会话
                 conversationDao.setModel(convId, providerId, modelName)
@@ -661,6 +723,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
     /**
      * 构建聊天请求体（单个模型与路由候选共用）；模型窗口已知时把历史裁进预算。
      * [cache] 非空时按窗口复用消息数组，裁剪统计随缓存一并取出。
+     * [tools] 非空且厂商为 OpenAI 兼容协议时注入 tools 数组（工具结果消息随历史一并回传）。
      */
     private suspend fun buildRequestBody(
         provider: ProviderEntity,
@@ -668,6 +731,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         conversation: ConversationEntity?,
         history: List<MessageEntity>,
         cache: MessagesCache? = null,
+        tools: List<FluxTool> = emptyList(),
     ): BuiltBody {
         val systemPrompt = conversation?.systemPrompt?.takeIf { it.isNotBlank() }
         var dropped = 0
@@ -682,7 +746,13 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         } else {
             var chatMessages = history.map {
                 // 助手消息里的图片是模型产出（生图结果），不回传上游：Anthropic 不允许 assistant 携带图片
-                Triple(it.role, it.content, if (it.role == Role.ASSISTANT) emptyList() else it.images)
+                ChatMessageInput(
+                    role = it.role,
+                    content = it.content,
+                    images = if (it.role == Role.ASSISTANT) emptyList() else it.images,
+                    toolCallsJson = it.toolCallsJson,
+                    toolCallId = it.toolCallId,
+                )
             }
             val window = model.contextWindow
             if (window != null && window > 0) {
@@ -694,9 +764,11 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                 strippedImages = trimmed.strippedImageCount
             }
             messagesJson = if (systemPrompt != null) {
-                buildMessagesJson(listOf(Triple(Role.SYSTEM, systemPrompt, emptyList<String>())) + chatMessages)
+                buildMessagesJsonEx(
+                    listOf(ChatMessageInput(Role.SYSTEM, systemPrompt)) + chatMessages
+                )
             } else {
-                buildMessagesJson(chatMessages)
+                buildMessagesJsonEx(chatMessages)
             }
             if (cacheKey != null) cache?.put(cacheKey, CachedMessages(messagesJson, dropped, strippedImages))
         }
@@ -713,6 +785,10 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         )
         body = applyThinkingDepth(body, conversation?.thinkingDepth, model.name)
         body = mergeCustomBody(body, model.customBody)
+        // 本地工具：仅 OpenAI 兼容协议注入（Gemini/Anthropic 原生 function calling 形态不同，本期不注入）
+        if (tools.isNotEmpty() && provider.protocol == ProviderProtocol.OPENAI) {
+            body = applyLocalTools(body, tools)
+        }
         // Gemini 内置工具：兼容层预设（presetId）或原生协议厂商均注入，原生协议的格式转换由 ProviderClient 边界完成
         if (provider.presetId == "gemini" || provider.protocol == ProviderProtocol.GEMINI) {
             body = applyBuiltinTools(
@@ -725,6 +801,12 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         return BuiltBody(body, dropped, strippedImages)
     }
 
+    /**
+     * 单模型直连：支持本地工具的多轮循环。
+     * 每轮请求带上当前勾选的 tools 与既有工具结果历史；模型以 tool_calls 收尾时，
+     * 落库本轮助手消息（含 toolCallsJson）→ 执行工具 → 落库 role=tool 结果 → 发起下一轮，
+     * 直到模型正常输出文本或达到轮数上限。未勾选工具时行为与改造前完全一致。
+     */
     private suspend fun streamSingle(convId: Long, picker: PickerModel) {
         // 选择器数据是发送时刻的快照，落库前以最新状态复核厂商可用性
         val provider = providerDao.byId(picker.provider.id)
@@ -737,38 +819,45 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
             _error.value = ChatError("厂商「${picker.provider.alias}」未配置 API Key，请到「厂商」页添加")
             return
         }
-
-        val conversation = conversationDao.byId(convId)
-        val history = messageDao.forConversation(convId)
-        val built = buildRequestBody(provider, picker.model, conversation, history)
         val extraHeaders = parseCustomHeaders(picker.model.customHeaders)
 
-        _notice.value = trimNotice(built.droppedCount, built.strippedImageCount)
         _error.value = null
         _streaming.value = true
         _streamingText.value = ""
         _streamingReasoning.value = ""
         activeStreamModel = picker.provider.id to picker.model.name
         beginStreamStats()
-        val publisher = StreamPublisher()
+        var publisher = StreamPublisher()
         sendJob = viewModelScope.launch {
             var failed: ChatError? = null
+            var round = 0
             try {
-                client.chatDeltas(provider.baseUrl, key.key, built.body, extraHeaders, provider.protocol).collect { ev ->
-                    when (ev) {
-                        is ChatEvent.Delta -> {
-                            markFirstToken()
-                            publisher.delta(ev.text)
-                        }
-                        is ChatEvent.ReasoningDelta -> {
-                            markFirstToken()
-                            publisher.reasoning(ev.text)
-                        }
-                        is ChatEvent.Usage -> mergeStreamUsage(ev.info)
-                        is ChatEvent.Failed -> failed = ChatError(ev.message, ev.httpCode, ev.rawBody)
-                        ChatEvent.Done -> Unit
+                while (true) {
+                    val conversation = conversationDao.byId(convId)
+                    val history = messageDao.forConversation(convId)
+                    val tools = selectedTools.value
+                    val built = buildRequestBody(
+                        provider, picker.model, conversation, history, tools = tools,
+                    )
+                    if (round == 0) {
+                        _notice.value = trimNotice(built.droppedCount, built.strippedImageCount)
                     }
+                    val calls = collectRound(provider, key.key, extraHeaders, built.body, publisher)
+                    if (calls.isEmpty()) break
+                    // 本轮以工具调用收尾：落库助手消息 + 执行工具 + 落库结果，再进入下一轮
+                    persistToolRound(convId, publisher, calls)
+                    if (round + 1 >= MAX_TOOL_ROUNDS) {
+                        _notice.value = "工具调用已达 $MAX_TOOL_ROUNDS 轮上限，本次不再继续调用"
+                        break
+                    }
+                    round++
+                    _notice.value = "正在执行工具：${calls.joinToString("、") { it.name }}…"
+                    publisher = StreamPublisher()
+                    _streamingText.value = ""
+                    _streamingReasoning.value = ""
                 }
+            } catch (e: ToolRoundFailure) {
+                failed = e.error
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -777,6 +866,110 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
             finishStreaming(convId, publisher, failed)
         }
     }
+
+    /** 收集一轮流式响应；返回本轮模型请求的工具调用（无工具调用时为空列表） */
+    private suspend fun collectRound(
+        provider: ProviderEntity,
+        apiKey: String,
+        extraHeaders: Map<String, String>,
+        body: JsonObject,
+        publisher: StreamPublisher,
+    ): List<ToolCall> {
+        var calls: List<ToolCall> = emptyList()
+        var failed: ChatError? = null
+        client.chatDeltas(provider.baseUrl, apiKey, body, extraHeaders, provider.protocol).collect { ev ->
+            when (ev) {
+                is ChatEvent.Delta -> {
+                    markFirstToken()
+                    publisher.delta(ev.text)
+                }
+                is ChatEvent.ReasoningDelta -> {
+                    markFirstToken()
+                    publisher.reasoning(ev.text)
+                }
+                is ChatEvent.Usage -> mergeStreamUsage(ev.info)
+                is ChatEvent.ToolCalls -> calls = ev.calls
+                is ChatEvent.Failed -> failed = ChatError(ev.message, ev.httpCode, ev.rawBody)
+                ChatEvent.Done -> Unit
+            }
+        }
+        failed?.let { throw ToolRoundFailure(it) }
+        return calls
+    }
+
+    /** 工具轮失败：携带 ChatError 抛给上层统一收尾（保持与单轮失败一致的错误呈现） */
+    private class ToolRoundFailure(val error: ChatError) : Exception(error.message)
+
+    /**
+     * 落库「助手（含工具调用）」+ 逐条执行工具 + 落库「role=tool 结果」。
+     * 工具执行失败或未知工具不中断整轮：以 {"error": ...} 文本作为结果回传，让模型自行纠正。
+     */
+    private suspend fun persistToolRound(convId: Long, publisher: StreamPublisher, calls: List<ToolCall>) {
+        publisher.publish(force = true)
+        val content = _streamingText.value
+        val reasoning = _streamingReasoning.value.trim().takeIf { it.isNotEmpty() }
+        val model = activeStreamModel
+        messageDao.insert(
+            MessageEntity(
+                conversationId = convId,
+                role = Role.ASSISTANT,
+                content = content,
+                reasoning = reasoning,
+                toolCallsJson = toolCallsJsonOf(calls),
+                providerId = model?.first,
+                modelName = model?.second,
+            )
+        )
+        calls.forEach { call ->
+            val result = runTool(call)
+            messageDao.insert(
+                MessageEntity(
+                    conversationId = convId,
+                    role = Role.TOOL,
+                    content = result,
+                    toolCallId = call.id,
+                )
+            )
+        }
+        conversationDao.touch(convId, System.currentTimeMillis())
+    }
+
+    /** 执行单个工具调用：未知工具 / 参数非法 / 超时 / 异常一律转为错误文本结果 */
+    private suspend fun runTool(call: ToolCall): String {
+        val tool = ToolRegistry.byName(call.name)
+            ?: return """{"error":"未找到工具 ${call.name}，请改用已启用的工具或直接回答"}"""
+        val args = runCatching { ChatJson.json.parseToJsonElement(call.arguments).jsonObject }
+            .getOrElse {
+                return """{"error":"工具参数不是合法 JSON 对象：${it.message?.take(120).orEmpty()}"}"""
+            }
+        return try {
+            withTimeoutOrNull(TOOL_EXECUTION_TIMEOUT_MS) { tool.execute(args) }
+                ?: """{"error":"工具执行超时（${TOOL_EXECUTION_TIMEOUT_MS / 1000}s）"}"""
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            """{"error":"工具执行失败：${(e.message ?: e.javaClass.simpleName).take(200)}"}"""
+        }
+    }
+
+    /** 工具调用列表 → 落库用 JSON 数组文本（含 id/name/arguments，回传上游时原样发出） */
+    private fun toolCallsJsonOf(calls: List<ToolCall>): String = buildJsonArray {
+        calls.forEach { call ->
+            add(
+                buildJsonObject {
+                    put("id", JsonPrimitive(call.id))
+                    put("type", JsonPrimitive("function"))
+                    put(
+                        "function",
+                        buildJsonObject {
+                            put("name", JsonPrimitive(call.name))
+                            put("arguments", JsonPrimitive(call.arguments))
+                        },
+                    )
+                }
+            )
+        }
+    }.toString()
 
     /**
      * 文生图：目标为生图模型（type=image）时的发送分支。
@@ -1473,6 +1666,12 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
 
         /** 「再点一次停止」居中提示的显示时长 */
         private const val STOP_HINT_VISIBLE_MS = 1800L
+
+        /** 工具调用最大轮数：防模型在工具循环里打转（每轮含一次工具执行与一次上游请求） */
+        private const val MAX_TOOL_ROUNDS = 8
+
+        /** 单个工具执行超时（毫秒）：超时按错误结果回传，不阻塞整轮 */
+        private const val TOOL_EXECUTION_TIMEOUT_MS = 30_000L
 
         /** 厂商按用户拖拽顺序分组，厂商内按模型拖拽顺序；onlyEnabledProviders=false 时含停用厂商（预设编辑回显用） */
         private fun buildPickerModels(

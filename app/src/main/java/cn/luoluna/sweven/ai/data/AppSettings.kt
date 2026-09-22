@@ -203,6 +203,19 @@ class AppSettings(context: Context) {
         _chatPluginId.value = id
     }
 
+    /**
+     * 工具中心里启用的工具名集合（JSON 数组字符串）：新建会话默认勾选这些工具；
+     * null/空 = 不启用任何工具（与旧版本行为一致）
+     */
+    private val _defaultToolIds = MutableStateFlow(prefs.getString(KEY_DEFAULT_TOOLS, null))
+    val defaultToolIds: StateFlow<String?> = _defaultToolIds
+
+    fun setDefaultToolIds(json: String?) {
+        val v = json?.takeIf { it.isNotBlank() && it != "[]" }
+        prefs.edit().putString(KEY_DEFAULT_TOOLS, v).apply()
+        _defaultToolIds.value = v
+    }
+
     private val _userName = MutableStateFlow(prefs.getString(KEY_USER_NAME, null))
     val userName: StateFlow<String?> = _userName
 
@@ -254,6 +267,7 @@ class AppSettings(context: Context) {
         private const val KEY_IMAGE_OPEN_EXTERNAL = "image_open_external"
         private const val KEY_VIDEO_OPEN_EXTERNAL = "video_open_external"
         private const val KEY_CHAT_PLUGIN = "chat_ui_plugin"
+        private const val KEY_DEFAULT_TOOLS = "default_tool_ids"
         private const val KEY_USER_NAME = "user_name"
         private const val KEY_USER_AVATAR = "user_avatar"
     }

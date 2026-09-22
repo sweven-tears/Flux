@@ -1057,6 +1057,32 @@ class LanServer(
             is ChatEvent.Failed -> buildJsonObject {
                 put("error", buildJsonObject { put("message", ev.message) })
             }.toString()
+            // 客户端自带 tools 时上游的 tool_calls 原样透传（网关不代执行），聚合结果按完整调用一次性下发
+            is ChatEvent.ToolCalls -> chunk(
+                buildJsonObject {
+                    put(
+                        "tool_calls",
+                        buildJsonArray {
+                            ev.calls.forEachIndexed { i, call ->
+                                add(
+                                    buildJsonObject {
+                                        put("index", i)
+                                        put("id", call.id)
+                                        put("type", "function")
+                                        put(
+                                            "function",
+                                            buildJsonObject {
+                                                put("name", call.name)
+                                                put("arguments", call.arguments)
+                                            },
+                                        )
+                                    }
+                                )
+                            }
+                        },
+                    )
+                }
+            )
             is ChatEvent.Usage -> null
             ChatEvent.Done -> null
         }

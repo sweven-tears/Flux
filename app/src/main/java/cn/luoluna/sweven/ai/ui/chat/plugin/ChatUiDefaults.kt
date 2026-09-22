@@ -62,6 +62,7 @@ import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.outlined.Build
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
@@ -112,7 +113,11 @@ import cn.luoluna.sweven.ai.data.db.PresetEntity
 import cn.luoluna.sweven.ai.data.db.Role
 import cn.luoluna.sweven.ai.data.repo.SmartAi
 import cn.luoluna.sweven.ai.data.repo.label
+import cn.luoluna.sweven.ai.net.ChatJson
 import cn.luoluna.sweven.ai.net.ThinkingDepth
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import cn.luoluna.sweven.ai.ui.chat.ChatError
 import cn.luoluna.sweven.ai.ui.chat.ConversationHit
 import cn.luoluna.sweven.ai.ui.chat.ErrorDetailSheet
@@ -123,6 +128,7 @@ import cn.luoluna.sweven.ai.ui.chat.rememberDataUrlBitmap
 import cn.luoluna.sweven.ai.ui.chat.rememberVideoFrame
 import cn.luoluna.sweven.ai.ui.chat.FluxVideoPlayer
 import cn.luoluna.sweven.ai.ui.common.ConfirmDialog
+import cn.luoluna.sweven.ai.ui.common.MonoFont
 import cn.luoluna.sweven.ai.ui.common.openImageExternally
 import cn.luoluna.sweven.ai.ui.common.openVideoExternally
 import kotlinx.coroutines.delay
@@ -705,8 +711,91 @@ object ChatUiDefaults {
         }
     }
 
+    /**
+     * 从历史中解析该 tool_call_id 对应的工具名：定位携带该 id 的助手消息（toolCallsJson）后取 function.name。
+     * 找不到（旧数据/被删）返回 null，界面回落只显示「工具」。
+     */
+    private fun toolNameFor(messages: List<MessageEntity>, toolCallId: String?): String? {
+        if (toolCallId.isNullOrBlank()) return null
+        val raw = messages.lastOrNull { it.toolCallsJson?.contains(toolCallId) == true }?.toolCallsJson
+            ?: return null
+        return runCatching {
+            (ChatJson.json.parseToJsonElement(raw) as? JsonArray)?.firstNotNullOfOrNull { el ->
+                val obj = el as? JsonObject ?: return@firstNotNullOfOrNull null
+                if ((obj["id"] as? JsonPrimitive)?.content != toolCallId) return@firstNotNullOfOrNull null
+                ((obj["function"] as? JsonObject)?.get("name") as? JsonPrimitive)?.content
+            }
+        }.getOrNull()
+    }
+
+    /** 助手消息请求的工具名列表（气泡上方提示「调用工具：xxx」） */
+    private fun toolNamesOf(message: MessageEntity): List<String> {
+        val raw = message.toolCallsJson?.takeIf { it.isNotBlank() } ?: return emptyList()
+        return runCatching {
+            (ChatJson.json.parseToJsonElement(raw) as? JsonArray)?.mapNotNull { el ->
+                (((el as? JsonObject)?.get("function") as? JsonObject)?.get("name") as? JsonPrimitive)?.content
+            }.orEmpty()
+        }.getOrDefault(emptyList())
+    }
+
+    /** 工具结果气泡：紧凑卡片，显示工具名与结果摘要，点击展开全文 */
+    @Composable
+    fun ToolMessageBubble(env: ChatUiEnv, message: MessageEntity) {
+        var expanded by remember { mutableStateOf(false) }
+        val name = toolNameFor(env.messages, message.toolCallId)
+        Row(
+            horizontalArrangement = Arrangement.Start,
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Surface(
+                color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                shape = RoundedCornerShape(12.dp),
+                modifier = Modifier
+                    .widthIn(max = 320.dp)
+                    .clickable { expanded = !expanded },
+            ) {
+                Column(Modifier.padding(horizontal = 10.dp, vertical = 8.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(
+                            Icons.Outlined.Build,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.size(14.dp),
+                        )
+                        Text(
+                            if (name != null) "工具结果 · $name" else "工具结果",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier
+                                .weight(1f, fill = false)
+                                .padding(start = 4.dp),
+                        )
+                    }
+                    Text(
+                        message.content,
+                        style = MaterialTheme.typography.bodySmall.copy(fontFamily = MonoFont),
+                        color = MaterialTheme.colorScheme.onSurface,
+                        maxLines = if (expanded) Int.MAX_VALUE else 3,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.padding(top = 4.dp),
+                    )
+                    Text(
+                        if (expanded) "收起" else "展开",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.padding(top = 2.dp),
+                    )
+                }
+            }
+        }
+    }
+
     @Composable
     fun MessageBubble(env: ChatUiEnv, message: MessageEntity) {
+        if (message.role == Role.TOOL) {
+            ToolMessageBubble(env, message)
+            return
+        }
         if (message.role == Role.USER) {
             Column(
                 horizontalAlignment = Alignment.End,
@@ -753,6 +842,15 @@ object ChatUiDefaults {
         } else {
             Column(Modifier.fillMaxWidth()) {
                 AssistantMessageHeader(env, message)
+                // 本轮该助手消息请求调用的工具（结果在下一条「工具结果」气泡里）
+                toolNamesOf(message).takeIf { it.isNotEmpty() }?.let { names ->
+                    Text(
+                        "调用工具：${names.joinToString("、")}",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(bottom = 4.dp),
+                    )
+                }
                 Column(Modifier.widthIn(max = 320.dp)) {
                     // 生图消息：助手消息也可携带图片（模型产出）
                     if (message.images.isNotEmpty()) {
@@ -1037,6 +1135,34 @@ object ChatUiDefaults {
                                             thinkMenuOpen = false
                                         },
                                     )
+                                }
+                            }
+                        }
+                    }
+                    // 工具：仅当前目标支持工具调用时显示（模型能力 + OpenAI 兼容协议）；
+                    // 点开半窗勾选本次会话可用的本地工具，已选数量以角标提示
+                    if (env.showTools) {
+                        Box {
+                            IconButton(onClick = env.openToolPicker) {
+                                Box(Modifier.size(26.dp)) {
+                                    Icon(
+                                        Icons.Outlined.Build,
+                                        contentDescription = "工具",
+                                        tint = if (env.selectedToolCount > 0) {
+                                            MaterialTheme.colorScheme.primary
+                                        } else {
+                                            onPanel
+                                        },
+                                        modifier = Modifier.size(22.dp),
+                                    )
+                                    if (env.selectedToolCount > 0) {
+                                        Box(
+                                            Modifier
+                                                .size(7.dp)
+                                                .background(MaterialTheme.colorScheme.primary, CircleShape)
+                                                .align(Alignment.TopEnd),
+                                        )
+                                    }
                                 }
                             }
                         }

@@ -47,6 +47,7 @@ import cn.luoluna.sweven.ai.ui.settings.CreationsScreen
 import cn.luoluna.sweven.ai.ui.settings.NetworkLogDetailScreen
 import cn.luoluna.sweven.ai.ui.settings.NetworkLogScreen
 import cn.luoluna.sweven.ai.ui.settings.SettingsScreen
+import cn.luoluna.sweven.ai.ui.tools.ToolsCenterScreen
 
 object Routes {
     const val CHAT = "chat"
@@ -65,6 +66,7 @@ object Routes {
     const val FREE_COPY = "free_copy/{id}"
     const val CHAT_HISTORY = "chat_history/{conversationId}"
     const val IN_APP_BROWSER = "in_app_browser"
+    const val TOOLS_CENTER = "tools_center"
 }
 
 private val TOP_ROUTES = setOf(Routes.CHAT, Routes.PROVIDERS, Routes.LAN)
@@ -168,8 +170,14 @@ fun PhoneRouterApp(
                         onOpenSettings = { navController.navigate(Routes.SETTINGS) },
                         onOpenFreeCopy = { id -> navController.navigate("free_copy/$id") },
                         onOpenChatHistory = { id -> navController.navigate("chat_history/$id") },
+                        onOpenToolsCenter = { navController.navigate(Routes.TOOLS_CENTER) },
                         pendingConversationId = pendingChatConversation,
                         onConsumePendingConversation = { pendingChatConversation = null },
+                    )
+                }
+                composable(Routes.TOOLS_CENTER) {
+                    ToolsCenterScreen(
+                        onBack = { navController.popBackStack() },
                     )
                 }
                 composable(Routes.PROVIDERS) {

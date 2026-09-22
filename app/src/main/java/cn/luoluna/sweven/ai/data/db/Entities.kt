@@ -200,6 +200,8 @@ data class ConversationEntity(
     val systemPrompt: String? = null,
     /** 思考深度：off / low / medium / high，null = 未设置（不注入思考相关参数） */
     val thinkingDepth: String? = null,
+    /** 本会话勾选的工具名集合（JSON 数组字符串）；null = 未设置（不启用工具） */
+    val toolsJson: String? = null,
     val createdAt: Long = System.currentTimeMillis(),
     val updatedAt: Long = System.currentTimeMillis(),
 )
@@ -257,6 +259,13 @@ data class MessageEntity(
     val imagesJson: String? = null,
     /** 模型思考过程（reasoning_content / <think>），仅助手消息 */
     val reasoning: String? = null,
+    /**
+     * 本轮工具调用列表（JSON 数组，元素 {id, name, arguments}），仅发起工具调用的助手消息；
+     * 后续 role=tool 结果消息按 toolCallId 与之配对回传上游。
+     */
+    val toolCallsJson: String? = null,
+    /** role=tool 消息对应的 tool_call_id；其余角色为 null */
+    val toolCallId: String? = null,
     /** 生成此助手消息的模型：厂商 id + 模型名；用户消息与旧数据为 null（显示回落"助手"） */
     val providerId: Long? = null,
     val modelName: String? = null,
@@ -358,6 +367,9 @@ object Role {
     const val USER = "user"
     const val ASSISTANT = "assistant"
     const val SYSTEM = "system"
+
+    /** 工具结果消息（OpenAI 协议 role=tool），content 存工具输出文本 */
+    const val TOOL = "tool"
 }
 
 /** 局域网请求日志：一次 /v1/chat/completions 请求一条（含校验失败），自动修剪保留最近若干条 */

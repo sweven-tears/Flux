@@ -432,6 +432,8 @@ private suspend fun runStreamTest(
             }
             is ChatEvent.Failed -> throw RuntimeException(ev.message)
             is ChatEvent.Usage -> Unit
+            // 流式测试只关心文本输出；工具调用走非流式的 extractToolCalls 探测
+            is ChatEvent.ToolCalls -> Unit
             ChatEvent.Done -> Unit
         }
     }

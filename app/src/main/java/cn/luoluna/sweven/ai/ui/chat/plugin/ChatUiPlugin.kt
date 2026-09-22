@@ -98,6 +98,10 @@ class ChatUiEnv(
     val effectiveThinkingDepth: String,
     val showReasoning: Boolean,
     val showImageInput: Boolean,
+    /** 当前目标支持本地工具（模型声明工具能力且厂商为 OpenAI 兼容协议）：扳手按钮显隐依据 */
+    val showTools: Boolean,
+    /** 当前会话已勾选的工具数（扳手按钮角标） */
+    val selectedToolCount: Int,
     /** 文件打开方式（设置项）：图片/视频点击是否直接交系统应用查看 */
     val imageOpenExternal: Boolean,
     val videoOpenExternal: Boolean,
@@ -139,6 +143,8 @@ class ChatUiEnv(
     val openModelPicker: () -> Unit,
     val openSystemPrompt: () -> Unit,
     val openPluginPicker: () -> Unit,
+    /** 打开会话工具选择半窗（输入栏扳手按钮） */
+    val openToolPicker: () -> Unit,
     val showMessageActions: (MessageEntity) -> Unit,
     val copyMessage: (MessageEntity) -> Unit,
     /** 编辑当前会话标题（顶栏标题点击） */

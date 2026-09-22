@@ -154,6 +154,26 @@ data class ChatStyleConfig(
 }
 
 /**
+ * 一条消息的统一渲染槽位：用户消息与助手消息走**同一个组件**
+ * （`ChatUiDefaults.MessageBubble`），差别只有这里这三项。
+ * 新增任何「角色差异」都加到这里，不要在绘制代码里写 `if (isUser)`。
+ */
+@Immutable
+data class MessageSlot(
+    val style: BubbleStyle,
+    val profile: RoleProfile,
+    /** 头像行/操作行/token 行是否右对齐（用户消息靠右） */
+    val alignEnd: Boolean,
+)
+
+/** 角色 → 渲染槽位；工具结果与未知角色（thinking 等）都走助手档案 */
+fun ChatStyleConfig.slotFor(role: String?): MessageSlot = when (role) {
+    Role.USER -> MessageSlot(user, userProfile, alignEnd = true)
+    Role.TOOL -> MessageSlot(tool, aiProfile, alignEnd = false)
+    else -> MessageSlot(ai, aiProfile, alignEnd = false)
+}
+
+/**
  * 内置风格预设（插件 id ↔ 样式表）；`custom`（JSON）皮肤不走这里，见 ChatStyleCodec。
  * **默认风格 = 扁平（FLAT）**：其 id 即 `ChatUiRegistry.DEFAULT_ID`。
  */

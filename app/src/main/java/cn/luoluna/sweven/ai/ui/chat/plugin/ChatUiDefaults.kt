@@ -105,6 +105,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -138,6 +139,7 @@ import cn.luoluna.sweven.ai.ui.chat.style.ChatBubble
 import cn.luoluna.sweven.ai.ui.chat.style.ChatMessageRow
 import cn.luoluna.sweven.ai.ui.chat.style.ChatStyleConfig
 import cn.luoluna.sweven.ai.ui.chat.style.ChatStylePreset
+import cn.luoluna.sweven.ai.ui.chat.style.slotFor
 import cn.luoluna.sweven.ai.ui.chat.timeline.ExecutionTimeline
 import cn.luoluna.sweven.ai.ui.chat.timeline.buildExecutionNodes
 import cn.luoluna.sweven.ai.ui.chat.timeline.isTurnRunning
@@ -671,61 +673,67 @@ object ChatUiDefaults {
         }
     }
 
-    // ---------------- 单条消息气泡 ----------------
+    // ---------------- 单条消息（用户/助手共用一套组件） ----------------
 
-    /** 用户消息头：名字 + 头像（右对齐由调用方 Column 的 Alignment.End 决定） */
+    /**
+     * 消息头：头像 + 名字。**用户与助手共用这一个组件**，只有顺序不同
+     * （助手 = 头像在左，用户 = 名字在左）；左右对齐由 [ChatMessageRow] 的 RoleProfile 决定。
+     */
     @Composable
-    fun UserMessageHeader(env: ChatUiEnv) {
+    fun MessageHeader(env: ChatUiEnv, message: MessageEntity) {
         Row(
             verticalAlignment = Alignment.CenterVertically,
             modifier = Modifier.padding(bottom = 4.dp),
         ) {
-            Text(
-                env.userName?.ifBlank { null } ?: "我",
-                style = MaterialTheme.typography.labelMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            cn.luoluna.sweven.ai.ui.chat.UserAvatar(
-                name = env.userName,
-                avatarDataUrl = env.userAvatar,
-                size = 24.dp,
-                modifier = Modifier.padding(start = 6.dp),
-            )
-        }
-    }
-
-    /** 助手消息头：头像 + 名字（按消息记录的模型显示当时回复者，而非当前选中模型） */
-    @Composable
-    fun AssistantMessageHeader(env: ChatUiEnv, message: MessageEntity) {
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            modifier = Modifier.padding(bottom = 4.dp),
-        ) {
-            val recorded = message.providerId?.let { pid ->
-                message.modelName?.let { name -> env.modelsByKey[pid to name] }
-            }
-            if (recorded != null) {
-                cn.luoluna.sweven.ai.ui.chat.InitialAvatar(
-                    name = recorded.displayName,
+            if (message.role == Role.USER) {
+                Text(
+                    env.userName?.ifBlank { null } ?: "我",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                cn.luoluna.sweven.ai.ui.chat.UserAvatar(
+                    name = env.userName,
+                    avatarDataUrl = env.userAvatar,
                     size = 24.dp,
+                    modifier = Modifier.padding(start = 6.dp),
                 )
             } else {
-                cn.luoluna.sweven.ai.ui.chat.AssistantAvatar(size = 24.dp)
+                // 按消息记录的模型显示当时回复者，而非当前选中模型
+                val recorded = message.providerId?.let { pid ->
+                    message.modelName?.let { name -> env.modelsByKey[pid to name] }
+                }
+                if (recorded != null) {
+                    cn.luoluna.sweven.ai.ui.chat.InitialAvatar(
+                        name = recorded.displayName,
+                        size = 24.dp,
+                    )
+                } else {
+                    cn.luoluna.sweven.ai.ui.chat.AssistantAvatar(size = 24.dp)
+                }
+                Text(
+                    when {
+                        recorded != null -> recorded.displayName
+                        // 模型已删除：保留原始模型名，头像无法匹配回落机器人
+                        message.modelName != null -> message.modelName
+                        // 旧数据未记录模型：诚实显示"助手"，不按会话当前模型猜测
+                        else -> "助手"
+                    },
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(start = 6.dp),
+                )
             }
-            Text(
-                when {
-                    recorded != null -> recorded.displayName
-                    // 模型已删除：保留原始模型名，头像无法匹配回落机器人
-                    message.modelName != null -> message.modelName
-                    // 旧数据未记录模型：诚实显示"助手"，不按会话当前模型猜测
-                    else -> "助手"
-                },
-                style = MaterialTheme.typography.labelMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(start = 6.dp),
-            )
         }
     }
+
+    /** 正文文字样式：样式表开了等宽就用等宽字体（唯一入口，别在各处再写一遍 if monospace） */
+    @Composable
+    fun bodyTextStyle(style: BubbleStyle): TextStyle =
+        if (style.monospace) {
+            MaterialTheme.typography.bodyMedium.copy(fontFamily = MonoFont)
+        } else {
+            MaterialTheme.typography.bodyMedium
+        }
 
     /** 流式消息头：机器人头像 + 状态文案 */
     @Composable
@@ -757,15 +765,15 @@ object ChatUiDefaults {
     private fun toolNamesOf(message: MessageEntity): List<String> =
         parseToolCalls(message.toolCallsJson).map { it.name }
 
-    /** 工具结果气泡：紧凑卡片，显示工具名与结果摘要，点击展开全文（样式来自 config.tool） */
+    /** 工具结果气泡：紧凑卡片，显示工具名与结果摘要，点击展开全文（样式来自 slotFor(TOOL)） */
     @Composable
     fun ToolMessageBubble(env: ChatUiEnv, message: MessageEntity, toolNames: Map<String, String>) {
         var expanded by remember { mutableStateOf(false) }
-        val config = env.chatStyle
+        val slot = env.chatStyle.slotFor(Role.TOOL)
         val name = toolNameFor(toolNames, message.toolCallId)
-        ChatMessageRow(profile = config.aiProfile) {
+        ChatMessageRow(profile = slot.profile) {
             ChatBubble(
-                style = config.tool,
+                style = slot.style,
                 modifier = Modifier.clickable { expanded = !expanded },
             ) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -801,107 +809,66 @@ object ChatUiDefaults {
         }
     }
 
+    /**
+     * 单条消息气泡：**用户消息与助手消息走同一个组件、同一条代码路径**。
+     * 差异只来自 [ChatStyleConfig.slotFor]（样式 / 布局档案 / 对齐），内容顺序也完全一致：
+     * 工具提示行 → 图片行 → 思考折叠 + 正文气泡。
+     */
     @Composable
     fun MessageBubble(env: ChatUiEnv, message: MessageEntity, toolNames: Map<String, String>) {
         if (message.role == Role.TOOL) {
             ToolMessageBubble(env, message, toolNames)
             return
         }
-        if (message.role == Role.USER) {
-            val config = env.chatStyle
-            ChatMessageRow(
-                profile = config.userProfile,
-                header = { UserMessageHeader(env) },
-                footer = {
-                    MessageActionsRow(
-                        alignEnd = true,
-                        enabled = !env.streaming,
-                        onCopy = { env.copyMessage(message) },
-                        onRegenerate = { env.vm.regenerateFrom(message) },
-                        onMore = { env.showMessageActions(message) },
-                    )
-                    MessageUsageRow(message, alignEnd = true)
-                },
-            ) {
-                if (message.images.isNotEmpty()) {
-                    Row(
-                        horizontalArrangement = Arrangement.spacedBy(6.dp),
-                        modifier = Modifier.padding(bottom = 4.dp),
-                    ) {
-                        message.images.forEach { url ->
-                            MessageImage(url = url, onClick = env.showImage, openExternal = env.imageOpenExternal)
-                        }
-                    }
-                }
-                if (message.content.isNotBlank()) {
-                    ChatBubble(
-                        style = config.user,
-                        modifier = Modifier.combinedClickable(
-                            onClick = {},
-                            onLongClick = { env.showDetail(message) },
-                        ),
-                    ) {
-                        Text(message.content, style = MaterialTheme.typography.bodyMedium)
+        val slot = env.chatStyle.slotFor(message.role)
+        ChatMessageRow(
+            profile = slot.profile,
+            header = { MessageHeader(env, message) },
+            footer = {
+                MessageActionsRow(
+                    alignEnd = slot.alignEnd,
+                    enabled = !env.streaming,
+                    onCopy = { env.copyMessage(message) },
+                    onRegenerate = { env.vm.regenerateFrom(message) },
+                    onMore = { env.showMessageActions(message) },
+                    copyEnabled = message.images.isEmpty(),
+                )
+                MessageUsageRow(message, alignEnd = slot.alignEnd)
+            },
+        ) {
+            // 本轮该消息请求调用的工具（只有助手消息有数据，用户消息为空 → 自动不渲染）
+            toolNamesOf(message).takeIf { it.isNotEmpty() }?.let { names ->
+                Text(
+                    "调用工具：${names.joinToString("、")}",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(bottom = 4.dp),
+                )
+            }
+            // 图片行：用户（附图提问）与助手（生图）完全一致
+            if (message.images.isNotEmpty()) {
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    modifier = Modifier.padding(bottom = 4.dp),
+                ) {
+                    message.images.forEach { url ->
+                        MessageImage(url = url, onClick = env.showImage, openExternal = env.imageOpenExternal)
                     }
                 }
             }
-        } else {
-            val config = env.chatStyle
-            ChatMessageRow(
-                profile = config.aiProfile,
-                header = { AssistantMessageHeader(env, message) },
-                footer = {
-                    MessageActionsRow(
-                        alignEnd = false,
-                        enabled = !env.streaming,
-                        onCopy = { env.copyMessage(message) },
-                        onRegenerate = { env.vm.regenerateFrom(message) },
-                        onMore = { env.showMessageActions(message) },
-                        copyEnabled = message.images.isEmpty(),
-                    )
-                    MessageUsageRow(message, alignEnd = false)
-                },
-            ) {
-                // 本轮该助手消息请求调用的工具（结果在下一条「工具结果」气泡里）
-                toolNamesOf(message).takeIf { it.isNotEmpty() }?.let { names ->
-                    Text(
-                        "调用工具：${names.joinToString("、")}",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.padding(bottom = 4.dp),
-                    )
-                }
-                // 生图消息：助手消息也可携带图片（模型产出）
-                if (message.images.isNotEmpty()) {
-                    Row(
-                        horizontalArrangement = Arrangement.spacedBy(6.dp),
-                        modifier = Modifier.padding(bottom = 4.dp),
-                    ) {
-                        message.images.forEach { url ->
-                            MessageImage(url = url, onClick = env.showImage, openExternal = env.imageOpenExternal)
-                        }
+            if (message.content.isNotBlank() || !message.reasoning.isNullOrBlank()) {
+                ChatBubble(
+                    style = slot.style,
+                    modifier = Modifier.combinedClickable(
+                        onClick = {},
+                        onLongClick = { env.showDetail(message) },
+                    ),
+                ) {
+                    // 用户消息没有 reasoning（null）→ 只有助手侧渲染
+                    if (!message.reasoning.isNullOrBlank()) {
+                        ReasoningSection(message.reasoning, inProgress = false)
                     }
-                }
-                if (message.content.isNotBlank() || !message.reasoning.isNullOrBlank()) {
-                    ChatBubble(
-                        style = config.ai,
-                        modifier = Modifier.combinedClickable(
-                            onClick = {},
-                            onLongClick = { env.showDetail(message) },
-                        ),
-                    ) {
-                        if (!message.reasoning.isNullOrBlank()) {
-                            ReasoningSection(message.reasoning, inProgress = false)
-                        }
-                        MarkdownText(
-                            message.content,
-                            style = if (config.ai.monospace) {
-                                MaterialTheme.typography.bodyMedium.copy(fontFamily = MonoFont)
-                            } else {
-                                MaterialTheme.typography.bodyMedium
-                            },
-                        )
-                    }
+                    MarkdownText(message.content, style = bodyTextStyle(slot.style))
                 }
             }
         }
@@ -916,6 +883,7 @@ object ChatUiDefaults {
     @Composable
     fun ToolTurnItem(env: ChatUiEnv, turn: ChatItem.ToolTurn) {
         val config = env.chatStyle
+        val slot = config.slotFor(Role.ASSISTANT)
         val target = turn.answer ?: turn.steps.last().assistant
         val running = isTurnRunning(turn, env.streaming)
         val nodes = withLiveNodes(
@@ -925,8 +893,8 @@ object ChatUiDefaults {
         )
         var expanded by rememberSaveable(turn.key) { mutableStateOf(false) }
         ChatMessageRow(
-            profile = config.aiProfile,
-            header = { AssistantMessageHeader(env, target) },
+            profile = slot.profile,
+            header = { MessageHeader(env, target) },
             footer = {
                 MessageActionsRow(
                     alignEnd = false,
@@ -943,7 +911,7 @@ object ChatUiDefaults {
             },
         ) {
             ChatBubble(
-                style = config.ai,
+                style = slot.style,
                 modifier = Modifier.combinedClickable(
                     onClick = {},
                     onLongClick = { env.showDetail(target) },
@@ -1005,11 +973,12 @@ object ChatUiDefaults {
         }
 
         Column(Modifier.fillMaxWidth()) {
-            ChatMessageRow(profile = env.chatStyle.aiProfile) {
+            val slot = env.chatStyle.slotFor(Role.ASSISTANT)
+            ChatMessageRow(profile = slot.profile) {
                 StreamingBubbleContent(
                     reasoning = reasoning,
                     content = content,
-                    style = env.chatStyle.ai,
+                    style = slot.style,
                     generatingImage = generatingImage,
                 )
             }
@@ -1023,11 +992,7 @@ object ChatUiDefaults {
         style: BubbleStyle,
         generatingImage: Boolean = false,
     ) {
-        val bodyStyle = if (style.monospace) {
-            MaterialTheme.typography.bodyMedium.copy(fontFamily = MonoFont)
-        } else {
-            MaterialTheme.typography.bodyMedium
-        }
+        val bodyStyle = bodyTextStyle(style)
         Column(Modifier.fillMaxWidth()) {
             StreamingMessageHeader(generatingImage)
             ChatBubble(style = style) {

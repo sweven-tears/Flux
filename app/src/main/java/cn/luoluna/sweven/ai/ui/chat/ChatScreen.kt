@@ -71,6 +71,7 @@ import cn.luoluna.sweven.ai.ui.chat.plugin.ChatUiEnv
 import cn.luoluna.sweven.ai.ui.chat.plugin.ChatUiRegistry
 import cn.luoluna.sweven.ai.ui.chat.plugin.PluginPickerDialog
 import cn.luoluna.sweven.ai.ui.chat.plugin.activePlugin
+import cn.luoluna.sweven.ai.ui.chat.style.ChatStyleCodec
 import cn.luoluna.sweven.ai.ui.common.ConfirmDialog
 import cn.luoluna.sweven.ai.ui.common.InAppBrowserPayload
 import cn.luoluna.sweven.ai.ui.common.LocalInAppBrowser
@@ -234,6 +235,11 @@ fun ChatScreen(
     // 界面风格插件：选择持久化在 AppSettings，未注册（外部插件被移除）回退默认
     val chatPluginId by app.settings.chatPluginId.collectAsStateWithLifecycle()
     val plugin = ChatUiRegistry.resolve(chatPluginId ?: ChatUiRegistry.DEFAULT_ID)
+    // 自定义（JSON）皮肤：从设置解出样式表；非法/未设置 → null → 回落内置预设
+    val chatStyleJson by app.settings.chatStyleJson.collectAsStateWithLifecycle()
+    val styleOverride = remember(chatStyleJson, plugin.id) {
+        if (plugin.id == ChatUiRegistry.CUSTOM_ID) ChatStyleCodec.decode(chatStyleJson) else null
+    }
 
     // 用户资料（抽屉左上角头像/名字，消息气泡用户头像）
     val userName by app.settings.userName.collectAsStateWithLifecycle()
@@ -301,6 +307,7 @@ fun ChatScreen(
     } ?: -1
 
     val env = ChatUiEnv(
+        styleOverride = styleOverride,
         current = current,
         messages = messages,
         currentTarget = currentTarget,

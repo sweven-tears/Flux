@@ -89,6 +89,11 @@ interface ChatUiPlugin {
  * 插件不需要自己 collectAsState，也不应直接持有 ViewModel 之外的状态源。
  */
 class ChatUiEnv(
+    /**
+     * 样式表覆盖（自定义 JSON 皮肤解出的结果）。
+     * 非 null 时优先级最高（用户显式配置 > 插件自带样式 > 预设 > 默认值）。
+     */
+    val styleOverride: ChatStyleConfig?,
     // ---- 已收集状态 ----
     val current: ConversationEntity?,
     val messages: List<MessageEntity>,

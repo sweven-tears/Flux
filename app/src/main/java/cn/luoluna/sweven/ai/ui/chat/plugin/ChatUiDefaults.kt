@@ -1955,12 +1955,12 @@ internal var ChatUiEnv.activePlugin: ChatUiPlugin?
     }
 
 /**
- * 当前生效的样式表：插件自带 [ChatUiPlugin.chatStyle] 优先，其次按插件 id 映射的内置预设。
+ * 当前生效的样式表：自定义 JSON 覆盖 > 插件自带 [ChatUiPlugin.chatStyle] > 按插件 id 映射的内置预设。
  * 所有默认绘制路径都从这里取样式，**禁止**在绘制代码里硬编码颜色/圆角/内边距。
- * （自定义 JSON 皮肤会在这条链最前面插入 `styleOverride`，见 ChatScreen。）
  */
 internal val ChatUiEnv.chatStyle: ChatStyleConfig
-    get() = activePlugin?.chatStyle
+    get() = styleOverride
+        ?: activePlugin?.chatStyle
         ?: ChatStylePreset.of(activePlugin?.id).config()
 
 @Composable

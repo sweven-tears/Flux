@@ -533,15 +533,19 @@ object ChatUiDefaults {
     fun MessageList(env: ChatUiEnv, contentPadding: PaddingValues) {
         var showErrorDetail by remember { mutableStateOf(false) }
         Box(Modifier.fillMaxSize()) {
+            // 派生数据按"消息列表实例"记忆：Room 每次发射新列表实例，等价于一次内容变更；
+            // 放在 items 外面，避免每个列表项重组时都重算一遍（旧实现还会每条 tool 消息全表遍历找工具名）
+            val turns = remember(env.messages) { buildChatTurns(env.messages) }
+            val toolNames = remember(env.messages) { toolCallNamesOf(env.messages) }
             LazyColumn(
                 state = env.listState,
                 modifier = Modifier.fillMaxSize(),
                 contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
                 verticalArrangement = Arrangement.spacedBy(16.dp),
             ) {
-                items(buildChatTurns(env.messages), key = { it.key }) { item ->
+                items(turns, key = { it.key }) { item ->
                     when (item) {
-                        is ChatItem.Single -> env.renderMessageBubble(item.message)
+                        is ChatItem.Single -> env.renderMessageBubble(item.message, toolNames)
                         is ChatItem.ToolTurn -> env.renderToolTurn(item)
                     }
                 }
@@ -741,13 +745,12 @@ object ChatUiDefaults {
     }
 
     /**
-     * 从历史中解析该 tool_call_id 对应的工具名：用一次预计算表（[toolCallNamesOf]），
-     * 不再逐条全表遍历 + 字符串 contains。
-     * 找不到（旧数据/被删）返回 null，界面回落只显示「工具」。
+     * 工具名查表：由 [MessageList] 用 `remember(messages)` 算好传入（[toolCallNamesOf] 全表遍历一次），
+     * 不再每条工具消息各算一遍。找不到（旧数据/被删）返回 null，界面回落只显示「工具」。
      */
-    private fun toolNameFor(messages: List<MessageEntity>, toolCallId: String?): String? {
+    private fun toolNameFor(toolNames: Map<String, String>, toolCallId: String?): String? {
         if (toolCallId.isNullOrBlank()) return null
-        return toolCallNamesOf(messages)[toolCallId]
+        return toolNames[toolCallId]
     }
 
     /** 助手消息请求的工具名列表（插件单条渲染时的提示行；默认路径已由工具链折叠段呈现） */
@@ -756,10 +759,10 @@ object ChatUiDefaults {
 
     /** 工具结果气泡：紧凑卡片，显示工具名与结果摘要，点击展开全文（样式来自 config.tool） */
     @Composable
-    fun ToolMessageBubble(env: ChatUiEnv, message: MessageEntity) {
+    fun ToolMessageBubble(env: ChatUiEnv, message: MessageEntity, toolNames: Map<String, String>) {
         var expanded by remember { mutableStateOf(false) }
         val config = env.chatStyle
-        val name = toolNameFor(env.messages, message.toolCallId)
+        val name = toolNameFor(toolNames, message.toolCallId)
         ChatMessageRow(profile = config.aiProfile) {
             ChatBubble(
                 style = config.tool,
@@ -799,9 +802,9 @@ object ChatUiDefaults {
     }
 
     @Composable
-    fun MessageBubble(env: ChatUiEnv, message: MessageEntity) {
+    fun MessageBubble(env: ChatUiEnv, message: MessageEntity, toolNames: Map<String, String>) {
         if (message.role == Role.TOOL) {
-            ToolMessageBubble(env, message)
+            ToolMessageBubble(env, message, toolNames)
             return
         }
         if (message.role == Role.USER) {
@@ -1961,10 +1964,15 @@ internal val ChatUiEnv.chatStyle: ChatStyleConfig
         ?: ChatStylePreset.of(activePlugin?.id).config()
 
 @Composable
-internal fun ChatUiEnv.renderMessageBubble(message: MessageEntity) {
+internal fun ChatUiEnv.renderMessageBubble(message: MessageEntity, toolNames: Map<String, String>) {
     val plugin = activePlugin
     val slot = plugin?.messageBubble
-    if (slot != null) slot(this, message) else ChatUiDefaults.MessageBubble(this, message)
+    if (slot != null) {
+        // 插件接管时由插件自理（槽位签名保持不变，第三方皮肤不受影响）
+        slot(this, message)
+    } else {
+        ChatUiDefaults.MessageBubble(this, message, toolNames)
+    }
 }
 
 @Composable

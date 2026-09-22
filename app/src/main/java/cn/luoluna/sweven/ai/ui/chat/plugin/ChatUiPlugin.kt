@@ -108,6 +108,8 @@ class ChatUiEnv(
     val notice: String?,
     /** 正在执行的工具（如「正在调用 web_search…」）：流式气泡上方显示进行中的工具行 */
     val toolProgress: String?,
+    /** 正在执行的工具名（结构化实时进度）：执行轨迹在 running 时把它合成为 RUNNING 节点 */
+    val liveToolCalls: List<String>,
     val contextEstimateText: String?,
     /** 上下文用量级别：0 正常 / 1 接近(≥80%) / 2 超出(≥100%)，-1 表示无指示 */
     val contextEstimateLevel: Int,

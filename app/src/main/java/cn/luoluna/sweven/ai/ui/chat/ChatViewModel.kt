@@ -59,6 +59,7 @@ import cn.luoluna.sweven.ai.net.ChatJson
 import cn.luoluna.sweven.ai.net.ChatMessageInput
 import cn.luoluna.sweven.ai.tools.FluxTool
 import cn.luoluna.sweven.ai.tools.ToolRegistry
+import cn.luoluna.sweven.ai.tools.custom.CustomToolLoader
 import cn.luoluna.sweven.ai.net.buildMessagesJson
 import cn.luoluna.sweven.ai.net.estimateMessageTokens
 import cn.luoluna.sweven.ai.net.estimateTextTokens
@@ -229,14 +230,18 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
 
     /**
      * 当前会话生效的工具名集合：会话自身设置优先（"[]" = 明确不启用），
-     * 未设置（null）时回落到工具中心的全局默认，都没有则不启用。
+     * 未设置（null）时回落到「工具中心的全局默认（内置工具）+ 全部已启用的自定义工具」，都没有则不启用。
      */
     val selectedToolNames: StateFlow<Set<String>> =
-        combine(current, _pendingTools, settings.defaultToolIds) { conv, pending, defaults ->
+        combine(
+            current,
+            _pendingTools,
+            settings.defaultToolIds,
+            CustomToolLoader.enabledNames,
+        ) { conv, pending, defaults, customNames ->
             pending
                 ?: decodeToolNames(conv?.toolsJson)
-                ?: decodeToolNames(defaults)
-                ?: emptySet()
+                ?: ((decodeToolNames(defaults) ?: emptySet()) + customNames)
         }.stateIn(viewModelScope, SharingStarted.Eagerly, emptySet())
 
     /** 当前会话勾选且已注册的工具（发给模型的 tools 数组来源） */
@@ -371,6 +376,21 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
     /** 非阻断提示（如上下文被裁剪），用信息样式展示，用户可关闭 */
     private val _notice = MutableStateFlow<String?>(null)
     val notice: StateFlow<String?> = _notice
+
+    /**
+     * 正在执行的工具（流式期间的进度提示，如「正在调用 web_search…」）。
+     * 非空时流式气泡上方显示进行中的工具行；工具执行结束即置 null。
+     * 与 [notice] 分工：notice 只留「轮数上限 / 上下文裁剪」这类需要用户读的提示。
+     */
+    private val _toolProgress = MutableStateFlow<String?>(null)
+    val toolProgress: StateFlow<String?> = _toolProgress
+
+    /**
+     * 正在执行的工具名（结构化的实时进度）：聊天页把它合成执行轨迹里的 RUNNING 节点。
+     * [_toolProgress] 保留为文案形态，兼容只读它的插件。
+     */
+    private val _liveToolCalls = MutableStateFlow<List<String>>(emptyList())
+    val liveToolCalls: StateFlow<List<String>> = _liveToolCalls
 
     fun dismissNotice() {
         _notice.value = null
@@ -805,7 +825,8 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
      * 单模型直连：支持本地工具的多轮循环。
      * 每轮请求带上当前勾选的 tools 与既有工具结果历史；模型以 tool_calls 收尾时，
      * 落库本轮助手消息（含 toolCallsJson）→ 执行工具 → 落库 role=tool 结果 → 发起下一轮，
-     * 直到模型正常输出文本或达到轮数上限。未勾选工具时行为与改造前完全一致。
+     * 直到模型正常输出文本或达到用户配置的轮数上限（默认 0 = 不限）。
+     * 未勾选工具时行为与改造前完全一致。
      */
     private suspend fun streamSingle(convId: Long, picker: PickerModel) {
         // 选择器数据是发送时刻的快照，落库前以最新状态复核厂商可用性
@@ -831,6 +852,8 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         sendJob = viewModelScope.launch {
             var failed: ChatError? = null
             var round = 0
+            // 每次发送读取一次：设置里改完立即对新一次的提问生效（0 = 不限）
+            val maxRounds = settings.toolMaxRounds.value
             try {
                 while (true) {
                     val conversation = conversationDao.byId(convId)
@@ -845,13 +868,17 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                     val calls = collectRound(provider, key.key, extraHeaders, built.body, publisher)
                     if (calls.isEmpty()) break
                     // 本轮以工具调用收尾：落库助手消息 + 执行工具 + 落库结果，再进入下一轮
+                    _liveToolCalls.value = calls.map { it.name }
+                    _toolProgress.value = "正在调用 ${calls.joinToString("、") { it.name }}…"
                     persistToolRound(convId, publisher, calls)
-                    if (round + 1 >= MAX_TOOL_ROUNDS) {
-                        _notice.value = "工具调用已达 $MAX_TOOL_ROUNDS 轮上限，本次不再继续调用"
+                    _liveToolCalls.value = emptyList()
+                    _toolProgress.value = null
+                    if (maxRounds > 0 && round + 1 >= maxRounds) {
+                        _notice.value = "工具调用已达 $maxRounds 轮上限，本次不再继续调用" +
+                            "（可在「设置 → 工具调用」调整，0 为不限）"
                         break
                     }
                     round++
-                    _notice.value = "正在执行工具：${calls.joinToString("、") { it.name }}…"
                     publisher = StreamPublisher()
                     _streamingText.value = ""
                     _streamingReasoning.value = ""
@@ -1329,6 +1356,8 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
     private suspend fun finishStreaming(convId: Long, publisher: StreamPublisher, failed: ChatError?) {
         publisher.publish(force = true)
         _streaming.value = false
+        _liveToolCalls.value = emptyList()
+        _toolProgress.value = null
         onStreamEndedForNotify()
         val finalContent = _streamingText.value
         val finalReasoning = _streamingReasoning.value.trim().takeIf { it.isNotEmpty() }
@@ -1362,11 +1391,29 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         sendJob?.cancel()
         _streaming.value = false
         _generatingImage.value = false
+        _liveToolCalls.value = emptyList()
+        _toolProgress.value = null
         _streamingText.value = ""
         _streamingReasoning.value = ""
         activeStreamModel = null
         takeStreamStats()
         onStreamEndedForNotify()
+    }
+
+    /**
+     * 重新生成整个工具轮次：从本轮第一条消息起删除（含工具调用与 role=tool 结果）。
+     * 与 [regenerateFrom] 的区别：只删答复会留下无主的工具结果，下一轮请求会带着
+     * 「没有对应 assistant.tool_calls 的 tool 消息」，协议上不合法。
+     */
+    fun regenerateToolTurn(conversationId: Long, firstMessageId: Long) {
+        if (conversationId != currentId.value) return
+        viewModelScope.launch {
+            cancelStreamingDiscard()
+            messageDao.deleteFromInclusive(conversationId, firstMessageId)
+            conversationDao.touch(conversationId, System.currentTimeMillis())
+            val target = currentTarget.value ?: return@launch
+            startStreaming(conversationId, target)
+        }
     }
 
     /**
@@ -1666,9 +1713,6 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
 
         /** 「再点一次停止」居中提示的显示时长 */
         private const val STOP_HINT_VISIBLE_MS = 1800L
-
-        /** 工具调用最大轮数：防模型在工具循环里打转（每轮含一次工具执行与一次上游请求） */
-        private const val MAX_TOOL_ROUNDS = 8
 
         /** 单个工具执行超时（毫秒）：超时按错误结果回传，不阻塞整轮 */
         private const val TOOL_EXECUTION_TIMEOUT_MS = 30_000L

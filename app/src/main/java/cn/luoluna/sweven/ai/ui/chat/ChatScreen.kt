@@ -147,6 +147,8 @@ fun ChatScreen(
     val streaming by vm.streaming.collectAsStateWithLifecycle()
     val error by vm.error.collectAsStateWithLifecycle()
     val notice by vm.notice.collectAsStateWithLifecycle()
+    val toolProgress by vm.toolProgress.collectAsStateWithLifecycle()
+    val liveToolCalls by vm.liveToolCalls.collectAsStateWithLifecycle()
     val stopHint by vm.stopHint.collectAsStateWithLifecycle()
     val activeVideoJobs by vm.activeVideoJobs.collectAsStateWithLifecycle()
     val contextEstimate by vm.contextEstimate.collectAsStateWithLifecycle()
@@ -302,6 +304,8 @@ fun ChatScreen(
         streaming = streaming,
         error = error,
         notice = notice,
+        toolProgress = toolProgress,
+        liveToolCalls = liveToolCalls,
         contextEstimateText = contextEstimateText,
         contextEstimateLevel = contextEstimateLevel,
         drawer = drawer,

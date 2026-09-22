@@ -92,6 +92,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -138,6 +139,10 @@ import cn.luoluna.sweven.ai.ui.chat.style.ChatBubble
 import cn.luoluna.sweven.ai.ui.chat.style.ChatMessageRow
 import cn.luoluna.sweven.ai.ui.chat.style.ChatStyleConfig
 import cn.luoluna.sweven.ai.ui.chat.style.ChatStylePreset
+import cn.luoluna.sweven.ai.ui.chat.timeline.ExecutionTimeline
+import cn.luoluna.sweven.ai.ui.chat.timeline.buildExecutionNodes
+import cn.luoluna.sweven.ai.ui.chat.timeline.isTurnRunning
+import cn.luoluna.sweven.ai.ui.chat.timeline.withLiveNodes
 import cn.luoluna.sweven.ai.ui.common.ConfirmDialog
 import cn.luoluna.sweven.ai.ui.common.MonoFont
 import cn.luoluna.sweven.ai.ui.common.openImageExternally
@@ -890,71 +895,79 @@ object ChatUiDefaults {
     }
 
     /**
-     * 逻辑轮次项：一个折叠的工具链 + 该轮的最终答复，共用一个头像与操作行。
-     * 一次提问内的多轮工具调用因此只占一个「回复」，与思考链的呈现方式一致。
-     * 没有最终答复（轮数上限/中断/报错）时只显示折叠段与提示，内容不丢。
+     * 逻辑轮次项：一个 AI 执行轨迹（多次工具调用折叠成时间线）+ 该轮最终答复，
+     * 共用一个头像与操作行。展开状态用 rememberSaveable：LazyColumn 为带 key 的 item 提供
+     * SaveableStateHolder，滚出屏幕再回来不丢展开状态，也不会与其他轮次串台。
+     * 没有最终答复（轮数上限/中断/报错）时只显示轨迹与提示，内容不丢。
      */
     @Composable
     fun ToolTurnItem(env: ChatUiEnv, turn: ChatItem.ToolTurn) {
+        val config = env.chatStyle
         val target = turn.answer ?: turn.steps.last().assistant
-        Column(Modifier.fillMaxWidth()) {
-            AssistantMessageHeader(env, target)
-            Column(Modifier.widthIn(max = 320.dp)) {
-                ToolRunSection(steps = turn.steps, onShowDetail = env.showDetail)
+        val running = isTurnRunning(turn, env.streaming)
+        val nodes = withLiveNodes(
+            nodes = buildExecutionNodes(turn),
+            liveToolCalls = env.liveToolCalls,
+            running = running,
+        )
+        var expanded by rememberSaveable(turn.key) { mutableStateOf(false) }
+        ChatMessageRow(
+            profile = config.aiProfile,
+            header = { AssistantMessageHeader(env, target) },
+            footer = {
+                MessageActionsRow(
+                    alignEnd = false,
+                    enabled = !env.streaming,
+                    onCopy = { env.copyMessage(target) },
+                    // 整轮重生成：从本轮第一条消息起删除（含工具调用与结果），避免留下孤立 tool 消息
+                    onRegenerate = {
+                        env.vm.regenerateToolTurn(target.conversationId, turn.steps.first().assistant.id)
+                    },
+                    onMore = { env.showMessageActions(target) },
+                    copyEnabled = target.images.isEmpty(),
+                )
+                MessageUsageRow(target, alignEnd = false)
+            },
+        ) {
+            ChatBubble(
+                style = config.ai,
+                modifier = Modifier.combinedClickable(
+                    onClick = {},
+                    onLongClick = { env.showDetail(target) },
+                ),
+            ) {
+                ExecutionTimeline(
+                    nodes = nodes,
+                    turnRunning = running,
+                    expanded = expanded,
+                    onToggleExpanded = { expanded = !expanded },
+                    config = config,
+                    onShowDetail = env.showDetail,
+                )
                 val answer = turn.answer
-                if (answer == null) {
+                if (answer == null && !running) {
                     Text(
                         "工具调用已结束，本轮未产生答复（可用下方「重新生成」重试）",
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.padding(top = 2.dp),
                     )
-                } else if (answer.content.isNotBlank() || !answer.reasoning.isNullOrBlank() ||
-                    answer.images.isNotEmpty()
-                ) {
-                    Surface(
-                        color = MaterialTheme.colorScheme.surfaceVariant,
-                        shape = RoundedCornerShape(4.dp, 16.dp, 16.dp, 16.dp),
-                        modifier = Modifier.combinedClickable(
-                            onClick = {},
-                            onLongClick = { env.showDetail(answer) },
-                        ),
+                }
+                if (answer != null && answer.images.isNotEmpty()) {
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        modifier = Modifier.padding(top = 4.dp),
                     ) {
-                        Column(Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
-                            if (answer.images.isNotEmpty()) {
-                                Row(
-                                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                                    modifier = Modifier.padding(bottom = 4.dp),
-                                ) {
-                                    answer.images.forEach { url ->
-                                        MessageImage(
-                                            url = url,
-                                            onClick = env.showImage,
-                                            openExternal = env.imageOpenExternal,
-                                        )
-                                    }
-                                }
-                            }
-                            if (!answer.reasoning.isNullOrBlank()) {
-                                ReasoningSection(answer.reasoning, inProgress = false)
-                            }
-                            MarkdownText(answer.content)
+                        answer.images.forEach { url ->
+                            MessageImage(
+                                url = url,
+                                onClick = env.showImage,
+                                openExternal = env.imageOpenExternal,
+                            )
                         }
                     }
                 }
             }
-            MessageActionsRow(
-                alignEnd = false,
-                enabled = !env.streaming,
-                onCopy = { env.copyMessage(target) },
-                // 整轮重生成：从本轮第一条消息起删除（含工具调用与结果），避免留下孤立 tool 消息
-                onRegenerate = {
-                    env.vm.regenerateToolTurn(target.conversationId, turn.steps.first().assistant.id)
-                },
-                onMore = { env.showMessageActions(target) },
-                copyEnabled = target.images.isEmpty(),
-            )
-            MessageUsageRow(target, alignEnd = false)
         }
     }
 

@@ -69,6 +69,7 @@ import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledIconButton
+import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.FilledTonalIconButton
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -589,6 +590,17 @@ object ChatUiDefaults {
                     .align(Alignment.CenterEnd)
                     .padding(end = 6.dp),
             )
+            // 用户上翻看历史时来新内容：不抢滚动，改为提示一条可点的浮标
+            if (!env.stickToBottom && env.streaming) {
+                FilledTonalButton(
+                    onClick = env.onJumpToLatest,
+                    modifier = Modifier
+                        .align(Alignment.BottomCenter)
+                        .padding(bottom = 12.dp),
+                ) {
+                    Text("有新进度 ↓")
+                }
+            }
         }
         if (showErrorDetail) {
             env.error?.let { err ->

@@ -41,6 +41,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -267,11 +268,19 @@ fun ChatScreen(
     val listState = rememberLazyListState()
     val extraItems = (if (streaming) 1 else 0) + (if (error != null) 1 else 0) +
         (if (notice != null) 1 else 0)
-    // 仅在新消息/错误/提示出现时滚动一次；流式内容的跟随滚动在流式气泡内部处理，
-    // 避免流式文本每次变化都触发整个页面重组
+    // "是否贴底"只在用户自己滚动时采样：程序滚动（自动跟随）结束时 canScrollForward=false，
+    // 会自动落回"贴底"。这样"用户上翻看历史"与"系统跟随输出"互不打架。
+    var stickToBottom by remember { mutableStateOf(true) }
+    LaunchedEffect(listState) {
+        snapshotFlow { listState.isScrollInProgress to listState.canScrollForward }
+            .collect { (scrolling, canScrollForward) ->
+                if (scrolling) stickToBottom = !canScrollForward
+            }
+    }
+    // 新消息/错误/提示出现：只在贴底时跟随（平滑滚动，不瞬跳）；用户上翻时绝不抢滚动
     LaunchedEffect(messages.size, streaming, error, notice) {
         val count = messages.size + extraItems
-        if (count > 0) listState.scrollToItem(index = count - 1)
+        if (count > 0 && stickToBottom) listState.animateScrollToItem(index = count - 1)
     }
 
     // 上下文用量指示文本与级别（0 正常 / 1 接近 / 2 超出）
@@ -332,6 +341,13 @@ fun ChatScreen(
         drawerState = drawerState,
         scope = scope,
         listState = listState,
+        stickToBottom = stickToBottom,
+        onJumpToLatest = {
+            stickToBottom = true
+            scope.launch {
+                listState.animateScrollToItem((messages.size + extraItems - 1).coerceAtLeast(0))
+            }
+        },
         pickImages = {
             pickImages.launch(
                 PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)

@@ -148,6 +148,10 @@ class ChatUiEnv(
     val drawerState: DrawerState,
     val scope: CoroutineScope,
     val listState: LazyListState,
+    /** 用户当前是否贴着底部（false = 正在往上翻历史，此时禁止自动滚动） */
+    val stickToBottom: Boolean,
+    /** 跳到最新内容并把"贴底"状态复位（「有新进度 ↓」按钮用） */
+    val onJumpToLatest: () -> Unit,
 
     // ---- 输入区动作 ----
     val pickImages: () -> Unit,

@@ -55,6 +55,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import cn.luoluna.sweven.ai.data.AppSettings
 import cn.luoluna.sweven.ai.data.db.AuthDeviceEntity
 import cn.luoluna.sweven.ai.data.repo.SmartAi
+import cn.luoluna.sweven.ai.ui.common.InfoIconWithPopup
 import cn.luoluna.sweven.ai.ui.common.MonoFont
 import cn.luoluna.sweven.ai.ui.common.SectionCard
 import java.text.SimpleDateFormat
@@ -146,19 +147,28 @@ fun LanScreen(
                 .verticalScroll(rememberScrollState()),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            // 服务开关
-            SectionCard(title = "聚合路由服务") {
+            // 服务开关：标题项只留标题与控件，详情说明收进问号弹层（InfoIconWithPopup 通用组件）
+            SectionCard(
+                title = "聚合路由服务",
+                actions = {
+                    InfoIconWithPopup(
+                        title = "聚合路由服务说明",
+                        text = buildString {
+                            append("· 聚合路由服务：开启后，同一 Wi-Fi 下的设备可用 OpenAI 兼容接口（/v1）调用本机聚合模型；关闭即停止服务。\n")
+                            append("· 服务端口：接口监听端口（默认 ${AppSettings.DEFAULT_PORT}，可选 1024-65535），修改后服务自动重启生效。\n")
+                            append("· mDNS 主机名：支持 mDNS 的设备（iOS/macOS/Win10+）可直接用主机名访问，改后立即生效；默认 ${AppSettings.DEFAULT_LAN_HOST}.local。\n")
+                            append("· 开放 ${SmartAi.MODEL_NAME} 聚合路由：客户端请求 model=${SmartAi.MODEL_NAME} 时，按「厂商顺序 × 模型顺序」聚合全部启用模型，自动挑出适合本次请求的候选，失败/超时自动切换。\n")
+                            append("· 开放所有模型：开启后客户端可直接按「厂商别名/模型名」自由选择全部模型；关闭则只暴露路由分组与 ${SmartAi.MODEL_NAME} 聚合路由。")
+                        },
+                    )
+                },
+            ) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Column(Modifier.weight(1f)) {
                         Text(
                             if (running) "运行中（端口 $lanPort）" else "已停止",
                             style = MaterialTheme.typography.bodyMedium,
                             color = if (running) Color(0xFF16A34A) else MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                        Text(
-                            "开启后局域网内设备可通过 OpenAI 兼容接口使用聚合模型",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     }
                     Switch(checked = lanEnabled, onCheckedChange = { toggle(it) })
@@ -206,40 +216,21 @@ fun LanScreen(
                     TextButton(onClick = { portDialog = true }) { Text("$lanPort  修改") }
                 }
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Column(Modifier.weight(1f)) {
-                        Text("mDNS 主机名", style = MaterialTheme.typography.bodyMedium)
-                        Text(
-                            "支持 mDNS 的设备可直接用主机名访问，改后立即生效",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
+                    Text("mDNS 主机名", style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
                     TextButton(onClick = { hostnameDialog = true }) { Text("$mdnsName  修改") }
                 }
                 // flux-auto 聚合路由对局域网客户端的开放开关（即时生效）
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Column(Modifier.weight(1f)) {
-                        Text("开放 ${SmartAi.MODEL_NAME} 聚合路由", style = MaterialTheme.typography.bodyMedium)
-                        Text(
-                            "客户端请求 model=${SmartAi.MODEL_NAME} 时，按「厂商顺序 × 模型顺序」聚合全部启用模型，" +
-                                "自动挑出适合本次请求的候选并在失败/超时后自动切换",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
+                    Text(
+                        "开放 ${SmartAi.MODEL_NAME} 聚合路由",
+                        style = MaterialTheme.typography.bodyMedium,
+                        modifier = Modifier.weight(1f),
+                    )
                     Switch(checked = smartAiEnabled, onCheckedChange = { vm.setSmartAiEnabled(it) })
                 }
                 // 开放所有模型：客户端可选任意单个模型；关闭后只暴露分组路由与 flux-auto（即时生效）
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Column(Modifier.weight(1f)) {
-                        Text("开放所有模型", style = MaterialTheme.typography.bodyMedium)
-                        Text(
-                            "开启后客户端可直接按「厂商别名/模型名」自由选择全部模型；" +
-                                "关闭则只暴露路由分组与 ${SmartAi.MODEL_NAME} 聚合路由",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
+                    Text("开放所有模型", style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
                     Switch(checked = openAllModels, onCheckedChange = { vm.setOpenAllModels(it) })
                 }
             }

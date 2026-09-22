@@ -12,22 +12,31 @@ import cn.luoluna.sweven.ai.data.db.PresetEntity
 import cn.luoluna.sweven.ai.data.db.SmartRouteGroupEntity
 import cn.luoluna.sweven.ai.data.repo.SmartAggregateCapability
 import cn.luoluna.sweven.ai.ui.chat.ChatError
+import cn.luoluna.sweven.ai.ui.chat.ChatItem
 import cn.luoluna.sweven.ai.ui.chat.ChatTarget
 import cn.luoluna.sweven.ai.ui.chat.ChatViewModel
 import cn.luoluna.sweven.ai.ui.chat.ConversationHit
 import cn.luoluna.sweven.ai.ui.chat.DrawerState as ChatDrawerData
 import cn.luoluna.sweven.ai.ui.chat.PickerModel
+import cn.luoluna.sweven.ai.ui.chat.style.ChatStyleConfig
 import kotlinx.coroutines.CoroutineScope
 
 /**
- * 聊天页 UI 插件：8 个槽位均为可空 composable，null 表示回退到默认实现。
- * 皮肤类插件只覆写个别槽位（如只换 messageBubble）即可，其余区域保持默认。
+ * 聊天页 UI 插件：9 个槽位均为可空 composable，null 表示回退到默认实现。
+ * **纯换样式请用 [chatStyle]**（一份 [ChatStyleConfig] 即可换脸，三种内置风格与 JSON 自定义皮肤都是这样做的）；
+ * 覆写 [messageBubble] / [toolTurn] / [streamingBubble] 表示"整段接管渲染"，需自行处理样式与滚动责任。
  *
  * 职责边界：状态与发送/停止/流式逻辑全部在宿主（ChatScreen + ChatViewModel），
  * 插件只负责绘制；长按详情、图片预览、模型选择等经 [ChatUiEnv] 回调走宿主对话框，
  * 任何插件都不会丢功能。
  */
 interface ChatUiPlugin {
+    /**
+     * 视觉样式表（皮肤的主要挂载点）：换肤 = 换这一份 [ChatStyleConfig]，不重写任何绘制。
+     * null 时按插件 id 映射内置预设（见 `ChatUiEnv.chatStyle`）。
+     */
+    val chatStyle: ChatStyleConfig? get() = null
+
     /** 唯一 id，用于持久化选择 */
     val id: String
 
@@ -56,6 +65,14 @@ interface ChatUiPlugin {
 
     /** 单条消息气泡（用户/助手两态） */
     val messageBubble: (@Composable (ChatUiEnv, MessageEntity) -> Unit)? get() = null
+
+    /**
+     * 一次提问内的工具调用链 + 该轮的最终答复（[ChatItem.ToolTurn]）。
+     * 带工具调用的回复走的是这条路径，而不是 [messageBubble]——只覆写 [messageBubble] 的
+     * 皮肤插件必须同时覆写本槽位，否则这类回复会回落成默认气泡风格，界面风格看起来「失效」。
+     * 默认实现见 [ChatUiDefaults.ToolTurnItem]。
+     */
+    val toolTurn: (@Composable (ChatUiEnv, ChatItem.ToolTurn) -> Unit)? get() = null
 
     /** 流式输出气泡（思考+内容+光标） */
     val streamingBubble: (@Composable (ChatUiEnv) -> Unit)? get() = null
@@ -89,6 +106,8 @@ class ChatUiEnv(
     val streaming: Boolean,
     val error: ChatError?,
     val notice: String?,
+    /** 正在执行的工具（如「正在调用 web_search…」）：流式气泡上方显示进行中的工具行 */
+    val toolProgress: String?,
     val contextEstimateText: String?,
     /** 上下文用量级别：0 正常 / 1 接近(≥80%) / 2 超出(≥100%)，-1 表示无指示 */
     val contextEstimateLevel: Int,

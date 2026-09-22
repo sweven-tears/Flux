@@ -119,14 +119,24 @@ import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import cn.luoluna.sweven.ai.ui.chat.ChatError
+import cn.luoluna.sweven.ai.ui.chat.ChatItem
 import cn.luoluna.sweven.ai.ui.chat.ConversationHit
 import cn.luoluna.sweven.ai.ui.chat.ErrorDetailSheet
 import cn.luoluna.sweven.ai.ui.chat.MarkdownText
 import cn.luoluna.sweven.ai.ui.chat.ReasoningSection
+import cn.luoluna.sweven.ai.ui.chat.ToolProgressRow
+import cn.luoluna.sweven.ai.ui.chat.ToolRunSection
+import cn.luoluna.sweven.ai.ui.chat.buildChatTurns
+import cn.luoluna.sweven.ai.ui.chat.parseToolCalls
+import cn.luoluna.sweven.ai.ui.chat.toolCallNamesOf
 import cn.luoluna.sweven.ai.ui.chat.produceUriBitmap
 import cn.luoluna.sweven.ai.ui.chat.rememberDataUrlBitmap
 import cn.luoluna.sweven.ai.ui.chat.rememberVideoFrame
 import cn.luoluna.sweven.ai.ui.chat.FluxVideoPlayer
+import cn.luoluna.sweven.ai.ui.chat.style.ChatBubble
+import cn.luoluna.sweven.ai.ui.chat.style.ChatMessageRow
+import cn.luoluna.sweven.ai.ui.chat.style.ChatStyleConfig
+import cn.luoluna.sweven.ai.ui.chat.style.ChatStylePreset
 import cn.luoluna.sweven.ai.ui.common.ConfirmDialog
 import cn.luoluna.sweven.ai.ui.common.MonoFont
 import cn.luoluna.sweven.ai.ui.common.openImageExternally
@@ -524,8 +534,11 @@ object ChatUiDefaults {
                 contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
                 verticalArrangement = Arrangement.spacedBy(16.dp),
             ) {
-                items(env.messages, key = { it.id }) { msg ->
-                    env.renderMessageBubble(msg)
+                items(buildChatTurns(env.messages), key = { it.key }) { item ->
+                    when (item) {
+                        is ChatItem.Single -> env.renderMessageBubble(item.message)
+                        is ChatItem.ToolTurn -> env.renderToolTurn(item)
+                    }
                 }
                 if (env.streaming) {
                     item(key = "streaming") {
@@ -712,31 +725,18 @@ object ChatUiDefaults {
     }
 
     /**
-     * 从历史中解析该 tool_call_id 对应的工具名：定位携带该 id 的助手消息（toolCallsJson）后取 function.name。
+     * 从历史中解析该 tool_call_id 对应的工具名：用一次预计算表（[toolCallNamesOf]），
+     * 不再逐条全表遍历 + 字符串 contains。
      * 找不到（旧数据/被删）返回 null，界面回落只显示「工具」。
      */
     private fun toolNameFor(messages: List<MessageEntity>, toolCallId: String?): String? {
         if (toolCallId.isNullOrBlank()) return null
-        val raw = messages.lastOrNull { it.toolCallsJson?.contains(toolCallId) == true }?.toolCallsJson
-            ?: return null
-        return runCatching {
-            (ChatJson.json.parseToJsonElement(raw) as? JsonArray)?.firstNotNullOfOrNull { el ->
-                val obj = el as? JsonObject ?: return@firstNotNullOfOrNull null
-                if ((obj["id"] as? JsonPrimitive)?.content != toolCallId) return@firstNotNullOfOrNull null
-                ((obj["function"] as? JsonObject)?.get("name") as? JsonPrimitive)?.content
-            }
-        }.getOrNull()
+        return toolCallNamesOf(messages)[toolCallId]
     }
 
-    /** 助手消息请求的工具名列表（气泡上方提示「调用工具：xxx」） */
-    private fun toolNamesOf(message: MessageEntity): List<String> {
-        val raw = message.toolCallsJson?.takeIf { it.isNotBlank() } ?: return emptyList()
-        return runCatching {
-            (ChatJson.json.parseToJsonElement(raw) as? JsonArray)?.mapNotNull { el ->
-                (((el as? JsonObject)?.get("function") as? JsonObject)?.get("name") as? JsonPrimitive)?.content
-            }.orEmpty()
-        }.getOrDefault(emptyList())
-    }
+    /** 助手消息请求的工具名列表（插件单条渲染时的提示行；默认路径已由工具链折叠段呈现） */
+    private fun toolNamesOf(message: MessageEntity): List<String> =
+        parseToolCalls(message.toolCallsJson).map { it.name }
 
     /** 工具结果气泡：紧凑卡片，显示工具名与结果摘要，点击展开全文 */
     @Composable
@@ -797,17 +797,25 @@ object ChatUiDefaults {
             return
         }
         if (message.role == Role.USER) {
-            Column(
-                horizontalAlignment = Alignment.End,
-                modifier = Modifier.fillMaxWidth(),
+            val config = env.chatStyle
+            ChatMessageRow(
+                profile = config.userProfile,
+                header = { UserMessageHeader(env) },
+                footer = {
+                    MessageActionsRow(
+                        alignEnd = true,
+                        enabled = !env.streaming,
+                        onCopy = { env.copyMessage(message) },
+                        onRegenerate = { env.vm.regenerateFrom(message) },
+                        onMore = { env.showMessageActions(message) },
+                    )
+                    MessageUsageRow(message, alignEnd = true)
+                },
             ) {
-                UserMessageHeader(env)
                 if (message.images.isNotEmpty()) {
                     Row(
                         horizontalArrangement = Arrangement.spacedBy(6.dp),
-                        modifier = Modifier
-                            .widthIn(max = 300.dp)
-                            .padding(bottom = 4.dp),
+                        modifier = Modifier.padding(bottom = 4.dp),
                     ) {
                         message.images.forEach { url ->
                             MessageImage(url = url, onClick = env.showImage, openExternal = env.imageOpenExternal)
@@ -815,33 +823,34 @@ object ChatUiDefaults {
                     }
                 }
                 if (message.content.isNotBlank()) {
-                    Surface(
-                        color = MaterialTheme.colorScheme.primary,
-                        shape = RoundedCornerShape(16.dp, 4.dp, 16.dp, 16.dp),
-                        modifier = Modifier
-                            .widthIn(max = 300.dp)
-                            .combinedClickable(onClick = {}, onLongClick = { env.showDetail(message) }),
+                    ChatBubble(
+                        style = config.user,
+                        modifier = Modifier.combinedClickable(
+                            onClick = {},
+                            onLongClick = { env.showDetail(message) },
+                        ),
                     ) {
-                        Text(
-                            message.content,
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onPrimary,
-                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
-                        )
+                        Text(message.content, style = MaterialTheme.typography.bodyMedium)
                     }
                 }
-                MessageActionsRow(
-                    alignEnd = true,
-                    enabled = !env.streaming,
-                    onCopy = { env.copyMessage(message) },
-                    onRegenerate = { env.vm.regenerateFrom(message) },
-                    onMore = { env.showMessageActions(message) },
-                )
-                MessageUsageRow(message, alignEnd = true)
             }
         } else {
-            Column(Modifier.fillMaxWidth()) {
-                AssistantMessageHeader(env, message)
+            val config = env.chatStyle
+            ChatMessageRow(
+                profile = config.aiProfile,
+                header = { AssistantMessageHeader(env, message) },
+                footer = {
+                    MessageActionsRow(
+                        alignEnd = false,
+                        enabled = !env.streaming,
+                        onCopy = { env.copyMessage(message) },
+                        onRegenerate = { env.vm.regenerateFrom(message) },
+                        onMore = { env.showMessageActions(message) },
+                        copyEnabled = message.images.isEmpty(),
+                    )
+                    MessageUsageRow(message, alignEnd = false)
+                },
+            ) {
                 // 本轮该助手消息请求调用的工具（结果在下一条「工具结果」气泡里）
                 toolNamesOf(message).takeIf { it.isNotEmpty() }?.let { names ->
                     Text(
@@ -851,46 +860,108 @@ object ChatUiDefaults {
                         modifier = Modifier.padding(bottom = 4.dp),
                     )
                 }
-                Column(Modifier.widthIn(max = 320.dp)) {
-                    // 生图消息：助手消息也可携带图片（模型产出）
-                    if (message.images.isNotEmpty()) {
-                        Row(
-                            horizontalArrangement = Arrangement.spacedBy(6.dp),
-                            modifier = Modifier.padding(bottom = 4.dp),
-                        ) {
-                            message.images.forEach { url ->
-                                MessageImage(url = url, onClick = env.showImage, openExternal = env.imageOpenExternal)
-                            }
-                        }
-                    }
-                    if (message.content.isNotBlank() || !message.reasoning.isNullOrBlank()) {
-                        Surface(
-                            color = MaterialTheme.colorScheme.surfaceVariant,
-                            shape = RoundedCornerShape(4.dp, 16.dp, 16.dp, 16.dp),
-                            modifier = Modifier.combinedClickable(
-                                onClick = {},
-                                onLongClick = { env.showDetail(message) },
-                            ),
-                        ) {
-                            Column(Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
-                                if (!message.reasoning.isNullOrBlank()) {
-                                    ReasoningSection(message.reasoning, inProgress = false)
-                                }
-                                MarkdownText(message.content)
-                            }
+                // 生图消息：助手消息也可携带图片（模型产出）
+                if (message.images.isNotEmpty()) {
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        modifier = Modifier.padding(bottom = 4.dp),
+                    ) {
+                        message.images.forEach { url ->
+                            MessageImage(url = url, onClick = env.showImage, openExternal = env.imageOpenExternal)
                         }
                     }
                 }
-                MessageActionsRow(
-                    alignEnd = false,
-                    enabled = !env.streaming,
-                    onCopy = { env.copyMessage(message) },
-                    onRegenerate = { env.vm.regenerateFrom(message) },
-                    onMore = { env.showMessageActions(message) },
-                    copyEnabled = message.images.isEmpty(),
-                )
-                MessageUsageRow(message, alignEnd = false)
+                if (message.content.isNotBlank() || !message.reasoning.isNullOrBlank()) {
+                    ChatBubble(
+                        style = config.ai,
+                        modifier = Modifier.combinedClickable(
+                            onClick = {},
+                            onLongClick = { env.showDetail(message) },
+                        ),
+                    ) {
+                        if (!message.reasoning.isNullOrBlank()) {
+                            ReasoningSection(message.reasoning, inProgress = false)
+                        }
+                        MarkdownText(
+                            message.content,
+                            style = if (config.ai.monospace) {
+                                MaterialTheme.typography.bodyMedium.copy(fontFamily = MonoFont)
+                            } else {
+                                MaterialTheme.typography.bodyMedium
+                            },
+                        )
+                    }
+                }
             }
+        }
+    }
+
+    /**
+     * 逻辑轮次项：一个折叠的工具链 + 该轮的最终答复，共用一个头像与操作行。
+     * 一次提问内的多轮工具调用因此只占一个「回复」，与思考链的呈现方式一致。
+     * 没有最终答复（轮数上限/中断/报错）时只显示折叠段与提示，内容不丢。
+     */
+    @Composable
+    fun ToolTurnItem(env: ChatUiEnv, turn: ChatItem.ToolTurn) {
+        val target = turn.answer ?: turn.steps.last().assistant
+        Column(Modifier.fillMaxWidth()) {
+            AssistantMessageHeader(env, target)
+            Column(Modifier.widthIn(max = 320.dp)) {
+                ToolRunSection(steps = turn.steps, onShowDetail = env.showDetail)
+                val answer = turn.answer
+                if (answer == null) {
+                    Text(
+                        "工具调用已结束，本轮未产生答复（可用下方「重新生成」重试）",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(top = 2.dp),
+                    )
+                } else if (answer.content.isNotBlank() || !answer.reasoning.isNullOrBlank() ||
+                    answer.images.isNotEmpty()
+                ) {
+                    Surface(
+                        color = MaterialTheme.colorScheme.surfaceVariant,
+                        shape = RoundedCornerShape(4.dp, 16.dp, 16.dp, 16.dp),
+                        modifier = Modifier.combinedClickable(
+                            onClick = {},
+                            onLongClick = { env.showDetail(answer) },
+                        ),
+                    ) {
+                        Column(Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
+                            if (answer.images.isNotEmpty()) {
+                                Row(
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                    modifier = Modifier.padding(bottom = 4.dp),
+                                ) {
+                                    answer.images.forEach { url ->
+                                        MessageImage(
+                                            url = url,
+                                            onClick = env.showImage,
+                                            openExternal = env.imageOpenExternal,
+                                        )
+                                    }
+                                }
+                            }
+                            if (!answer.reasoning.isNullOrBlank()) {
+                                ReasoningSection(answer.reasoning, inProgress = false)
+                            }
+                            MarkdownText(answer.content)
+                        }
+                    }
+                }
+            }
+            MessageActionsRow(
+                alignEnd = false,
+                enabled = !env.streaming,
+                onCopy = { env.copyMessage(target) },
+                // 整轮重生成：从本轮第一条消息起删除（含工具调用与结果），避免留下孤立 tool 消息
+                onRegenerate = {
+                    env.vm.regenerateToolTurn(target.conversationId, turn.steps.first().assistant.id)
+                },
+                onMore = { env.showMessageActions(target) },
+                copyEnabled = target.images.isEmpty(),
+            )
+            MessageUsageRow(target, alignEnd = false)
         }
     }
 
@@ -905,6 +976,7 @@ object ChatUiDefaults {
         val reasoning by env.vm.streamingReasoning.collectAsStateWithLifecycle()
         val content by env.vm.streamingText.collectAsStateWithLifecycle()
         val generatingImage by env.vm.generatingImage.collectAsStateWithLifecycle()
+        val toolProgress by env.vm.toolProgress.collectAsStateWithLifecycle()
 
         // 跟随滚动：视口已接近底部时才自动下滚到最新内容，避免打断用户上翻
         LaunchedEffect(content, reasoning, generatingImage) {
@@ -914,7 +986,11 @@ object ChatUiDefaults {
             if (lastVisible >= last - 1) env.listState.scrollBy(1_000_000f)
         }
 
-        StreamingBubbleContent(reasoning = reasoning, content = content, generatingImage = generatingImage)
+        Column(Modifier.fillMaxWidth()) {
+            // 工具执行期间（如「正在调用 web_search…」）：与折叠段头部同构的进行中提示
+            toolProgress?.let { ToolProgressRow(it) }
+            StreamingBubbleContent(reasoning = reasoning, content = content, generatingImage = generatingImage)
+        }
     }
 
     @Composable
@@ -1857,6 +1933,15 @@ internal var ChatUiEnv.activePlugin: ChatUiPlugin?
         if (value != null) activePluginStore[this] = value else activePluginStore.remove(this)
     }
 
+/**
+ * 当前生效的样式表：插件自带 [ChatUiPlugin.chatStyle] 优先，其次按插件 id 映射的内置预设。
+ * 所有默认绘制路径都从这里取样式，**禁止**在绘制代码里硬编码颜色/圆角/内边距。
+ * （自定义 JSON 皮肤会在这条链最前面插入 `styleOverride`，见 ChatScreen。）
+ */
+internal val ChatUiEnv.chatStyle: ChatStyleConfig
+    get() = activePlugin?.chatStyle
+        ?: ChatStylePreset.of(activePlugin?.id).config()
+
 @Composable
 internal fun ChatUiEnv.renderMessageBubble(message: MessageEntity) {
     val plugin = activePlugin
@@ -1869,6 +1954,17 @@ internal fun ChatUiEnv.renderStreamingBubble() {
     val plugin = activePlugin
     val slot = plugin?.streamingBubble
     if (slot != null) slot(this) else ChatUiDefaults.StreamingBubble(this)
+}
+
+/**
+ * 工具轮次项（工具链 + 最终答复）的插件分发：与 [renderMessageBubble] 同理，
+ * 皮肤插件覆写 toolTurn 才能让「带工具调用的回复」与普通回复保持同一风格。
+ */
+@Composable
+internal fun ChatUiEnv.renderToolTurn(turn: ChatItem.ToolTurn) {
+    val plugin = activePlugin
+    val slot = plugin?.toolTurn
+    if (slot != null) slot(this, turn) else ChatUiDefaults.ToolTurnItem(this, turn)
 }
 
 @Composable

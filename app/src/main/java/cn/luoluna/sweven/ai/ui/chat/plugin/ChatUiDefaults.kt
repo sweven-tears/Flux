@@ -133,6 +133,7 @@ import cn.luoluna.sweven.ai.ui.chat.produceUriBitmap
 import cn.luoluna.sweven.ai.ui.chat.rememberDataUrlBitmap
 import cn.luoluna.sweven.ai.ui.chat.rememberVideoFrame
 import cn.luoluna.sweven.ai.ui.chat.FluxVideoPlayer
+import cn.luoluna.sweven.ai.ui.chat.style.BubbleStyle
 import cn.luoluna.sweven.ai.ui.chat.style.ChatBubble
 import cn.luoluna.sweven.ai.ui.chat.style.ChatMessageRow
 import cn.luoluna.sweven.ai.ui.chat.style.ChatStyleConfig
@@ -738,54 +739,46 @@ object ChatUiDefaults {
     private fun toolNamesOf(message: MessageEntity): List<String> =
         parseToolCalls(message.toolCallsJson).map { it.name }
 
-    /** 工具结果气泡：紧凑卡片，显示工具名与结果摘要，点击展开全文 */
+    /** 工具结果气泡：紧凑卡片，显示工具名与结果摘要，点击展开全文（样式来自 config.tool） */
     @Composable
     fun ToolMessageBubble(env: ChatUiEnv, message: MessageEntity) {
         var expanded by remember { mutableStateOf(false) }
+        val config = env.chatStyle
         val name = toolNameFor(env.messages, message.toolCallId)
-        Row(
-            horizontalArrangement = Arrangement.Start,
-            modifier = Modifier.fillMaxWidth(),
-        ) {
-            Surface(
-                color = MaterialTheme.colorScheme.surfaceContainerHigh,
-                shape = RoundedCornerShape(12.dp),
-                modifier = Modifier
-                    .widthIn(max = 320.dp)
-                    .clickable { expanded = !expanded },
+        ChatMessageRow(profile = config.aiProfile) {
+            ChatBubble(
+                style = config.tool,
+                modifier = Modifier.clickable { expanded = !expanded },
             ) {
-                Column(Modifier.padding(horizontal = 10.dp, vertical = 8.dp)) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(
-                            Icons.Outlined.Build,
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.size(14.dp),
-                        )
-                        Text(
-                            if (name != null) "工具结果 · $name" else "工具结果",
-                            style = MaterialTheme.typography.labelMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier
-                                .weight(1f, fill = false)
-                                .padding(start = 4.dp),
-                        )
-                    }
-                    Text(
-                        message.content,
-                        style = MaterialTheme.typography.bodySmall.copy(fontFamily = MonoFont),
-                        color = MaterialTheme.colorScheme.onSurface,
-                        maxLines = if (expanded) Int.MAX_VALUE else 3,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.padding(top = 4.dp),
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        Icons.Outlined.Build,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(14.dp),
                     )
                     Text(
-                        if (expanded) "收起" else "展开",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.padding(top = 2.dp),
+                        if (name != null) "工具结果 · $name" else "工具结果",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier
+                            .weight(1f, fill = false)
+                            .padding(start = 4.dp),
                     )
                 }
+                Text(
+                    message.content,
+                    style = MaterialTheme.typography.bodySmall.copy(fontFamily = MonoFont),
+                    maxLines = if (expanded) Int.MAX_VALUE else 3,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.padding(top = 4.dp),
+                )
+                Text(
+                    if (expanded) "收起" else "展开",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.padding(top = 2.dp),
+                )
             }
         }
     }
@@ -976,7 +969,6 @@ object ChatUiDefaults {
         val reasoning by env.vm.streamingReasoning.collectAsStateWithLifecycle()
         val content by env.vm.streamingText.collectAsStateWithLifecycle()
         val generatingImage by env.vm.generatingImage.collectAsStateWithLifecycle()
-        val toolProgress by env.vm.toolProgress.collectAsStateWithLifecycle()
 
         // 跟随滚动：视口已接近底部时才自动下滚到最新内容，避免打断用户上翻
         LaunchedEffect(content, reasoning, generatingImage) {
@@ -987,44 +979,47 @@ object ChatUiDefaults {
         }
 
         Column(Modifier.fillMaxWidth()) {
-            // 工具执行期间（如「正在调用 web_search…」）：与折叠段头部同构的进行中提示
-            toolProgress?.let { ToolProgressRow(it) }
-            StreamingBubbleContent(reasoning = reasoning, content = content, generatingImage = generatingImage)
+            ChatMessageRow(profile = env.chatStyle.aiProfile) {
+                StreamingBubbleContent(
+                    reasoning = reasoning,
+                    content = content,
+                    style = env.chatStyle.ai,
+                    generatingImage = generatingImage,
+                )
+            }
         }
     }
 
     @Composable
-    fun StreamingBubbleContent(reasoning: String, content: String, generatingImage: Boolean = false) {
+    fun StreamingBubbleContent(
+        reasoning: String,
+        content: String,
+        style: BubbleStyle,
+        generatingImage: Boolean = false,
+    ) {
+        val bodyStyle = if (style.monospace) {
+            MaterialTheme.typography.bodyMedium.copy(fontFamily = MonoFont)
+        } else {
+            MaterialTheme.typography.bodyMedium
+        }
         Column(Modifier.fillMaxWidth()) {
             StreamingMessageHeader(generatingImage)
-            Surface(
-                color = MaterialTheme.colorScheme.surfaceVariant,
-                shape = RoundedCornerShape(4.dp, 16.dp, 16.dp, 16.dp),
-            ) {
+            ChatBubble(style = style) {
                 if (generatingImage) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
-                    ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
                         CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
                         Text(
                             "正在生成图片，请稍候…",
-                            style = MaterialTheme.typography.bodyMedium,
+                            style = bodyStyle,
                             modifier = Modifier.padding(start = 8.dp),
                         )
                     }
                 } else {
-                    Column(
-                        Modifier
-                            .widthIn(max = 320.dp)
-                            .padding(horizontal = 12.dp, vertical = 8.dp)
-                    ) {
-                        if (reasoning.isNotBlank()) {
-                            ReasoningSection(reasoning, inProgress = content.isEmpty())
-                        }
-                        if (content.isNotEmpty()) {
-                            Text(content + " ▍", style = MaterialTheme.typography.bodyMedium)
-                        }
+                    if (reasoning.isNotBlank()) {
+                        ReasoningSection(reasoning, inProgress = content.isEmpty())
+                    }
+                    if (content.isNotEmpty()) {
+                        Text(content + " ▍", style = bodyStyle)
                     }
                 }
             }

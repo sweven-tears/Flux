@@ -270,6 +270,30 @@ class AppSettings(context: Context) {
         _chatStyleJson.value = normalized
     }
 
+    /** 聊天背景（kind/color/dim 的 JSON，见 ChatBackgroundCodec）；null = 跟随主题 */
+    private val _chatBackgroundJson = MutableStateFlow(prefs.getString(KEY_CHAT_BACKGROUND, null))
+    val chatBackgroundJson: StateFlow<String?> = _chatBackgroundJson
+
+    fun setChatBackgroundJson(json: String?) {
+        val normalized = json?.takeIf { it.isNotBlank() }
+        prefs.edit().apply {
+            if (normalized == null) remove(KEY_CHAT_BACKGROUND) else putString(KEY_CHAT_BACKGROUND, normalized)
+        }.apply()
+        _chatBackgroundJson.value = normalized
+    }
+
+    /** 聊天背景图片（压缩后的 JPEG data URL，形态同用户头像）；null = 无图片 */
+    private val _chatBackgroundImage = MutableStateFlow(prefs.getString(KEY_CHAT_BACKGROUND_IMAGE, null))
+    val chatBackgroundImage: StateFlow<String?> = _chatBackgroundImage
+
+    fun setChatBackgroundImage(dataUrl: String?) {
+        val v = dataUrl?.takeIf { it.isNotBlank() }
+        prefs.edit().apply {
+            if (v == null) remove(KEY_CHAT_BACKGROUND_IMAGE) else putString(KEY_CHAT_BACKGROUND_IMAGE, v)
+        }.apply()
+        _chatBackgroundImage.value = v
+    }
+
     /**
      * 工具中心里启用的工具名集合（JSON 数组字符串）：新建会话默认勾选这些工具；
      * null/空 = 不启用任何工具（与旧版本行为一致）
@@ -350,6 +374,8 @@ class AppSettings(context: Context) {
         private const val KEY_VIDEO_OPEN_EXTERNAL = "video_open_external"
         private const val KEY_CHAT_PLUGIN = "chat_ui_plugin"
         private const val KEY_CHAT_STYLE_JSON = "chat_style_json"
+        private const val KEY_CHAT_BACKGROUND = "chat_background_json"
+        private const val KEY_CHAT_BACKGROUND_IMAGE = "chat_background_image"
         private const val KEY_DEFAULT_TOOLS = "default_tool_ids"
         private const val KEY_USER_NAME = "user_name"
         private const val KEY_USER_AVATAR = "user_avatar"

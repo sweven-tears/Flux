@@ -11,7 +11,6 @@ import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
@@ -71,6 +70,8 @@ import cn.luoluna.sweven.ai.ui.chat.plugin.ChatUiEnv
 import cn.luoluna.sweven.ai.ui.chat.plugin.ChatUiRegistry
 import cn.luoluna.sweven.ai.ui.chat.plugin.PluginPickerDialog
 import cn.luoluna.sweven.ai.ui.chat.plugin.activePlugin
+import cn.luoluna.sweven.ai.ui.chat.style.ChatBackground
+import cn.luoluna.sweven.ai.ui.chat.style.ChatBackgroundCodec
 import cn.luoluna.sweven.ai.ui.chat.style.ChatStyleCodec
 import cn.luoluna.sweven.ai.ui.chat.style.StyleJsonDialog
 import cn.luoluna.sweven.ai.ui.common.ConfirmDialog
@@ -242,6 +243,10 @@ fun ChatScreen(
     val styleOverride = remember(chatStyleJson, plugin.id) {
         if (plugin.id == ChatUiRegistry.CUSTOM_ID) ChatStyleCodec.decode(chatStyleJson) else null
     }
+    // 聊天背景：独立于界面风格（换预设不该丢背景），见 ChatBackgroundCodec
+    val chatBackgroundJson by app.settings.chatBackgroundJson.collectAsStateWithLifecycle()
+    val chatBackgroundImage by app.settings.chatBackgroundImage.collectAsStateWithLifecycle()
+    val chatBackground = remember(chatBackgroundJson) { ChatBackgroundCodec.decode(chatBackgroundJson) }
 
     // 用户资料（抽屉左上角头像/名字，消息气泡用户头像）
     val userName by app.settings.userName.collectAsStateWithLifecycle()
@@ -435,8 +440,10 @@ fun ChatScreen(
                     .consumeWindowInsets(padding)
                     .imePadding(),
             ) {
-                Box(
-                    Modifier
+                ChatBackground(
+                    style = chatBackground,
+                    imageDataUrl = chatBackgroundImage,
+                    modifier = Modifier
                         .weight(1f)
                         .fillMaxWidth()
                         // 双击空白处移除输入框焦点并收起键盘；气泡等子级已消费点击的区域不触发

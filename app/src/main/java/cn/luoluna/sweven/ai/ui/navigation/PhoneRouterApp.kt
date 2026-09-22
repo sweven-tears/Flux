@@ -32,6 +32,7 @@ import androidx.navigation.navArgument
 import cn.luoluna.sweven.ai.ui.chat.ChatHistoryScreen
 import cn.luoluna.sweven.ai.ui.chat.ChatScreen
 import cn.luoluna.sweven.ai.ui.chat.FreeCopyScreen
+import cn.luoluna.sweven.ai.ui.chat.style.ChatStyleScreen
 import cn.luoluna.sweven.ai.ui.common.InAppBrowserPayload
 import cn.luoluna.sweven.ai.ui.common.InAppBrowserScreen
 import cn.luoluna.sweven.ai.ui.common.LocalInAppBrowser
@@ -67,6 +68,7 @@ object Routes {
     const val NETWORK_LOG_DETAIL = "network_log_detail/{id}"
     const val FREE_COPY = "free_copy/{id}"
     const val CHAT_HISTORY = "chat_history/{conversationId}"
+    const val CHAT_STYLE = "chat_style"
     const val IN_APP_BROWSER = "in_app_browser"
     const val TOOLS_CENTER = "tools_center"
     const val CUSTOM_TOOL_EDITOR = "custom_tool_editor/{toolId}"
@@ -174,9 +176,13 @@ fun PhoneRouterApp(
                         onOpenFreeCopy = { id -> navController.navigate("free_copy/$id") },
                         onOpenChatHistory = { id -> navController.navigate("chat_history/$id") },
                         onOpenToolsCenter = { navController.navigate(Routes.TOOLS_CENTER) },
+                        onOpenChatStyle = { navController.navigate(Routes.CHAT_STYLE) },
                         pendingConversationId = pendingChatConversation,
                         onConsumePendingConversation = { pendingChatConversation = null },
                     )
+                }
+                composable(Routes.CHAT_STYLE) {
+                    ChatStyleScreen(onBack = { navController.popBackStack() })
                 }
                 composable(Routes.TOOLS_CENTER) {
                     ToolsCenterScreen(

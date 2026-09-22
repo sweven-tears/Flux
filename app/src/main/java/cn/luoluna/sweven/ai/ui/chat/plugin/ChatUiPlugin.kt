@@ -172,7 +172,8 @@ class ChatUiEnv(
     val showImage: (ImageBitmap) -> Unit,
     val openModelPicker: () -> Unit,
     val openSystemPrompt: () -> Unit,
-    val openPluginPicker: () -> Unit,
+    /** 打开界面风格编辑页（顶栏「更多 → 界面风格」直达，不再走弹窗） */
+    val openChatStyle: () -> Unit,
     /** 打开会话工具选择半窗（输入栏扳手按钮） */
     val openToolPicker: () -> Unit,
     val showMessageActions: (MessageEntity) -> Unit,

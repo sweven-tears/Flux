@@ -32,7 +32,7 @@ fun StyleJsonDialog(
     onSave: (String) -> Unit,
     onReset: () -> Unit,
 ) {
-    val template = remember { ChatStyleCodec.encode(ChatStyleConfig.bubble()) }
+    val template = remember { ChatStyleCodec.encode(ChatStylePreset.FLAT.config()) }
     var text by remember { mutableStateOf(initial.ifBlank { template }) }
     val valid = remember(text) { ChatStyleCodec.decode(text) != null }
     AlertDialog(

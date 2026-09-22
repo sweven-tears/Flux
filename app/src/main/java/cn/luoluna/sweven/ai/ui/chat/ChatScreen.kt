@@ -68,12 +68,10 @@ import cn.luoluna.sweven.ai.net.ThinkingDepth
 import cn.luoluna.sweven.ai.ui.chat.plugin.ChatUiDefaults
 import cn.luoluna.sweven.ai.ui.chat.plugin.ChatUiEnv
 import cn.luoluna.sweven.ai.ui.chat.plugin.ChatUiRegistry
-import cn.luoluna.sweven.ai.ui.chat.plugin.PluginPickerDialog
 import cn.luoluna.sweven.ai.ui.chat.plugin.activePlugin
 import cn.luoluna.sweven.ai.ui.chat.style.ChatBackground
 import cn.luoluna.sweven.ai.ui.chat.style.ChatBackgroundCodec
 import cn.luoluna.sweven.ai.ui.chat.style.ChatStyleCodec
-import cn.luoluna.sweven.ai.ui.chat.style.StyleJsonDialog
 import cn.luoluna.sweven.ai.ui.common.ConfirmDialog
 import cn.luoluna.sweven.ai.ui.common.InAppBrowserPayload
 import cn.luoluna.sweven.ai.ui.common.LocalInAppBrowser
@@ -97,6 +95,8 @@ fun ChatScreen(
     onOpenChatHistory: (Long) -> Unit,
     /** 打开工具中心（工具选择半窗右上角「管理」） */
     onOpenToolsCenter: () -> Unit = {},
+    /** 打开界面风格编辑页（顶栏「更多 → 界面风格」） */
+    onOpenChatStyle: () -> Unit = {},
     pendingConversationId: Long? = null,
     onConsumePendingConversation: () -> Unit = {},
     vm: ChatViewModel = viewModel(),
@@ -167,8 +167,6 @@ fun ChatScreen(
     } == true
 
     var pickerOpen by remember { mutableStateOf(false) }
-    var pluginPickerOpen by remember { mutableStateOf(false) }
-    var styleJsonOpen by remember { mutableStateOf(false) }
     var toolPickerOpen by remember { mutableStateOf(false) }
 
     // 通知点击带回的会话跳转：切到目标会话并消费
@@ -398,7 +396,7 @@ fun ChatScreen(
         showImage = { fullImage = it },
         openModelPicker = { pickerOpen = true },
         openSystemPrompt = { systemPromptOpen = true },
-        openPluginPicker = { pluginPickerOpen = true },
+        openChatStyle = onOpenChatStyle,
         openToolPicker = { toolPickerOpen = true },
         showMessageActions = { actionMessage = it },
         copyMessage = { msg ->
@@ -519,33 +517,6 @@ fun ChatScreen(
             onSelectGroup = { group ->
                 vm.selectModel(RouteGroupTarget.PROVIDER_ID, group.groupKey)
                 pickerOpen = false
-            },
-        )
-    }
-
-    if (pluginPickerOpen) {
-        PluginPickerDialog(
-            currentId = plugin.id,
-            onSelect = { app.settings.setChatPluginId(it) },
-            onDismiss = { pluginPickerOpen = false },
-            onEditCustomStyle = {
-                pluginPickerOpen = false
-                styleJsonOpen = true
-            },
-        )
-    }
-
-    if (styleJsonOpen) {
-        StyleJsonDialog(
-            initial = chatStyleJson.orEmpty(),
-            onDismiss = { styleJsonOpen = false },
-            onSave = { json ->
-                app.settings.setChatStyleJson(json)
-                styleJsonOpen = false
-            },
-            onReset = {
-                app.settings.setChatStyleJson(null)
-                styleJsonOpen = false
             },
         )
     }

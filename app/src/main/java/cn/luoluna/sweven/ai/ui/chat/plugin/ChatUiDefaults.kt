@@ -488,7 +488,7 @@ object ChatUiDefaults {
                             text = { Text("界面风格") },
                             onClick = {
                                 menuOpen = false
-                                env.openPluginPicker()
+                                env.openChatStyle()
                             },
                         )
                     }

@@ -169,6 +169,10 @@ class BackupManager(private val app: App) {
             put("searchProvider", s.searchProvider.value.orEmpty())
             put("searchEndpoint", s.searchEndpoint.value.orEmpty())
             put("searchCount", s.searchCount.value.toString())
+            put("chatUiPlugin", s.chatPluginId.value.orEmpty())
+            put("chatStyleJson", s.chatStyleJson.value.orEmpty())
+            put("chatBackground", s.chatBackgroundJson.value.orEmpty())
+            put("chatBackgroundImage", s.chatBackgroundImage.value.orEmpty())
         }
     }
 
@@ -194,6 +198,13 @@ class BackupManager(private val app: App) {
         if (map.containsKey("searchProvider")) s.setSearchProvider(map["searchProvider"])
         if (map.containsKey("searchEndpoint")) s.setSearchEndpoint(map["searchEndpoint"])
         map["searchCount"]?.toIntOrNull()?.let { s.setSearchCount(it) }
+        // 界面风格/聊天背景：空串代表"未设置"，setter 会把它归一化成 null（回落默认）
+        if (map.containsKey("chatUiPlugin")) {
+            map["chatUiPlugin"]?.takeIf { it.isNotBlank() }?.let { s.setChatPluginId(it) }
+        }
+        if (map.containsKey("chatStyleJson")) s.setChatStyleJson(map["chatStyleJson"])
+        if (map.containsKey("chatBackground")) s.setChatBackgroundJson(map["chatBackground"])
+        if (map.containsKey("chatBackgroundImage")) s.setChatBackgroundImage(map["chatBackgroundImage"])
     }
 
     companion object {

@@ -6,6 +6,12 @@ Desktop.ini
 # ZCode 会话数据
 .zcode/
 
+# Hermes agent 工作区（会话计划 + 代码骨架扫描），仅本地留存
+.hermes/
+
+# 代码库索引 wiki：独立仓库（gitea 上单独的 wiki.git），不随主库走
+/wiki/
+
 # 日志
 *.log
 logs/

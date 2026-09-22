@@ -477,3 +477,43 @@ data class NetworkLogEntity(
     /** 失败原因摘要 */
     val error: String? = null,
 )
+
+/**
+ * 自定义工具：用户在「工具中心」里新建的本地工具（HTTP 请求 / JS 脚本两种执行器）。
+ *
+ * - [name]：暴露给模型的函数名（`^[a-zA-Z0-9_]{1,64}$`，与内置工具重名则拒绝保存/装载）
+ * - [parametersJson]：JSON Schema 文本（type=object）；null/空 = 无参
+ * - [kind]：[CustomToolKind] 取值，决定 [configJson] 的解释方式
+ * - [configJson]：http = {method,url,headersJson,bodyTemplate,timeoutMs,maxChars,resultPath}；
+ *   js = {code}（QuickJS 沙箱，无网络/无 DOM，参数注入为 `args`）
+ * - [enabled]：启用=注册进 ToolRegistry 且默认勾选进新会话；禁用=从注册表移除（工具中心仍可编辑/试运行）
+ */
+@Entity(
+    tableName = "custom_tools",
+    indices = [Index(value = ["name"], unique = true)],
+)
+@Serializable
+data class CustomToolEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val name: String,
+    val displayName: String,
+    val description: String,
+    val parametersJson: String? = null,
+    val kind: String,
+    val configJson: String,
+    val needsApproval: Boolean = false,
+    val enabled: Boolean = true,
+    val createdAt: Long = System.currentTimeMillis(),
+    val updatedAt: Long = System.currentTimeMillis(),
+)
+
+/** 自定义工具执行器类型 */
+object CustomToolKind {
+    /** HTTP 请求工具（对接任意 REST API） */
+    const val HTTP = "http"
+
+    /** JS 脚本工具（QuickJS 沙箱，复用 eval_javascript 的运行时） */
+    const val JS = "js"
+
+    fun isKnown(kind: String): Boolean = kind == HTTP || kind == JS
+}

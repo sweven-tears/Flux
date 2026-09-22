@@ -75,34 +75,69 @@ fun ToolPickerSheet(
                 )
             } else {
                 LazyColumn(Modifier.fillMaxWidth()) {
-                    items(tools, key = { it.name }) { tool ->
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clickable { onToggle(tool.name, tool.name !in selected) }
-                                .padding(horizontal = 16.dp, vertical = 4.dp),
-                        ) {
-                            Checkbox(
-                                checked = tool.name in selected,
-                                onCheckedChange = { onToggle(tool.name, it) },
-                            )
-                            Column(Modifier.padding(start = 4.dp)) {
-                                Text(tool.displayName, style = MaterialTheme.typography.bodyLarge)
-                                Text(
-                                    tool.description,
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    maxLines = 2,
-                                )
-                            }
+                    val builtIns = tools.filter { ToolRegistry.isBuiltIn(it.name) }
+                    val customs = tools.filterNot { ToolRegistry.isBuiltIn(it.name) }
+                    if (builtIns.isNotEmpty()) {
+                        item(key = "header-builtin") {
+                            ToolGroupHeader("内置工具")
                         }
+                    }
+                    items(builtIns, key = { it.name }) { tool ->
+                        ToolPickerRow(tool, selected, onToggle)
+                    }
+                    if (customs.isNotEmpty()) {
+                        item(key = "header-custom") {
+                            ToolGroupHeader("自定义工具")
+                        }
+                    }
+                    items(customs, key = { it.name }) { tool ->
+                        ToolPickerRow(tool, selected, onToggle)
                     }
                     item(key = "bottom-space") {
                         Column(Modifier.height(16.dp)) {}
                     }
                 }
             }
+        }
+    }
+}
+
+/** 分组小标题（内置 / 自定义） */
+@Composable
+private fun ToolGroupHeader(text: String) {
+    Text(
+        text,
+        style = MaterialTheme.typography.labelMedium,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = Modifier.padding(start = 16.dp, top = 10.dp, bottom = 2.dp),
+    )
+}
+
+@Composable
+private fun ToolPickerRow(
+    tool: cn.luoluna.sweven.ai.tools.FluxTool,
+    selected: Set<String>,
+    onToggle: (String, Boolean) -> Unit,
+) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable { onToggle(tool.name, tool.name !in selected) }
+            .padding(horizontal = 16.dp, vertical = 4.dp),
+    ) {
+        Checkbox(
+            checked = tool.name in selected,
+            onCheckedChange = { onToggle(tool.name, it) },
+        )
+        Column(Modifier.padding(start = 4.dp)) {
+            Text(tool.displayName, style = MaterialTheme.typography.bodyLarge)
+            Text(
+                tool.description,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 2,
+            )
         }
     }
 }

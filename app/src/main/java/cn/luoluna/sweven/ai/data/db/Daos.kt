@@ -587,3 +587,37 @@ interface VideoJobDao {
     @Update
     suspend fun update(job: VideoJobEntity)
 }
+
+@Dao
+interface CustomToolDao {
+    @Query("SELECT * FROM custom_tools ORDER BY updatedAt DESC, id DESC")
+    fun observeAll(): Flow<List<CustomToolEntity>>
+
+    @Query("SELECT * FROM custom_tools ORDER BY updatedAt DESC, id DESC")
+    suspend fun all(): List<CustomToolEntity>
+
+    @Query("SELECT * FROM custom_tools WHERE id = :id")
+    suspend fun byId(id: Long): CustomToolEntity?
+
+    /** 函数名查重（排除自身 id；新建时传 0） */
+    @Query("SELECT COUNT(*) FROM custom_tools WHERE name = :name AND id != :excludeId")
+    suspend fun countNameExcluding(name: String, excludeId: Long): Int
+
+    @Insert
+    suspend fun insert(e: CustomToolEntity): Long
+
+    @Insert
+    suspend fun insertAll(list: List<CustomToolEntity>)
+
+    @Update
+    suspend fun update(e: CustomToolEntity)
+
+    @Query("UPDATE custom_tools SET enabled = :enabled, updatedAt = :at WHERE id = :id")
+    suspend fun setEnabled(id: Long, enabled: Boolean, at: Long)
+
+    @Query("DELETE FROM custom_tools WHERE id = :id")
+    suspend fun deleteById(id: Long)
+
+    @Query("DELETE FROM custom_tools")
+    suspend fun clearAll()
+}

@@ -40,6 +40,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import cn.luoluna.sweven.ai.App
+import cn.luoluna.sweven.ai.data.AppSettings
 import cn.luoluna.sweven.ai.data.BackupManager
 import cn.luoluna.sweven.ai.ui.common.SectionCard
 import cn.luoluna.sweven.ai.ui.common.TextFieldDialog
@@ -75,6 +76,7 @@ fun SettingsScreen(
     val networkLogKeep by settings.networkLogKeep.collectAsStateWithLifecycle()
     val imageOpenExternal by settings.imageOpenExternal.collectAsStateWithLifecycle()
     val videoOpenExternal by settings.videoOpenExternal.collectAsStateWithLifecycle()
+    val toolMaxRounds by settings.toolMaxRounds.collectAsStateWithLifecycle()
 
     // 导出：先弹配置弹窗（是否含 Key），再走系统保存文件
     var showExportDialog by remember { mutableStateOf(false) }
@@ -83,6 +85,8 @@ fun SettingsScreen(
     var pendingImportText by remember { mutableStateOf<String?>(null) }
     // 网络日志保留条数编辑
     var showLogKeepEdit by remember { mutableStateOf(false) }
+    // 工具调用轮数上限编辑
+    var showToolRoundsEdit by remember { mutableStateOf(false) }
 
     val exportLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.CreateDocument("application/json")
@@ -207,6 +211,23 @@ fun SettingsScreen(
                 Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
                     Text("保留条数", style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
                     TextButton(onClick = { showLogKeepEdit = true }) { Text("$networkLogKeep 条  修改") }
+                }
+            }
+            SectionCard(title = "工具调用") {
+                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+                    Column(Modifier.weight(1f)) {
+                        Text("单次提问最多调用轮数", style = MaterialTheme.typography.bodyMedium)
+                        Text(
+                            "指一次提问内模型连续发起工具调用的轮数上限；达到上限只停止继续调用，" +
+                                "已产生的调用与结果仍完整保留。0 = 不限，由模型自行收敛" +
+                                "（想强制收口时再设个小值）。",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    TextButton(onClick = { showToolRoundsEdit = true }) {
+                        Text(if (toolMaxRounds <= 0) "不限  修改" else "$toolMaxRounds 轮  修改")
+                    }
                 }
             }
             SectionCard(title = "数据") {
@@ -351,6 +372,28 @@ fun SettingsScreen(
         )
     }
 
+    if (showToolRoundsEdit) {
+        TextFieldDialog(
+            title = "单次提问最多调用轮数",
+            initial = toolMaxRounds.toString(),
+            onDismiss = { showToolRoundsEdit = false },
+            onValidate = { v ->
+                val n = v.trim().toIntOrNull()
+                when {
+                    n == null -> "请输入数字"
+                    n == 0 -> null
+                    n < 0 || n > AppSettings.MAX_TOOL_ROUNDS_LIMIT ->
+                        "0 = 不限，或填 1 ~ ${AppSettings.MAX_TOOL_ROUNDS_LIMIT}"
+                    else -> null
+                }
+            },
+            onConfirm = { v ->
+                v.trim().toIntOrNull()?.let { settings.setToolMaxRounds(it) }
+                showToolRoundsEdit = false
+            },
+        )
+    }
+
     pendingImportText?.let { text ->
         val parsed = remember(text) { runCatching { backup.parse(text) }.getOrNull() }
         if (parsed == null) {
@@ -374,6 +417,7 @@ fun SettingsScreen(
                                     "模型 ${summary.models} 个、智能路由候选 ${summary.smartRoutes} 个、" +
                                     "路由分组 ${summary.smartRouteGroups} 个、" +
                                     "分组 ${summary.folders} 个、预设 ${summary.presets} 个、" +
+                                    "自定义工具 ${summary.customTools} 个、" +
                                     "已授权设备 ${summary.authDevices} 台。\n\n"
                             )
                             append("导入将替换当前全部配置（不影响聊天记录），且无法撤销。确定导入？")

@@ -24,8 +24,9 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         VideoJobEntity::class,
         NetworkLogEntity::class,
         ModelAbnormalEntity::class,
+        CustomToolEntity::class,
     ],
-    version = 19,
+    version = 20,
     exportSchema = false,
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -44,6 +45,7 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun videoJobDao(): VideoJobDao
     abstract fun networkLogDao(): NetworkLogDao
     abstract fun modelAbnormalDao(): ModelAbnormalDao
+    abstract fun customToolDao(): CustomToolDao
 
     companion object {
         /** v1 → v2：新增文件夹、预设对话表；会话表增加 folderId / systemPrompt */
@@ -267,13 +269,27 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        /** v19 → v20：新增自定义工具表（工具中心里用户自建的 HTTP/JS 工具） */
+        private val MIGRATION_19_20 = object : Migration(19, 20) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `custom_tools` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, " +
+                        "`name` TEXT NOT NULL, `displayName` TEXT NOT NULL, `description` TEXT NOT NULL, " +
+                        "`parametersJson` TEXT, `kind` TEXT NOT NULL, `configJson` TEXT NOT NULL, " +
+                        "`needsApproval` INTEGER NOT NULL, `enabled` INTEGER NOT NULL, " +
+                        "`createdAt` INTEGER NOT NULL, `updatedAt` INTEGER NOT NULL)"
+                )
+                db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS `index_custom_tools_name` ON `custom_tools` (`name`)")
+            }
+        }
+
         fun build(context: Context): AppDatabase =
             Room.databaseBuilder(context, AppDatabase::class.java, "flux.db")
                 .addMigrations(
                     MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7,
                     MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12,
                     MIGRATION_12_13, MIGRATION_13_14, MIGRATION_14_15, MIGRATION_15_16, MIGRATION_16_17,
-                    MIGRATION_17_18, MIGRATION_18_19,
+                    MIGRATION_17_18, MIGRATION_18_19, MIGRATION_19_20,
                 )
                 .fallbackToDestructiveMigration()
                 .build()

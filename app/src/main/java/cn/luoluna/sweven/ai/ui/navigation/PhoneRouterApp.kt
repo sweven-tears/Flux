@@ -47,6 +47,8 @@ import cn.luoluna.sweven.ai.ui.settings.CreationsScreen
 import cn.luoluna.sweven.ai.ui.settings.NetworkLogDetailScreen
 import cn.luoluna.sweven.ai.ui.settings.NetworkLogScreen
 import cn.luoluna.sweven.ai.ui.settings.SettingsScreen
+import cn.luoluna.sweven.ai.ui.tools.CustomToolEditorScreen
+import cn.luoluna.sweven.ai.ui.tools.NEW_TOOL_ID
 import cn.luoluna.sweven.ai.ui.tools.ToolsCenterScreen
 
 object Routes {
@@ -67,6 +69,7 @@ object Routes {
     const val CHAT_HISTORY = "chat_history/{conversationId}"
     const val IN_APP_BROWSER = "in_app_browser"
     const val TOOLS_CENTER = "tools_center"
+    const val CUSTOM_TOOL_EDITOR = "custom_tool_editor/{toolId}"
 }
 
 private val TOP_ROUTES = setOf(Routes.CHAT, Routes.PROVIDERS, Routes.LAN)
@@ -177,6 +180,16 @@ fun PhoneRouterApp(
                 }
                 composable(Routes.TOOLS_CENTER) {
                     ToolsCenterScreen(
+                        onBack = { navController.popBackStack() },
+                        onEditTool = { id -> navController.navigate("custom_tool_editor/$id") },
+                    )
+                }
+                composable(
+                    Routes.CUSTOM_TOOL_EDITOR,
+                    arguments = listOf(navArgument("toolId") { type = NavType.LongType }),
+                ) { entry ->
+                    CustomToolEditorScreen(
+                        toolId = entry.arguments?.getLong("toolId") ?: NEW_TOOL_ID,
                         onBack = { navController.popBackStack() },
                     )
                 }

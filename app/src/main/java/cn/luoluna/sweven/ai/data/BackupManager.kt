@@ -4,6 +4,7 @@ import androidx.room.withTransaction
 import cn.luoluna.sweven.ai.App
 import cn.luoluna.sweven.ai.data.db.ApiKeyEntity
 import cn.luoluna.sweven.ai.data.db.AuthDeviceEntity
+import cn.luoluna.sweven.ai.data.db.CustomToolEntity
 import cn.luoluna.sweven.ai.data.db.FolderEntity
 import cn.luoluna.sweven.ai.data.db.ModelEntity
 import cn.luoluna.sweven.ai.data.db.PresetEntity
@@ -31,6 +32,8 @@ data class BackupDto(
     val folders: List<FolderEntity> = emptyList(),
     val presets: List<PresetEntity> = emptyList(),
     val authDevices: List<AuthDeviceEntity> = emptyList(),
+    /** 自定义工具（工具中心里用户自建的工具） */
+    val customTools: List<CustomToolEntity> = emptyList(),
     /** AppSettings 里的路由参数等，统一按字符串存储（布尔为 "true"/"false"） */
     val settings: Map<String, String> = emptyMap(),
 )
@@ -47,6 +50,7 @@ data class BackupSummary(
     val folders: Int,
     val presets: Int,
     val authDevices: Int,
+    val customTools: Int,
 )
 
 /**
@@ -80,6 +84,7 @@ class BackupManager(private val app: App) {
             folders = db.folderDao().all(),
             presets = db.presetDao().all(),
             authDevices = db.authDeviceDao().all(),
+            customTools = db.customToolDao().all(),
             settings = exportSettings(),
         )
         return withContext(Dispatchers.IO) { json.encodeToString(dto) }
@@ -109,6 +114,7 @@ class BackupManager(private val app: App) {
         folders = dto.folders.size,
         presets = dto.presets.size,
         authDevices = dto.authDevices.size,
+        customTools = dto.customTools.size,
     )
 
     /** 导入：单事务全量替换配置表；外键按子表→父表顺序清空、父表→子表顺序重建 */
@@ -123,6 +129,7 @@ class BackupManager(private val app: App) {
             db.smartRouteDao().clearAll()
             db.presetDao().clearAll()
             db.folderDao().clearAll()
+            db.customToolDao().clearAll()
             db.providerDao().clearAll()
             db.providerDao().insertAll(dto.providers)
             db.apiKeyDao().insertAll(dto.apiKeys)
@@ -134,6 +141,7 @@ class BackupManager(private val app: App) {
             db.presetDao().insertAll(dto.presets)
             db.authDeviceDao().clearAll()
             db.authDeviceDao().upsertAll(dto.authDevices)
+            db.customToolDao().insertAll(dto.customTools)
             restoreSettings(dto.settings)
         }
     }
@@ -156,6 +164,11 @@ class BackupManager(private val app: App) {
             put("networkLogKeep", s.networkLogKeep.value.toString())
             put("imageOpenExternal", s.imageOpenExternal.value.toString())
             put("videoOpenExternal", s.videoOpenExternal.value.toString())
+            put("defaultToolIds", s.defaultToolIds.value.orEmpty())
+            put("toolMaxRounds", s.toolMaxRounds.value.toString())
+            put("searchProvider", s.searchProvider.value.orEmpty())
+            put("searchEndpoint", s.searchEndpoint.value.orEmpty())
+            put("searchCount", s.searchCount.value.toString())
         }
     }
 
@@ -176,6 +189,11 @@ class BackupManager(private val app: App) {
         map["networkLogKeep"]?.toIntOrNull()?.let { s.setNetworkLogKeep(it) }
         map["imageOpenExternal"]?.toBooleanStrictOrNull()?.let { s.setImageOpenExternal(it) }
         map["videoOpenExternal"]?.toBooleanStrictOrNull()?.let { s.setVideoOpenExternal(it) }
+        if (map.containsKey("defaultToolIds")) s.setDefaultToolIds(map["defaultToolIds"])
+        map["toolMaxRounds"]?.toIntOrNull()?.let { s.setToolMaxRounds(it) }
+        if (map.containsKey("searchProvider")) s.setSearchProvider(map["searchProvider"])
+        if (map.containsKey("searchEndpoint")) s.setSearchEndpoint(map["searchEndpoint"])
+        map["searchCount"]?.toIntOrNull()?.let { s.setSearchCount(it) }
     }
 
     companion object {

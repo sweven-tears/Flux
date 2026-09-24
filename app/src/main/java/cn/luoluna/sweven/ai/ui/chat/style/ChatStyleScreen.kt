@@ -4,6 +4,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -113,6 +114,10 @@ fun ChatStyleScreen(onBack: () -> Unit) {
         }
     }
 
+    // 固定预览区域（Box 给高度约束，保证 ChatBackground 的 matchParentSize 有效）
+    val previewModifier = Modifier
+        .fillMaxWidth()
+        .heightIn(min = 180.dp, max = 260.dp)
     Scaffold(
         topBar = {
             TopAppBar(
@@ -129,56 +134,64 @@ fun ChatStyleScreen(onBack: () -> Unit) {
             Modifier
                 .fillMaxSize()
                 .padding(padding)
-                .verticalScroll(rememberScrollState())
                 .padding(12.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            SectionCard(title = "预览") {
+            // 置顶预览：Box 提供固定高度约束，ChatBackground 图片才能正确铺满
+            Box(modifier = previewModifier.background(MaterialTheme.colorScheme.surface)) {
                 ChatStylePreview(style = style, background = background, backgroundImage = backgroundImage)
             }
 
-            SectionCard(title = "预设风格") {
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    ChatStylePreset.entries.forEach { preset ->
-                        FilterChip(
-                            selected = !isCustom && plugin.id == preset.id,
-                            onClick = {
-                                settings.setChatStyleJson(null)
-                                settings.setChatPluginId(preset.id)
-                            },
-                            label = { Text(preset.displayName) },
-                        )
+            // 可滚动参数区域
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(1f)
+                    .verticalScroll(rememberScrollState()),
+            ) {
+                SectionCard(title = "预设风格") {
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        ChatStylePreset.entries.forEach { preset ->
+                            FilterChip(
+                                selected = !isCustom && plugin.id == preset.id,
+                                onClick = {
+                                    settings.setChatStyleJson(null)
+                                    settings.setChatPluginId(preset.id)
+                                },
+                                label = { Text(preset.displayName) },
+                            )
+                        }
                     }
-                }
-                Text(
-                    if (isCustom) {
-                        "当前是自定义参数：改下面任何一项都会立刻生效（点上面的预设可恢复成预设样式）"
-                    } else {
-                        "点预设立即换风格；再调下面的参数就变成自定义"
-                    },
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(top = 4.dp),
-                )
-                TextButton(onClick = { styleJsonOpen = true }) { Text("编辑样式 JSON（高级）") }
-            }
-
-            ChatStyleParams(style = style, onChange = ::applyStyle)
-
-            ChatBackgroundSection(
-                background = background,
-                backgroundImage = backgroundImage,
-                onPickImage = {
-                    pickBackground.launch(
-                        PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+                    Text(
+                        if (isCustom) {
+                            "当前是自定义参数：改下面任何一项都会立刻生效（点上面的预设可恢复成预设样式）"
+                        } else {
+                            "点预设立即换风格；再调下面的参数就变成自定义"
+                        },
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(top = 4.dp),
                     )
-                },
-                onClearImage = {
-                    settings.setChatBackgroundImage(null)
-                    applyBackground(background.copy(kind = ChatBackgroundKind.THEME))
-                },
-                onChange = ::applyBackground,
-            )
+                    TextButton(onClick = { styleJsonOpen = true }) { Text("编辑样式 JSON（高级）") }
+                }
+
+                ChatStyleParams(style = style, onChange = ::applyStyle)
+
+                ChatBackgroundSection(
+                    background = background,
+                    backgroundImage = backgroundImage,
+                    onPickImage = {
+                        pickBackground.launch(
+                            PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+                        )
+                    },
+                    onClearImage = {
+                        settings.setChatBackgroundImage(null)
+                        applyBackground(background.copy(kind = ChatBackgroundKind.THEME))
+                    },
+                    onChange = ::applyBackground,
+                )
+            }
         }
     }
 
@@ -215,7 +228,7 @@ private fun ChatStylePreview(
         imageDataUrl = backgroundImage,
         modifier = Modifier
             .fillMaxWidth()
-            .heightIn(min = 180.dp),
+            .height(180.dp),
     ) {
         Column(Modifier.fillMaxSize().padding(8.dp)) {
             ChatMessageRow(profile = style.slotFor(Role.USER).profile) {

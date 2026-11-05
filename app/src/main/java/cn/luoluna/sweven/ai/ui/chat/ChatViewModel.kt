@@ -1134,11 +1134,15 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
             val route = router.resolveById(providerId, modelName) ?: return@mapNotNull null
             route to modelName
         }
-        // 用户手动熔断的厂商：候选整体跳过（人工决策覆盖自动健康状态），先过滤再谈「没有可用模型」
-        val usable = resolved.filter { !it.first.provider.circuitOpen }
-        val breakerSkipped = resolved.size - usable.size
+        // 停用厂商/模型：静默跳过（不进入候选链，避免无效请求）
+        val enabledCandidates = resolved.filter { (route, _) ->
+            val model = route.model
+            route.provider.enabled && (model == null || model.enabled)
+        }
+        val usable = enabledCandidates.filterNot { it.first.provider.circuitOpen }
+        val breakerSkipped = enabledCandidates.size - usable.size
         if (usable.isEmpty() && breakerSkipped > 0) {
-            _error.value = ChatError(breakerMessage(breakerSkipped, resolved.size))
+            _error.value = ChatError(breakerMessage(breakerSkipped, enabledCandidates.size))
             return
         }
         val prepared = usable.mapNotNull { (route, modelName) ->
@@ -1194,11 +1198,15 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         val resolvedMembers = members.mapNotNull { member ->
             router.resolveById(member.providerId, member.modelName)?.let { it to member.modelName }
         }
-        // 用户手动熔断的厂商：候选整体跳过（人工决策覆盖自动健康状态）
-        val usable = resolvedMembers.filter { !it.first.provider.circuitOpen }
-        val breakerSkipped = resolvedMembers.size - usable.size
+        // 停用厂商/模型：静默跳过（不进入候选链，避免无效请求）
+        val enabledMembers = resolvedMembers.filter { (route, _) ->
+            val model = route.model
+            route.provider.enabled && (model == null || model.enabled)
+        }
+        val usable = enabledMembers.filterNot { it.first.provider.circuitOpen }
+        val breakerSkipped = enabledMembers.size - usable.size
         if (usable.isEmpty() && breakerSkipped > 0) {
-            _error.value = ChatError(breakerMessage(breakerSkipped, resolvedMembers.size))
+            _error.value = ChatError(breakerMessage(breakerSkipped, enabledMembers.size))
             return
         }
         val prepared = usable.mapNotNull { (route, modelName) ->

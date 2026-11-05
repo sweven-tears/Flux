@@ -253,9 +253,11 @@ class AppSettings(context: Context) {
     private val _chatPluginId = MutableStateFlow(prefs.getString(KEY_CHAT_PLUGIN, null))
     val chatPluginId: StateFlow<String?> = _chatPluginId
 
-    fun setChatPluginId(id: String) {
-        prefs.edit().putString(KEY_CHAT_PLUGIN, id).apply()
-        _chatPluginId.value = id
+    fun setChatPluginId(id: String?) {
+        prefs.edit().apply {
+            if (id.isNullOrBlank()) remove(KEY_CHAT_PLUGIN) else putString(KEY_CHAT_PLUGIN, id)
+        }.apply()
+        _chatPluginId.value = id?.takeIf { it.isNotBlank() }
     }
 
     /** 自定义（JSON）皮肤：整套样式表 JSON；null = 未自定义（回落内置预设） */

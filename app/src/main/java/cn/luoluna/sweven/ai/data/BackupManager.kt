@@ -200,7 +200,7 @@ class BackupManager(private val app: App) {
         map["searchCount"]?.toIntOrNull()?.let { s.setSearchCount(it) }
         // 界面风格/聊天背景：空串代表"未设置"，setter 会把它归一化成 null（回落默认）
         if (map.containsKey("chatUiPlugin")) {
-            map["chatUiPlugin"]?.takeIf { it.isNotBlank() }?.let { s.setChatPluginId(it) }
+            s.setChatPluginId(map["chatUiPlugin"]?.takeIf { it.isNotBlank() })
         }
         if (map.containsKey("chatStyleJson")) s.setChatStyleJson(map["chatStyleJson"])
         if (map.containsKey("chatBackground")) s.setChatBackgroundJson(map["chatBackground"])

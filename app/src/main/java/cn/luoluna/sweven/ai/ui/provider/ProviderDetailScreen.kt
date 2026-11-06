@@ -67,6 +67,7 @@ import cn.luoluna.sweven.ai.App
 import cn.luoluna.sweven.ai.data.db.ApiKeyEntity
 import cn.luoluna.sweven.ai.data.db.ModelEntity
 import cn.luoluna.sweven.ai.data.db.ProviderEntity
+import cn.luoluna.sweven.ai.data.db.ref
 import cn.luoluna.sweven.ai.net.ProviderProtocol
 import cn.luoluna.sweven.ai.net.RemoteModel
 import cn.luoluna.sweven.ai.net.TestResult
@@ -102,6 +103,13 @@ fun ProviderDetailScreen(id: Long, onBack: () -> Unit) {
     val models by remember(id) { app.database.modelDao().observeForProvider(id) }
         .collectAsStateWithLifecycle(initialValue = emptyList())
 
+    // 管理页范围：null = 该厂商全部密钥的模型并集；非 null = 只看某把密钥绑定的模型
+    var scopeKeyId by remember { mutableStateOf<Long?>(null) }
+    // 密钥被删除后自动回到「全部」
+    LaunchedEffect(keys) {
+        if (scopeKeyId != null && keys.none { it.id == scopeKeyId }) scopeKeyId = null
+    }
+
     var showBaseEdit by remember { mutableStateOf(false) }
     var showAliasEdit by remember { mutableStateOf(false) }
     var showRemarkEdit by remember { mutableStateOf(false) }
@@ -127,6 +135,11 @@ fun ProviderDetailScreen(id: Long, onBack: () -> Unit) {
         }
         return
     }
+
+    // 新增模型绑定到的密钥：优先当前聚焦的密钥，否则沿用旧版 activeKeyId／第一把密钥
+    val effectiveKeyId = scopeKeyId
+        ?: (p.activeKeyId?.takeIf { kid -> keys.any { it.id == kid } } ?: keys.firstOrNull()?.id)
+    val effectiveKeyAlias = keys.firstOrNull { it.id == effectiveKeyId }?.alias ?: "默认密钥"
 
     Scaffold(
         topBar = {
@@ -161,7 +174,8 @@ fun ProviderDetailScreen(id: Long, onBack: () -> Unit) {
     ) { padding ->
         // 拖拽换位后的本地顺序，落库完成前临时覆盖 Flow 数据
         var localModelOrder by remember { mutableStateOf<List<ModelEntity>?>(null) }
-        val displayModels = localModelOrder ?: models
+        val baseModels = localModelOrder ?: models
+        val displayModels = if (scopeKeyId == null) baseModels else baseModels.filter { it.apiKeyId == scopeKeyId }
         val reorderState = rememberReorderState(listState) { fromKey, toKey ->
             val from = displayModels.indexOfFirst { it.id == fromKey }
             val to = displayModels.indexOfFirst { it.id == toKey }
@@ -258,7 +272,7 @@ fun ProviderDetailScreen(id: Long, onBack: () -> Unit) {
                             onClick = {
                                 testing = true
                                 scope.launch {
-                                    val key = app.modelRouter.activeKey(p)
+                                    val key = keys.firstOrNull { it.id == effectiveKeyId }
                                     val r = app.providerClient.testConnection(p.baseUrl, key?.key, protocol = p.protocol)
                                     testResult = r
                                     testing = false
@@ -291,22 +305,14 @@ fun ProviderDetailScreen(id: Long, onBack: () -> Unit) {
                     keys.forEachIndexed { index, k ->
                         if (index > 0) HorizontalDivider(Modifier.padding(vertical = 4.dp))
                         Row(verticalAlignment = Alignment.CenterVertically) {
-                            RadioButton(
-                                selected = k.id == p.activeKeyId || (p.activeKeyId == null && index == 0),
-                                onClick = {
-                                    scope.launch { app.database.providerDao().setActiveKey(p.id, k.id) }
-                                },
-                            )
                             Column(Modifier.weight(1f)) {
                                 Row(verticalAlignment = Alignment.CenterVertically) {
                                     Text(k.alias, style = MaterialTheme.typography.bodyMedium)
-                                    if (k.id == p.activeKeyId || (p.activeKeyId == null && index == 0)) {
-                                        Text(
-                                            "  当前使用",
-                                            style = MaterialTheme.typography.labelSmall,
-                                            color = MaterialTheme.colorScheme.primary,
-                                        )
-                                    }
+                                    Text(
+                                        "  ${models.count { it.apiKeyId == k.id }} 个模型",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.primary,
+                                    )
                                 }
                                 Text(
                                     maskKey(k.key),
@@ -329,13 +335,37 @@ fun ProviderDetailScreen(id: Long, onBack: () -> Unit) {
             // 模型（模型行为独立条目，支持长按拖动排序）
             item(key = "models_header") {
                 Column {
+                    // 范围切换：每把密钥各自管理自己的模型；同名模型跨密钥靠区分名区分
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                    ) {
+                        FilterChip(
+                            selected = scopeKeyId == null,
+                            onClick = { scopeKeyId = null },
+                            label = { Text("全部密钥") },
+                        )
+                        keys.forEach { k ->
+                            FilterChip(
+                                selected = scopeKeyId == k.id,
+                                onClick = { scopeKeyId = k.id },
+                                label = { Text(k.alias) },
+                            )
+                        }
+                    }
+                    Text(
+                        "当前新增/拉取的模型将绑定到「$effectiveKeyAlias」；不同密钥下的同名模型需在编辑页填写不同的区分名。",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(top = 4.dp),
+                    )
                     // 单击走 30 分钟缓存（命中时 Toast 提示），双击强制刷新
                     fun fetchModelList(forceRefresh: Boolean) {
                         if (fetching) return
                         fetching = true
                         fetchError = null
                         scope.launch {
-                            val key = app.modelRouter.activeKey(p)
+                            val key = keys.firstOrNull { it.id == effectiveKeyId }
                             val cachedAge = app.providerClient.listModelsCacheAge(p.baseUrl, key?.key, p.protocol)
                             app.providerClient.listModels(
                                 p.baseUrl, key?.key, protocol = p.protocol, forceRefresh = forceRefresh,
@@ -356,7 +386,7 @@ fun ProviderDetailScreen(id: Long, onBack: () -> Unit) {
                     }
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text(
-                            "模型（${models.size}）",
+                            "模型（${displayModels.size}）",
                             style = MaterialTheme.typography.titleMedium,
                             modifier = Modifier.weight(1f),
                         )
@@ -385,7 +415,9 @@ fun ProviderDetailScreen(id: Long, onBack: () -> Unit) {
             if (displayModels.isEmpty()) {
                 item(key = "models_empty") {
                     Text(
-                        "尚未添加模型：可通过「获取列表」拉取 /models，或手动添加",
+                        if (scopeKeyId == null)
+                            "尚未添加模型：可通过「获取列表」拉取 /models，或手动添加"
+                        else "该密钥下还没有模型，点「获取列表」为它拉取并绑定模型",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -484,10 +516,11 @@ fun ProviderDetailScreen(id: Long, onBack: () -> Unit) {
     deleteKeyTarget?.let { k ->
         ConfirmDialog(
             title = "删除 Key",
-            text = "确定删除 API Key「${k.alias}」？",
+            text = "确定删除 API Key「${k.alias}」？该密钥下绑定的 ${models.count { it.apiKeyId == k.id }} 个模型也会一并删除。",
             onDismiss = { deleteKeyTarget = null },
             onConfirm = {
                 scope.launch {
+                    app.database.modelDao().deleteForApiKey(k.id)
                     app.database.apiKeyDao().delete(k)
                     if (p.activeKeyId == k.id) {
                         app.database.providerDao().setActiveKey(p.id, null)
@@ -516,9 +549,15 @@ fun ProviderDetailScreen(id: Long, onBack: () -> Unit) {
             providerId = p.id,
             isGeminiPreset = p.presetId == "gemini",
             existing = null,
+            apiKeyId = effectiveKeyId,
+            takenRefs = models.map { it.ref }.toSet(),
             onDismiss = { showNewModel = false },
             onSave = { m ->
                 scope.launch {
+                    if (app.database.modelDao().refNameTaken(p.id, m.ref, -1)) {
+                        Toast.makeText(context, "模型名称「${m.ref}」已被占用，请填写区分名", Toast.LENGTH_SHORT).show()
+                        return@launch
+                    }
                     val next = (app.database.modelDao().forProvider(p.id).maxOfOrNull { it.sortOrder } ?: -1) + 1
                     app.database.modelDao().insert(m.copy(sortOrder = next))
                     showNewModel = false
@@ -531,9 +570,15 @@ fun ProviderDetailScreen(id: Long, onBack: () -> Unit) {
             providerId = p.id,
             isGeminiPreset = p.presetId == "gemini",
             existing = m,
+            apiKeyId = m.apiKeyId ?: effectiveKeyId,
+            takenRefs = models.filter { it.id != m.id }.map { it.ref }.toSet(),
             onDismiss = { editModel = null },
             onSave = { nm ->
                 scope.launch {
+                    if (app.database.modelDao().refNameTaken(p.id, nm.ref, nm.id)) {
+                        Toast.makeText(context, "模型名称「${nm.ref}」已被占用，请填写区分名", Toast.LENGTH_SHORT).show()
+                        return@launch
+                    }
                     app.database.modelDao().update(nm)
                     editModel = null
                 }
@@ -543,9 +588,11 @@ fun ProviderDetailScreen(id: Long, onBack: () -> Unit) {
     fetchedModels?.let { fetched ->
         FetchModelsDialog(
             fetched = fetched,
-            existingNames = models.map { it.name }.toSet(),
+            existingNames = models.filter { it.apiKeyId == effectiveKeyId }.map { it.name }.toSet(),
+            takenRefs = models.map { it.ref }.toSet(),
+            effectiveKeyAlias = effectiveKeyAlias,
             onDismiss = { fetchedModels = null },
-            onConfirm = { selected ->
+            onConfirm = { selected, refNames ->
                 scope.launch {
                     val base = (app.database.modelDao().forProvider(p.id).maxOfOrNull { it.sortOrder } ?: -1) + 1
                     app.database.modelDao().insertAll(
@@ -553,6 +600,8 @@ fun ProviderDetailScreen(id: Long, onBack: () -> Unit) {
                             ModelEntity(
                                 providerId = p.id,
                                 name = rm.id,
+                                apiKeyId = effectiveKeyId,
+                                refName = refNames[rm.id] ?: rm.id,
                                 alias = rm.displayName,
                                 type = rm.type,
                                 inputText = rm.inputText,
@@ -633,15 +682,15 @@ private fun ModelRowCard(
             ) {
                 Column(Modifier.weight(1f)) {
                     Text(
-                        model.alias?.takeIf { it.isNotBlank() } ?: model.name,
+                        model.alias?.takeIf { it.isNotBlank() } ?: model.ref,
                         style = MaterialTheme.typography.bodyMedium,
                         maxLines = 1,
                         modifier = Modifier.basicMarquee(),
                     )
-                    // 有别名时模型 id 退居第二行（小字浅色），超长可跑马灯
-                    if (model.alias?.isNotBlank() == true) {
+                    // 第二行显示上游模型 id；有区分名时一并展示，避免两条同名模型看起来一样
+                    if (model.alias?.isNotBlank() == true || model.ref != model.name) {
                         Text(
-                            model.name,
+                            if (model.ref != model.name) "${model.name}  ·  ${model.ref}" else model.name,
                             style = MaterialTheme.typography.labelSmall,
                             fontFamily = FontFamily.Monospace,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -717,26 +766,51 @@ private fun AddKeyDialog(
 @Composable
 private fun FetchModelsDialog(
     fetched: List<RemoteModel>,
+    /** 当前密钥下已存在的「上游模型 id」：用于同 key 内去重，不阻止跨 key 同名 */
     existingNames: Set<String>,
+    /** 同厂商内已占用的全部区分名：跨 key 同名时用来判定必须改名 */
+    takenRefs: Set<String>,
+    effectiveKeyAlias: String,
     onDismiss: () -> Unit,
-    onConfirm: (List<RemoteModel>) -> Unit,
+    /** 回调：勾选的新模型 + 每个模型最终采用的区分名 */
+    onConfirm: (List<RemoteModel>, Map<String, String>) -> Unit,
 ) {
     var filter by remember { mutableStateOf("") }
     var checked by remember {
+        mutableStateOf(fetched.associate { it.id to (it.id !in existingNames) })
+    }
+    // 跨密钥同名：预填「模型id@密钥别名」，并确保不与已有引用名冲突
+    var refInputs by remember {
         mutableStateOf(
-            fetched.associate { it.id to (it.id !in existingNames) }
+            fetched.filter { it.id !in existingNames && it.id in takenRefs }
+                .associate { rm ->
+                    val base = "${rm.id}@${effectiveKeyAlias}"
+                    var candidate = base
+                    var n = 2
+                    while (candidate in takenRefs) candidate = "$base(${n++})"
+                    rm.id to candidate
+                }
         )
     }
     val shown = if (filter.isBlank()) fetched
     else fetched.filter { normalizeModelId(it.id).contains(normalizeModelId(filter)) }
     val selectable = shown.filter { it.id !in existingNames }
     val allNewSelected = selectable.isNotEmpty() && selectable.all { checked[it.id] == true }
+    val refOf: (RemoteModel) -> String = { rm ->
+        refInputs[rm.id]?.trim()?.takeIf { it.isNotEmpty() } ?: rm.id
+    }
+    val selectedNew = shown.filter { checked[it.id] == true && it.id !in existingNames }
+    val finalRefs = selectedNew.associate { it.id to refOf(it) }
+    // 任一条区分名与已有引用重名，或勾选的两条互相重名，都不允许落库
+    val refConflict = finalRefs.values.any { it in takenRefs } ||
+        finalRefs.values.groupingBy { it }.eachCount().any { it.value > 1 }
+    val canConfirm = selectedNew.isNotEmpty() && !refConflict
     AlertDialog(
         onDismissRequest = onDismiss,
         confirmButton = {
-            TextButton(onClick = {
-                onConfirm(shown.filter { checked[it.id] == true })
-            }) { Text("添加所选") }
+            TextButton(onClick = { onConfirm(selectedNew, finalRefs) }, enabled = canConfirm) {
+                Text("添加所选")
+            }
         },
         dismissButton = {
             Row {
@@ -746,14 +820,22 @@ private fun FetchModelsDialog(
                 TextButton(onClick = onDismiss) { Text("取消") }
             }
         },
-        title = { Text("选择模型（${fetched.size}）") },
+        title = { Text("选择模型（${fetched.size}）· 绑定到「$effectiveKeyAlias」") },
         text = {
             Column {
                 Text(
-                    "已按名称自动匹配模型类型与模态，添加后可再编辑",
+                    "同密钥下已添加的模型不可重复勾选；与其它密钥下同名模型冲突时会要求填写区分名（上游模型 id 不变）。",
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
+                if (refConflict) {
+                    Text(
+                        "存在重名或已占用的区分名，请修改后再添加",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.error,
+                        modifier = Modifier.padding(top = 4.dp),
+                    )
+                }
                 OutlinedTextField(
                     value = filter,
                     onValueChange = { filter = it },
@@ -767,6 +849,7 @@ private fun FetchModelsDialog(
                 LazyColumn(Modifier.height(360.dp)) {
                     items(shown, key = { it.id }) { rm ->
                         val isExisting = rm.id in existingNames
+                        val needsRef = rm.id in takenRefs && !isExisting
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Checkbox(
                                 checked = isExisting || (checked[rm.id] ?: false),
@@ -775,7 +858,7 @@ private fun FetchModelsDialog(
                             )
                             Column(Modifier.weight(1f).padding(vertical = 4.dp)) {
                                 Text(
-                                    rm.id + if (isExisting) "（已添加）" else "",
+                                    rm.id + if (isExisting) "（当前密钥已添加）" else "",
                                     style = MaterialTheme.typography.bodySmall,
                                     fontFamily = FontFamily.Monospace,
                                 )
@@ -798,6 +881,17 @@ private fun FetchModelsDialog(
                                     }
                                     ModalityTag("入${ins.joinToString("")}")
                                     ModalityTag("出${outs.joinToString("")}")
+                                }
+                                if (needsRef && (checked[rm.id] ?: false)) {
+                                    OutlinedTextField(
+                                        value = refInputs[rm.id].orEmpty(),
+                                        onValueChange = { refInputs = refInputs + (rm.id to it) },
+                                        label = { Text("区分名（与其它密钥同名）") },
+                                        supportingText = { Text("会话/网关引用名，不能与已有名称重复；上游请求仍用 ${rm.id}") },
+                                        singleLine = true,
+                                        isError = refOf(rm) in takenRefs,
+                                        modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
+                                    )
                                 }
                             }
                         }

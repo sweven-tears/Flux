@@ -1,5 +1,7 @@
 package cn.luoluna.sweven.ai.server
 
+import cn.luoluna.sweven.ai.data.db.ref
+
 import android.app.Service
 import android.content.Context
 import android.content.Intent
@@ -107,7 +109,7 @@ class VideoJobManager private constructor(private val context: Context) {
             VideoJobEntity(
                 conversationId = conversationId,
                 providerId = provider.id,
-                modelName = model.name,
+                modelName = model.ref,
                 prompt = prompt,
                 upstreamJobId = upstreamId,
                 status = VideoJobEntity.STATUS_RUNNING,
@@ -122,7 +124,7 @@ class VideoJobManager private constructor(private val context: Context) {
             VideoJobEntity(
                 conversationId = conversationId,
                 providerId = provider.id,
-                modelName = model.name,
+                modelName = model.ref,
                 prompt = prompt,
                 status = VideoJobEntity.STATUS_FAILED,
                 error = e.message ?: "提交失败",
@@ -143,7 +145,7 @@ class VideoJobManager private constructor(private val context: Context) {
             val key = r.getOrNull()
             if (key != null) {
                 if (model.id > 0) {
-                    val row = app.database.modelDao().find(model.providerId, model.name)
+                    val row = app.database.modelDao().find(model.providerId, model.ref)
                     if (row != null && row.videoApiShape != adapter.shapeId) {
                         app.database.modelDao().update(row.copy(videoApiShape = adapter.shapeId))
                     }
@@ -206,8 +208,8 @@ class VideoJobManager private constructor(private val context: Context) {
             )
             polling.remove(jobId)?.cancel()
             val provider = app.database.providerDao().byId(job.providerId)
-            val key = provider?.let { app.modelRouter.activeKey(it) }?.key
             val model = provider?.let { app.database.modelDao().find(it.id, job.modelName) }
+            val key = model?.let { app.modelRouter.keyFor(it, provider) }?.key
             val shape = jobShapes[jobId] ?: model?.videoApiShape
             val adapter = VideoAdapters.byId(shape)
             if (provider != null && key != null && job.upstreamJobId != null && adapter != null) {
@@ -285,13 +287,13 @@ class VideoJobManager private constructor(private val context: Context) {
                     failJob(job, "厂商已删除或停用")
                     return
                 }
-                val key = app.modelRouter.activeKey(provider)?.key
+                val model = app.database.modelDao().find(provider.id, job.modelName)
+                    ?: ModelEntity(providerId = provider.id, name = job.modelName)
+                val key = app.modelRouter.keyFor(model, provider)?.key
                 if (key.isNullOrBlank()) {
                     failJob(job, "厂商缺少 API Key")
                     return
                 }
-                val model = app.database.modelDao().find(provider.id, job.modelName)
-                    ?: ModelEntity(providerId = provider.id, name = job.modelName)
                 val ctx = buildContext(provider, key, model, job.prompt)
                 val shape = jobShapes[jobId] ?: model.videoApiShape?.also { jobShapes[jobId] = it }
                 val adapter: VideoApiAdapter = VideoAdapters.byId(shape) ?: run {

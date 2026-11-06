@@ -14,6 +14,7 @@ import cn.luoluna.sweven.ai.data.db.MessageEntity
 import cn.luoluna.sweven.ai.data.db.ModelDao
 import cn.luoluna.sweven.ai.data.db.ModelEntity
 import cn.luoluna.sweven.ai.data.db.ModelType
+import cn.luoluna.sweven.ai.data.db.ref
 import cn.luoluna.sweven.ai.data.db.PresetDao
 import cn.luoluna.sweven.ai.data.db.PresetEntity
 import cn.luoluna.sweven.ai.data.db.ProviderDao
@@ -96,9 +97,9 @@ import kotlinx.serialization.json.put
 /** 模型选择器条目：厂商 + 模型 */
 data class PickerModel(val provider: ProviderEntity, val model: ModelEntity) {
     /** 局域网聚合 id（按模型 id） */
-    val aggregateId: String get() = "${provider.alias}/${model.name}"
+    val aggregateId: String get() = "${provider.alias}/${model.ref}"
     /** 展示名（优先别名） */
-    val displayName: String get() = model.alias?.takeIf { it.isNotBlank() } ?: model.name
+    val displayName: String get() = model.alias?.takeIf { it.isNotBlank() } ?: model.ref
     val displayId: String get() = "${provider.alias}/$displayName"
     /** 模型是否处于启用状态（禁用模型仅供预设编辑回显，聊天选择器不出现） */
     val enabled: Boolean get() = model.enabled
@@ -272,7 +273,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                 models.filter {
                     it.providerId == provider.id && it.enabled &&
                         (it.type == ModelType.CHAT || it.outputImage)
-                }.map { provider.id to it.name }
+                }.map { provider.id to it.ref }
             }
         }.stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
 
@@ -286,7 +287,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         combine(smartChain, modelDao.observeAll()) { chain, models ->
             aggregateCapability(
                 chain.mapNotNull { (providerId, modelName) ->
-                    models.firstOrNull { it.providerId == providerId && it.name == modelName }
+                    models.firstOrNull { it.providerId == providerId && it.ref == modelName }
                 },
             )
         }.stateIn(viewModelScope, SharingStarted.Eagerly, aggregateCapability(emptyList()))
@@ -311,7 +312,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                         group = g,
                         capability = intersectCapability(
                             usable.filter { it.groupId == g.id }.mapNotNull { m ->
-                                models.firstOrNull { it.providerId == m.providerId && it.name == m.modelName }
+                                models.firstOrNull { it.providerId == m.providerId && it.ref == m.modelName }
                             },
                         ),
                     )
@@ -334,7 +335,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                 if (providerId == RouteGroupTarget.PROVIDER_ID) {
                     return groups.firstOrNull { it.groupKey == modelName }?.let { ChatTarget.Group(it) }
                 }
-                return models.firstOrNull { it.provider.id == providerId && it.model.name == modelName }
+                return models.firstOrNull { it.provider.id == providerId && it.model.ref == modelName }
                     ?.let { ChatTarget.Single(it) }
             }
             conv?.providerId?.let { pid -> resolve(pid, conv.modelName) }
@@ -626,7 +627,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
 
     /** 会话持久化的目标标识：单个模型为真实厂商 id；smartAi/路由分组为哨兵值（分组的 modelName 存 groupKey） */
     private fun ChatTarget.identifiers(): Pair<Long, String> = when (this) {
-        is ChatTarget.Single -> picker.provider.id to picker.model.name
+        is ChatTarget.Single -> picker.provider.id to picker.model.ref
         ChatTarget.SmartAi -> SmartAi.pair
         is ChatTarget.Group -> RouteGroupTarget.PROVIDER_ID to group.groupKey
     }
@@ -835,7 +836,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
             _error.value = ChatError("厂商「${picker.provider.alias}」已被停用，请到「厂商」页启用后再发送")
             return
         }
-        val key = router.activeKey(provider)
+        val key = router.keyFor(picker.model, provider)
         if (key == null || key.key.isBlank()) {
             _error.value = ChatError("厂商「${picker.provider.alias}」未配置 API Key，请到「厂商」页添加")
             return
@@ -846,7 +847,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         _streaming.value = true
         _streamingText.value = ""
         _streamingReasoning.value = ""
-        activeStreamModel = picker.provider.id to picker.model.name
+        activeStreamModel = picker.provider.id to picker.model.ref
         beginStreamStats()
         var publisher = StreamPublisher()
         sendJob = viewModelScope.launch {
@@ -1016,7 +1017,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
             _error.value = ChatError("厂商「${picker.provider.alias}」已被停用，请到「厂商」页启用后再发送")
             return
         }
-        val key = router.activeKey(provider)
+        val key = router.keyFor(picker.model, provider)
         if (key == null || key.key.isBlank()) {
             _error.value = ChatError("厂商「${picker.provider.alias}」未配置 API Key，请到「厂商」页添加")
             return
@@ -1049,7 +1050,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
             _error.value = ChatError("Anthropic（Claude）暂不提供图片生成接口，请换用支持生图的厂商")
             return
         }
-        val key = router.activeKey(provider)
+        val key = router.keyFor(picker.model, provider)
         if (key == null || key.key.isBlank()) {
             _error.value = ChatError("厂商「${picker.provider.alias}」未配置 API Key，请到「厂商」页添加")
             return
@@ -1063,7 +1064,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         _error.value = null
         _generatingImage.value = true
         _streaming.value = true
-        activeStreamModel = provider.id to picker.model.name
+        activeStreamModel = provider.id to picker.model.ref
         sendJob = viewModelScope.launch {
             var failed: ChatError? = null
             var imageDataUrl: String? = null
@@ -1114,7 +1115,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
     /** flux-auto：合集=全部启用模型（厂商序×模型序），本次请求按模态筛出能用的候选，首字前失败/超时自动切换 */
     private suspend fun streamSmart(convId: Long) {
         val chain: List<Pair<Long, String>> = router.allModelsChain()
-            .map { (provider, model) -> provider.id to model.name }
+            .map { (provider, model) -> provider.id to model.ref }
         if (chain.isEmpty()) {
             _error.value = ChatError("${SmartAi.MODEL_NAME} 没有可聚合的启用模型，请检查厂商与模型是否已启用")
             return
@@ -1261,9 +1262,9 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         val model = resolved.model ?: ModelEntity(providerId = resolved.provider.id, name = modelName)
         val built = buildRequestBody(resolved.provider, model, conversation, history, cache)
         val candidate = SmartCandidate(
-            label = "${resolved.provider.alias}/${model.alias?.takeIf { it.isNotBlank() } ?: model.name}",
+            label = "${resolved.provider.alias}/${model.alias?.takeIf { it.isNotBlank() } ?: model.ref}",
             providerId = resolved.provider.id,
-            modelName = model.name,
+            modelName = model.ref,
             providerAlias = resolved.provider.alias,
             baseUrl = resolved.provider.baseUrl,
             apiKey = key.key,
@@ -1739,7 +1740,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                 compareBy(
                     { providerRank[it.provider.id] ?: Int.MAX_VALUE },
                     { it.model.sortOrder },
-                    { it.model.name.lowercase() },
+                    { it.model.ref.lowercase() },
                 )
             )
         }

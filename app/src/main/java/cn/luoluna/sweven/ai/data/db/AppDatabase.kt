@@ -26,7 +26,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         ModelAbnormalEntity::class,
         CustomToolEntity::class,
     ],
-    version = 20,
+    version = 21,
     exportSchema = false,
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -283,13 +283,44 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        /** v20 → v21：模型绑定密钥（apiKeyId）+ 对外引用名（refName） */
+        private val MIGRATION_20_21 = object : Migration(20, 21) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE `models` ADD COLUMN `apiKeyId` INTEGER")
+                db.execSQL("ALTER TABLE `models` ADD COLUMN `refName` TEXT")
+                // 旧内容兼容：已有模型统一归到「当前启动的密钥」（无则最早一把），
+                // 其余密钥需要重新获取模型列表来绑定自己的模型。
+                db.execSQL(
+                    "UPDATE `models` SET `apiKeyId` = COALESCE(" +
+                        "(SELECT p.`activeKeyId` FROM `providers` p " +
+                        " WHERE p.`id` = `models`.`providerId` " +
+                        "   AND p.`activeKeyId` IN (SELECT `id` FROM `api_keys`)), " +
+                        "(SELECT k.`id` FROM `api_keys` k " +
+                        " WHERE k.`providerId` = `models`.`providerId` " +
+                        " ORDER BY k.`createdAt` ASC, k.`id` ASC LIMIT 1))"
+                )
+                // refName 默认等于上游模型 id：旧会话 / 预设 / 网关引用全部保持有效
+                db.execSQL("UPDATE `models` SET `refName` = `name`")
+                // 旧库没有唯一约束，可能已存在同厂商同名重复行：保留最小 id，其余追加不重复后缀
+                db.execSQL(
+                    "UPDATE `models` SET `refName` = `refName` || '#dup' || `id` " +
+                        "WHERE `id` NOT IN (SELECT MIN(`id`) FROM `models` GROUP BY `providerId`, `name`)"
+                )
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_models_apiKeyId` ON `models` (`apiKeyId`)")
+                db.execSQL(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS `index_models_providerId_refName` " +
+                        "ON `models` (`providerId`, `refName`)"
+                )
+            }
+        }
+
         fun build(context: Context): AppDatabase =
             Room.databaseBuilder(context, AppDatabase::class.java, "flux.db")
                 .addMigrations(
                     MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7,
                     MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12,
                     MIGRATION_12_13, MIGRATION_13_14, MIGRATION_14_15, MIGRATION_15_16, MIGRATION_16_17,
-                    MIGRATION_17_18, MIGRATION_18_19, MIGRATION_19_20,
+                    MIGRATION_17_18, MIGRATION_18_19, MIGRATION_19_20, MIGRATION_20_21,
                 )
                 .fallbackToDestructiveMigration()
                 .build()

@@ -1,5 +1,7 @@
 package cn.luoluna.sweven.ai.ui.chat
 
+import cn.luoluna.sweven.ai.data.db.ref
+
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -44,7 +46,7 @@ fun PresetDialog(
     var selected by remember {
         mutableStateOf(
             existing?.providerId?.let { pid ->
-                models.firstOrNull { it.provider.id == pid && it.model.name == existing?.modelName }
+                models.firstOrNull { it.provider.id == pid && it.model.ref == existing?.modelName }
             }
         )
     }
@@ -56,7 +58,7 @@ fun PresetDialog(
             onDismiss = { showPicker = false },
             models = models,
             selectedProviderId = selected?.provider?.id,
-            selectedModelName = selected?.model?.name,
+            selectedModelName = selected?.model?.ref,
             onSelect = { selected = it; showPicker = false },
             onGoProviders = { showPicker = false },
         )
@@ -69,7 +71,7 @@ fun PresetDialog(
                 if (name.isBlank()) {
                     error = "请填写预设名称"
                 } else {
-                    onSave(name, systemPrompt, selected?.provider?.id, selected?.model?.name)
+                    onSave(name, systemPrompt, selected?.provider?.id, selected?.model?.ref)
                 }
             }) { Text("保存") }
         },

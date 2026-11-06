@@ -1,5 +1,7 @@
 package cn.luoluna.sweven.ai.ui.provider
 
+import cn.luoluna.sweven.ai.data.db.ref
+
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -163,7 +165,7 @@ fun ModelTestDialog(
         val model = selected ?: return
         scope.launch {
             val client = app.providerClient
-            val key = app.modelRouter.activeKey(provider)
+            val key = app.modelRouter.keyFor(model, provider)
             if (key == null || key.key.isBlank()) {
                 TestKind.entries.forEach {
                     states[it] = TestState.Failure(0, "厂商「${provider.alias}」未配置 API Key")
@@ -239,7 +241,7 @@ fun ModelTestDialog(
                 ) {
                     OutlinedTextField(
                         value = selected?.let { m ->
-                            m.alias?.takeIf { it.isNotBlank() }?.let { "${it}（${m.name}）" } ?: m.name
+                            m.alias?.takeIf { it.isNotBlank() }?.let { "${it}（${m.ref}）" } ?: m.ref
                         } ?: "无可用模型",
                         onValueChange = {},
                         readOnly = true,
@@ -257,7 +259,7 @@ fun ModelTestDialog(
                             DropdownMenuItem(
                                 text = {
                                     Column {
-                                        Text(m.alias?.takeIf { it.isNotBlank() } ?: m.name)
+                                        Text(m.alias?.takeIf { it.isNotBlank() } ?: m.ref)
                                         Text(
                                             m.name,
                                             style = MaterialTheme.typography.labelSmall,
@@ -486,7 +488,7 @@ private fun buildTestLog(
     appendLine("== ${kind.label} 测试失败 ==")
     appendLine("时间: $ts")
     appendLine("厂商: ${provider.alias}  (${provider.baseUrl})")
-    appendLine("模型: ${model.name}")
+    appendLine("模型: ${model.ref}")
     appendLine()
     appendLine("== 错误信息 ==")
     appendLine(e.message ?: e.javaClass.simpleName)

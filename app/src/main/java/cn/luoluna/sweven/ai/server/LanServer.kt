@@ -1,5 +1,7 @@
 package cn.luoluna.sweven.ai.server
 
+import cn.luoluna.sweven.ai.data.db.ref
+
 import cn.luoluna.sweven.ai.data.AppSettings
 import cn.luoluna.sweven.ai.data.SmartModes
 import cn.luoluna.sweven.ai.data.db.AbnormalVia
@@ -308,13 +310,13 @@ class LanServer(
             data += enabled.mapNotNull { m ->
                 val p = providers[m.providerId] ?: return@mapNotNull null
                 buildJsonObject {
-                    put("id", "${p.alias}/${m.name}")
+                    put("id", "${p.alias}/${m.ref}")
                     put("object", "model")
                     put("owned_by", p.alias)
                     put(
                         "phone_router",
                         buildJsonObject {
-                            put("display", m.alias?.takeIf { it.isNotBlank() } ?: m.name)
+                            put("display", m.alias?.takeIf { it.isNotBlank() } ?: m.ref)
                             put("type", m.type)
                             put("input", modalities(m.inputText, m.inputImage, m.inputVideo))
                             put("output", modalities(m.outputText, m.outputImage, m.outputVideo))
@@ -458,8 +460,10 @@ class LanServer(
         }
         val stream = streamFlagOf(body)
         val modelName = aggregateId.substring(aggregateId.indexOf('/') + 1)
+        // 请求体用上游模型 id（name）；区分名 refName 只用于会话/网关引用，绝不能发给上游
+        val upstreamName = route.model?.name ?: modelName
         var payload = buildChatBody(
-            modelName = modelName,
+            modelName = upstreamName,
             messages = messages,
             stream = stream,
             defaults = route.advancedParams,
@@ -607,7 +611,7 @@ class LanServer(
             )
             return
         }
-        val routes = router.allModelsChain().map { (provider, model) -> provider.id to model.name }
+        val routes = router.allModelsChain().map { (provider, model) -> provider.id to model.ref }
         if (routes.isEmpty()) {
             logRequest(device, aggregateId, null, stream, startedAt, null, false, "${SmartAi.MODEL_NAME} 没有可用的候选模型")
             respondOpenAiError(
@@ -667,7 +671,7 @@ class LanServer(
             eligible,
             features,
             modelOf = { it.model },
-            bucketOf = { SmartHealth.bucket(it.provider.id, it.model.name, now) },
+            bucketOf = { SmartHealth.bucket(it.provider.id, it.model.ref, now) },
         )
 
         executeSmartCandidates(
@@ -741,7 +745,7 @@ class LanServer(
             eligible,
             features,
             modelOf = { it.model },
-            bucketOf = { SmartHealth.bucket(it.provider.id, it.model.name, now) },
+            bucketOf = { SmartHealth.bucket(it.provider.id, it.model.ref, now) },
         )
         val policy = SmartPolicy(
             mode = mode,
@@ -781,14 +785,14 @@ class LanServer(
         for (round in 1..maxRounds) {
             // 健康桶整轮取同一时刻，避免轮内冷却状态漂移
             val roundNow = System.currentTimeMillis()
-            val pool = prepared.filter { "${it.provider.id}:${it.model.name}" !in retired }
+            val pool = prepared.filter { "${it.provider.id}:${it.model.ref}" !in retired }
             // 极速模式首轮只发健康且速度未知/实测达标的候选（限制学费上界）；一轮无成功后放宽为完整链
             val roundCandidates = if (policy.mode == SmartModes.FAST && round == 1) {
                 pickFastRound(
                     pool,
                     SMART_FAST_ROUND_LIMIT,
-                    bucketOf = { SmartHealth.bucket(it.provider.id, it.model.name, roundNow) },
-                    fastCapableOf = { SmartHealth.fastCapable(it.provider.id, it.model.name, policy.fastMs) },
+                    bucketOf = { SmartHealth.bucket(it.provider.id, it.model.ref, roundNow) },
+                    fastCapableOf = { SmartHealth.fastCapable(it.provider.id, it.model.ref, policy.fastMs) },
                 )
             } else {
                 pool
@@ -813,19 +817,19 @@ class LanServer(
                 lastErrors[candidate.label] = message
                 roundKinds += kind
                 if (!candidate.provider.retryable) {
-                    retired += "${candidate.provider.id}:${candidate.model.name}"
+                    retired += "${candidate.provider.id}:${candidate.model.ref}"
                 }
-                recordAbnormal(candidate.provider, candidate.model.name, httpCode, message)
+                recordAbnormal(candidate.provider, candidate.model.ref, httpCode, message)
                 when {
                     kind == FailureKind.TIMEOUT && policy.mode == SmartModes.FAST && round == 1 ->
-                        SmartHealth.recordSlow(candidate.provider.id, candidate.model.name, policy.fastMs)
+                        SmartHealth.recordSlow(candidate.provider.id, candidate.model.ref, policy.fastMs)
                     kind == FailureKind.RATE_LIMIT ->
                         SmartHealth.recordCooldown(
-                            candidate.provider.id, candidate.model.name, roundNow,
+                            candidate.provider.id, candidate.model.ref, roundNow,
                             retryAfterMs ?: policy.cooldownMs,
                         )
                     else -> SmartHealth.recordFailure(
-                        candidate.provider.id, candidate.model.name, roundNow,
+                        candidate.provider.id, candidate.model.ref, roundNow,
                         policy.cooldownThreshold, policy.cooldownMs, kind,
                     )
                 }
@@ -877,7 +881,7 @@ class LanServer(
                         continue
                     }
                     SmartHealth.recordSuccess(
-                        candidate.provider.id, candidate.model.name, System.currentTimeMillis() - startedAt,
+                        candidate.provider.id, candidate.model.ref, System.currentTimeMillis() - startedAt,
                     )
                     val usage = extractUsage(resp)
                     logRequest(
@@ -941,7 +945,7 @@ class LanServer(
                         } else {
                             // 原生协议：解析归一化后回译为 OpenAI chunk 帧
                             client.chatEvents(upstream, candidate.provider.protocol).collect { ev ->
-                                chatEventToChunkLine(ev, candidate.model.name)?.let { payloads.send(it) }
+                                chatEventToChunkLine(ev, candidate.model.ref)?.let { payloads.send(it) }
                             }
                         }
                     } catch (e: CancellationException) {
@@ -967,7 +971,7 @@ class LanServer(
                     continue
                 }
                 SmartHealth.recordSuccess(
-                    candidate.provider.id, candidate.model.name, System.currentTimeMillis() - startedAt,
+                    candidate.provider.id, candidate.model.ref, System.currentTimeMillis() - startedAt,
                 )
                 val ttft = System.currentTimeMillis() - startedAt
                 var promptTok: Long? = null
@@ -1130,13 +1134,13 @@ class LanServer(
             if (p != null && m != null) p to m else null
         } else {
             val matches = modelDao.observeEnabled().first()
-                .filter { it.name == modelId && it.outputVideo }
+                .filter { it.ref == modelId && it.outputVideo }
                 .mapNotNull { m -> providers[m.providerId]?.let { it to m } }
             if (matches.size > 1) {
                 respondOpenAiError(
                     HttpStatusCode.BadRequest,
                     "模型名「$modelId」在多个厂商存在，请用「厂商别名/模型名」格式（候选：" +
-                        matches.joinToString("、") { "${it.first.alias}/${it.second.name}" } + "）",
+                        matches.joinToString("、") { "${it.first.alias}/${it.second.ref}" } + "）",
                 )
                 return
             }
@@ -1150,10 +1154,10 @@ class LanServer(
             return
         }
         if (!model.outputVideo) {
-            respondOpenAiError(HttpStatusCode.BadRequest, "「${provider.alias}/${model.name}」未标记视频输出能力，不能用于视频生成")
+            respondOpenAiError(HttpStatusCode.BadRequest, "「${provider.alias}/${model.ref}」未标记视频输出能力，不能用于视频生成")
             return
         }
-        val key = router.activeKey(provider)
+        val key = router.keyFor(model, provider)
         if (key == null || key.key.isBlank()) {
             respondOpenAiError(HttpStatusCode.BadRequest, "厂商「${provider.alias}」尚未配置 API Key")
             return
@@ -1247,5 +1251,5 @@ private data class SmartPrepared(
     val advancedParams: AdvancedParams?,
 ) {
     val label: String
-        get() = "${provider.alias}/${model.alias?.takeIf { it.isNotBlank() } ?: model.name}"
+        get() = "${provider.alias}/${model.alias?.takeIf { it.isNotBlank() } ?: model.ref}"
 }

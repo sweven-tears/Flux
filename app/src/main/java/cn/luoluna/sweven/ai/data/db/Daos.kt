@@ -106,8 +106,28 @@ interface ModelDao {
     @Query("SELECT * FROM models WHERE providerId = :providerId ORDER BY sortOrder ASC, name COLLATE NOCASE ASC")
     suspend fun forProvider(providerId: Long): List<ModelEntity>
 
-    @Query("SELECT * FROM models WHERE providerId = :providerId AND name = :name LIMIT 1")
-    suspend fun find(providerId: Long, name: String): ModelEntity?
+    /** 按对外引用名解析（区分名优先，旧数据回落上游模型 id） */
+    @Query(
+        "SELECT * FROM models WHERE providerId = :providerId " +
+            "AND COALESCE(NULLIF(refName, ''), name) = :ref LIMIT 1"
+    )
+    suspend fun find(providerId: Long, ref: String): ModelEntity?
+
+    /** 同厂商内引用名是否已被其它模型占用（UI 实时校验、保存兜底、启用前校验共用） */
+    @Query(
+        "SELECT EXISTS(SELECT 1 FROM models WHERE providerId = :providerId " +
+            "AND COALESCE(NULLIF(refName, ''), name) = :ref AND id != :excludeId)"
+    )
+    suspend fun refNameTaken(providerId: Long, ref: String, excludeId: Long): Boolean
+
+    @Query("SELECT * FROM models WHERE apiKeyId = :keyId ORDER BY sortOrder ASC, name COLLATE NOCASE ASC")
+    suspend fun forApiKey(keyId: Long): List<ModelEntity>
+
+    @Query("SELECT COUNT(*) FROM models WHERE apiKeyId = :keyId")
+    suspend fun countForApiKey(keyId: Long): Int
+
+    @Query("DELETE FROM models WHERE apiKeyId = :keyId")
+    suspend fun deleteForApiKey(keyId: Long)
 
     @Query("DELETE FROM models")
     suspend fun clearAll()

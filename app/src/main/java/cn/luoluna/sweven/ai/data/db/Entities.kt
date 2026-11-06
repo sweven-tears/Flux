@@ -73,13 +73,22 @@ object ModelType {
             onDelete = ForeignKey.CASCADE,
         )
     ],
-    indices = [Index("providerId")],
+    indices = [
+        Index("providerId"),
+        Index("apiKeyId"),
+        Index(value = ["providerId", "refName"], unique = true),
+    ],
 )
 @Serializable
 data class ModelEntity(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
     val providerId: Long,
+    /** 发给上游的模型 id（永远不改；区分名只改 refName） */
     val name: String,
+    /** 绑定的密钥 id；null = 旧数据，由 ModelRouter 回退到 activeKeyId／首把 key */
+    val apiKeyId: Long? = null,
+    /** 对外引用名（会话/网关/智能路由）；null 或空 = 等于 name。同一厂商内必须唯一 */
+    val refName: String? = null,
     val enabled: Boolean = true,
     /** 显示别名（为空时显示模型 id） */
     val alias: String? = null,
@@ -362,6 +371,10 @@ data class AuthDeviceEntity(
         const val STATUS_BLOCKED = "blocked"
     }
 }
+
+/** 对外引用名：区分名优先，未设置时回落到上游模型 id（兼容旧数据与旧备份） */
+val ModelEntity.ref: String
+    get() = refName?.takeIf { it.isNotBlank() } ?: name
 
 object Role {
     const val USER = "user"

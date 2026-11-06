@@ -1,5 +1,7 @@
 package cn.luoluna.sweven.ai.data.repo
 
+import cn.luoluna.sweven.ai.data.db.ref
+
 import cn.luoluna.sweven.ai.data.db.ModelEntity
 
 /**
@@ -51,7 +53,7 @@ object ModelIdGrouper {
      * 也会拿假模型冒用真 id；按备注归组可以让前者不漏组、后者不误入，id 仅作兜底。
      */
     fun identityKeyOf(model: ModelEntity): String =
-        baseKey(model.alias?.takeIf { it.isNotBlank() } ?: model.name)
+        baseKey(model.name)
 
     /**
      * 在一次匹配搜索中汇总同族模型：[models] 中归组身份等于 [groupKey] 的全部条目。
@@ -59,7 +61,7 @@ object ModelIdGrouper {
      */
     fun membersOf(groupKey: String, models: List<ModelEntity>): List<ModelEntity> =
         models.filter { identityKeyOf(it) == groupKey }
-            .sortedWith(compareBy({ it.providerId }, { it.name.lowercase() }))
+            .sortedWith(compareBy({ it.providerId }, { it.ref.lowercase() }))
 
     /** 搜索归一化：小写并去掉分隔符，模糊匹配用（v4-flash ≈ v4flash） */
     private fun fuzzy(s: String): String = s.lowercase().replace(Regex("[-_. /]"), "")

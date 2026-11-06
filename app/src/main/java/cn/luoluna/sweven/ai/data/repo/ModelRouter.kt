@@ -7,6 +7,7 @@ import cn.luoluna.sweven.ai.data.db.ModelEntity
 import cn.luoluna.sweven.ai.data.db.ModelType
 import cn.luoluna.sweven.ai.data.db.ProviderDao
 import cn.luoluna.sweven.ai.data.db.ProviderEntity
+import cn.luoluna.sweven.ai.data.db.ref
 import cn.luoluna.sweven.ai.net.AdvancedParams
 
 /** 一次对话请求的路由目标 */
@@ -29,7 +30,7 @@ data class ModelRoute(
             )
         }
 
-    val displayKey: String get() = "${provider.alias}/${model?.name ?: ""}"
+    val displayKey: String get() = "${provider.alias}/${model?.ref ?: ""}"
 }
 
 /**
@@ -59,18 +60,23 @@ class ModelRouter(
     private val apiKeyDao: ApiKeyDao,
     private val modelDao: ModelDao,
 ) {
-    /** 厂商当前使用的 Key：activeKeyId 优先，否则取第一个 */
+    /** 厂商当前使用的 Key：activeKeyId 优先，否则取第一个（旧数据兜底 / 未绑定模型的场景） */
     suspend fun activeKey(provider: ProviderEntity): ApiKeyEntity? =
         provider.activeKeyId?.let { apiKeyDao.byId(it) }
             ?: apiKeyDao.forProvider(provider.id).firstOrNull()
 
-    suspend fun resolveById(providerId: Long?, modelName: String?): ModelRoute? {
-        if (providerId == null || modelName.isNullOrBlank()) return null
+    /** 模型实际使用的 Key：优先模型绑定的 apiKeyId；旧数据（null 或已删 key）回退厂商默认 Key */
+    suspend fun keyFor(model: ModelEntity, provider: ProviderEntity? = null): ApiKeyEntity? =
+        model.apiKeyId?.let { apiKeyDao.byId(it) }
+            ?: (provider ?: providerDao.byId(model.providerId))?.let { activeKey(it) }
+
+    suspend fun resolveById(providerId: Long?, ref: String?): ModelRoute? {
+        if (providerId == null || ref.isNullOrBlank()) return null
         val provider = providerDao.byId(providerId) ?: return null
         // 停用厂商按不存在处理：智能路由与局域网网关统一跳过
         if (!provider.enabled) return null
-        val key = activeKey(provider)
-        val model = modelDao.find(providerId, modelName)
+        val model = modelDao.find(providerId, ref)
+        val key = model?.let { keyFor(it, provider) } ?: activeKey(provider)
         return ModelRoute(provider, key, model)
     }
 
@@ -83,8 +89,8 @@ class ModelRouter(
         if (alias.isEmpty() || modelName.isEmpty()) return null
         val provider = providerDao.byAlias(alias) ?: return null
         if (!provider.enabled) return null
-        val key = activeKey(provider)
         val model = modelDao.find(provider.id, modelName)
+        val key = model?.let { keyFor(it, provider) } ?: activeKey(provider)
         return ModelRoute(provider, key, model)
     }
 

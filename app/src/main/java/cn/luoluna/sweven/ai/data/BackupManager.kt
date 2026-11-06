@@ -77,7 +77,8 @@ class BackupManager(private val app: App) {
             exportedAt = System.currentTimeMillis(),
             providers = if (includeKeys) providers else providers.map { it.copy(activeKeyId = null) },
             apiKeys = if (includeKeys) db.apiKeyDao().all() else emptyList(),
-            models = db.modelDao().all(),
+            models = if (includeKeys) db.modelDao().all()
+                else db.modelDao().all().map { it.copy(apiKeyId = null) },
             smartRoutes = db.smartRouteDao().all(),
             smartRouteGroups = db.smartRouteGroupDao().all(),
             smartRouteMembers = db.smartRouteMemberDao().all(),

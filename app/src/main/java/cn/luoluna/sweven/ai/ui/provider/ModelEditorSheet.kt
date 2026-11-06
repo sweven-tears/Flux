@@ -40,6 +40,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import cn.luoluna.sweven.ai.data.db.ModelEntity
 import cn.luoluna.sweven.ai.data.db.ModelType
+import cn.luoluna.sweven.ai.data.db.ref
 
 private val EDITOR_TABS = listOf("基本信息", "高级设置", "内置工具")
 
@@ -53,6 +54,10 @@ fun ModelEditorSheet(
     isGeminiPreset: Boolean,
     existing: ModelEntity?,
     initialName: String? = null,
+    /** 本模型绑定的密钥：手动新建时由厂商详情页传入 */
+    apiKeyId: Long? = null,
+    /** 同厂商已占用的引用名（含自身 id 之外的全部模型），用于实时冲突校验 */
+    takenRefs: Set<String> = emptySet(),
     onDismiss: () -> Unit,
     onSave: (ModelEntity) -> Unit,
 ) {
@@ -60,6 +65,8 @@ fun ModelEditorSheet(
 
     // 基本信息
     var name by remember { mutableStateOf(existing?.name ?: initialName.orEmpty()) }
+    // 区分名：跨密钥同名时用户手动填写（上游 id 永远不动）；空 = 与模型 id 相同
+    var refName by remember { mutableStateOf(existing?.refName.orEmpty()) }
     var alias by remember { mutableStateOf(existing?.alias.orEmpty()) }
     var type by remember { mutableStateOf(existing?.type ?: ModelType.CHAT) }
     var inText by remember { mutableStateOf(existing?.inputText ?: true) }
@@ -97,6 +104,13 @@ fun ModelEditorSheet(
             tab = 0
             return
         }
+        val finalRef = refName.trim().ifEmpty { finalName }
+        // 同厂商内对外引用名必须唯一：两条同名模型（不同密钥）靠这里区分
+        if (finalRef in takenRefs) {
+            error = "模型名称「$finalRef」已被其它密钥下的模型占用，请在「模型名称（区分名）」填一个唯一名称"
+            tab = 0
+            return
+        }
         val temp = parseNum(temperature)
         val top = parseNum(topP)
         val pres = parseNum(presence)
@@ -131,6 +145,8 @@ fun ModelEditorSheet(
             (existing ?: ModelEntity(providerId = providerId, name = finalName)).copy(
                 providerId = providerId,
                 name = finalName,
+                refName = finalRef,
+                apiKeyId = existing?.apiKeyId ?: apiKeyId,
                 alias = alias.trim().takeIf { it.isNotEmpty() },
                 type = type,
                 inputText = inText,
@@ -188,7 +204,8 @@ fun ModelEditorSheet(
             ) {
                 when (tab) {
                     0 -> BasicInfoTab(
-                        name, { name = it }, alias, { alias = it }, type,
+                        name, { name = it }, alias, { alias = it },
+                         refName, { refName = it }, takenRefs, type,
                         inText, { inText = it }, inImage, { inImage = it }, inVideo, { inVideo = it },
                         outText, { outText = it }, outImage, { outImage = it }, outVideo, { outVideo = it },
                         tools, { tools = it }, reasoning, { reasoning = it },
@@ -247,6 +264,8 @@ fun ModelEditorSheet(
 private fun BasicInfoTab(
     name: String, onName: (String) -> Unit,
     alias: String, onAlias: (String) -> Unit,
+    refName: String, onRefName: (String) -> Unit,
+    takenRefs: Set<String>,
     type: String,
     inText: Boolean, onInText: (Boolean) -> Unit,
     inImage: Boolean, onInImage: (Boolean) -> Unit,
@@ -270,8 +289,19 @@ private fun BasicInfoTab(
         value = alias,
         onValueChange = onAlias,
         label = { Text("模型名称（别名，可选）") },
-        supportingText = { Text("展示用名称，为空时显示模型 id") },
+        supportingText = { Text("展示用名称，为空时显示区分名") },
         singleLine = true,
+        modifier = Modifier.fillMaxWidth(),
+    )
+    OutlinedTextField(
+        value = refName,
+        onValueChange = onRefName,
+        label = { Text("模型名称（区分名，同名必填）") },
+        supportingText = {
+            Text("会话/网关引用名，同厂商内必须唯一；留空 = 模型 id。不同密钥下存在同名模型时必须填，如 gpt-4o@0.1x")
+        },
+        singleLine = true,
+        isError = refName.trim().ifEmpty { name.trim() } in takenRefs,
         modifier = Modifier.fillMaxWidth(),
     )
     Text("模型类型", style = MaterialTheme.typography.labelMedium)

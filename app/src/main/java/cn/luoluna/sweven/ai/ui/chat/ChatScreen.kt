@@ -1,5 +1,7 @@
 package cn.luoluna.sweven.ai.ui.chat
 
+import cn.luoluna.sweven.ai.data.db.ref
+
 import android.Manifest
 import android.os.Build
 import android.widget.Toast
@@ -118,7 +120,7 @@ fun ChatScreen(
     val smartAiAvailable by vm.smartAiAvailable.collectAsStateWithLifecycle()
     val currentPicker = (currentTarget as? ChatTarget.Single)?.picker
     // 消息模型解析表（含禁用模型）：历史气泡按消息记录的 providerId+modelName 显示当时回复的模型
-    val modelsByKey = allPickerModels.associate { (it.provider.id to it.model.name) to it }
+    val modelsByKey = allPickerModels.associate { (it.provider.id to it.model.ref) to it }
     val smartAiCapability by vm.smartAiCapability.collectAsStateWithLifecycle()
     // 路由分组：可选用列表（附声明能力，供选择器类型筛选）+ 当前分组能力（附件/思考按钮显隐依据）
     val pickerRouteGroups by vm.pickerRouteGroups.collectAsStateWithLifecycle()
@@ -144,7 +146,7 @@ fun ChatScreen(
             pid == RouteGroupTarget.PROVIDER_ID ->
                 (currentTarget as? ChatTarget.Group)?.group?.groupKey != current?.modelName
             single != null -> pid != single.picker.provider.id ||
-                current?.modelName != single.picker.model.name
+                current?.modelName != single.picker.model.ref
             else -> false
         }
     } ?: false
@@ -499,9 +501,9 @@ fun ChatScreen(
             onDismiss = { pickerOpen = false },
             models = pickerModels,
             selectedProviderId = currentPicker?.provider?.id,
-            selectedModelName = currentPicker?.model?.name,
+            selectedModelName = currentPicker?.model?.ref,
             onSelect = {
-                vm.selectModel(it.provider.id, it.model.name)
+                vm.selectModel(it.provider.id, it.model.ref)
                 pickerOpen = false
             },
             onGoProviders = onGoProviders,

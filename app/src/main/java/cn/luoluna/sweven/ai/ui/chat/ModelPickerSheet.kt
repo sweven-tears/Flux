@@ -1,5 +1,7 @@
 package cn.luoluna.sweven.ai.ui.chat
 
+import cn.luoluna.sweven.ai.data.db.ref
+
 import androidx.compose.foundation.basicMarquee
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
@@ -286,7 +288,7 @@ fun ModelPickerSheet(
                     ) {
                         RadioButton(
                             selected = row.item.provider.id == selectedProviderId &&
-                                row.item.model.name == selectedModelName,
+                                row.item.model.ref == selectedModelName,
                             onClick = { onSelect(row.item) },
                         )
                         Column(

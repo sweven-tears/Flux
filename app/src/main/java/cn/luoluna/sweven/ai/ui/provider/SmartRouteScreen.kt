@@ -1,5 +1,7 @@
 package cn.luoluna.sweven.ai.ui.provider
 
+import cn.luoluna.sweven.ai.data.db.ref
+
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.basicMarquee
 import androidx.compose.foundation.BorderStroke
@@ -259,7 +261,7 @@ fun SmartRouteScreen(onBack: () -> Unit) {
                         val activePairs = groupMembers
                             .filter { it.enabled && it.providerId in enabledProviderIds }
                             .mapNotNull { m ->
-                                models.firstOrNull { it.providerId == m.providerId && it.name == m.modelName }
+                                models.firstOrNull { it.providerId == m.providerId && it.ref == m.modelName }
                                     ?.let { m to it }
                             }
                         val gaps = capabilityGaps(activePairs.map { it.second })
@@ -489,7 +491,7 @@ fun SmartRouteScreen(onBack: () -> Unit) {
                             SmartRouteMemberEntity(
                                 groupId = gid,
                                 providerId = m.providerId,
-                                modelName = m.name,
+                                modelName = m.ref,
                                 sortOrder = i,
                             )
                         }
@@ -527,7 +529,7 @@ fun SmartRouteScreen(onBack: () -> Unit) {
                             SmartRouteMemberEntity(
                                 groupId = g.id,
                                 providerId = m.providerId,
-                                modelName = m.name,
+                                modelName = m.ref,
                                 sortOrder = base + 1 + i,
                             )
                         }
@@ -545,7 +547,7 @@ fun SmartRouteScreen(onBack: () -> Unit) {
         val activePairs = groupMembers
             .filter { it.enabled && it.providerId in enabledProviderIds }
             .mapNotNull { m ->
-                models.firstOrNull { it.providerId == m.providerId && it.name == m.modelName }
+                models.firstOrNull { it.providerId == m.providerId && it.ref == m.modelName }
                     ?.let { m to it }
             }
         GroupGapSheet(
@@ -825,7 +827,7 @@ private fun gapLine(gaps: List<CapabilityGap>, providers: List<ProviderEntity>):
     gaps.joinToString(" · ") { gap ->
         gap.label + "←" + gap.lacking.joinToString("、") { m ->
             val p = providers.firstOrNull { it.id == m.providerId }
-            "${p?.alias ?: "?"}/${m.alias?.takeIf { it.isNotBlank() } ?: m.name}"
+            "${p?.alias ?: "?"}/${m.alias?.takeIf { it.isNotBlank() } ?: m.ref}"
         }
     }
 
@@ -882,7 +884,7 @@ private fun GroupGapSheet(
                     ) {
                         Column(Modifier.weight(1f)) {
                             Text(
-                                "${p?.alias ?: "?"} / ${m.alias?.takeIf { it.isNotBlank() } ?: m.name}",
+                                "${p?.alias ?: "?"} / ${m.alias?.takeIf { it.isNotBlank() } ?: m.ref}",
                                 style = MaterialTheme.typography.bodyMedium,
                                 maxLines = 1,
                                 modifier = Modifier.basicMarquee(),
@@ -900,7 +902,7 @@ private fun GroupGapSheet(
                         TextButton(
                             onClick = {
                                 members.firstOrNull {
-                                    it.providerId == m.providerId && it.modelName == m.name
+                                    it.providerId == m.providerId && it.modelName == m.ref
                                 }?.let(onDisableMember)
                             },
                         ) { Text("禁用", color = MaterialTheme.colorScheme.error) }
@@ -926,7 +928,7 @@ private fun RouteMemberRow(
     modifier: Modifier = Modifier,
 ) {
     val provider = providers.firstOrNull { it.id == member.providerId }
-    val model = models.firstOrNull { it.providerId == member.providerId && it.name == member.modelName }
+    val model = models.firstOrNull { it.providerId == member.providerId && it.ref == member.modelName }
     val displayName = model?.alias?.takeIf { it.isNotBlank() } ?: member.modelName
     val health = SmartHealth.info(member.providerId, member.modelName)
     // 该成员拖低了哪些能力项（仅启用成员参与短板计算）
@@ -1168,7 +1170,7 @@ private fun AddGroupSheet(
                         "能力不一致（交集口径下该项不对外声明）：" + previewGaps.joinToString("；") { gap ->
                             gap.label + "：" + gap.lacking.joinToString("、") { m ->
                                 val p = providers.firstOrNull { it.id == m.providerId }
-                                "${p?.alias ?: "?"}/${m.alias?.takeIf { it.isNotBlank() } ?: m.name}"
+                                "${p?.alias ?: "?"}/${m.alias?.takeIf { it.isNotBlank() } ?: m.ref}"
                             } + " 不支持"
                         },
                         style = MaterialTheme.typography.labelSmall,
@@ -1186,7 +1188,7 @@ private fun AddGroupSheet(
                     ) {
                         Column(Modifier.weight(1f)) {
                             Text(
-                                "${p?.alias ?: "?"} / ${m.alias?.takeIf { it.isNotBlank() } ?: m.name}",
+                                "${p?.alias ?: "?"} / ${m.alias?.takeIf { it.isNotBlank() } ?: m.ref}",
                                 style = MaterialTheme.typography.bodyMedium,
                                 maxLines = 1,
                                 modifier = Modifier.basicMarquee(),
@@ -1295,10 +1297,10 @@ private fun AddGroupMembersSheet(
         (it.type == ModelType.CHAT || it.outputImage) && it.providerId in enabledProviderIds
     }
     val existingKeys = existingMembers.map { it.providerId to it.modelName }.toSet()
-    val candidates = eligible.filter { (it.providerId to it.name) !in existingKeys }
+    val candidates = eligible.filter { (it.providerId to it.ref) !in existingKeys }
     // 同族匹配（按归组身份键，含备注匹配）：默认预选
     val matched = ModelIdGrouper.membersOf(group.groupKey, candidates)
-    val matchedKeys = matched.map { it.providerId to it.name }.toSet()
+    val matchedKeys = matched.map { it.providerId to it.ref }.toSet()
     var checked by remember { mutableStateOf(matchedKeys) }
 
     val providerAliases = candidates.mapNotNull { m ->
@@ -1308,11 +1310,11 @@ private fun AddGroupMembersSheet(
     fun pass(m: ModelEntity): Boolean {
         val alias = providers.firstOrNull { it.id == m.providerId }?.alias
         return (providerFilter == null || alias == providerFilter) &&
-            (q.isEmpty() || normalizeModelId("${m.name} ${m.alias.orEmpty()}").contains(q))
+            (q.isEmpty() || normalizeModelId("${m.ref} ${m.name} ${m.alias.orEmpty()}").contains(q))
     }
     val matchedFiltered = matched.filter { pass(it) }
     val others = candidates
-        .filter { (it.providerId to it.name) !in matchedKeys }
+        .filter { (it.providerId to it.ref) !in matchedKeys }
         .filter { pass(it) }
 
     ModalBottomSheet(
@@ -1382,13 +1384,13 @@ private fun AddGroupMembersSheet(
                             modifier = Modifier.padding(start = 16.dp, top = 8.dp, bottom = 2.dp),
                         )
                     }
-                    items(matchedFiltered, key = { "s_${it.providerId}_${it.name}" }) { m ->
+                    items(matchedFiltered, key = { "s_${it.providerId}_${it.ref}" }) { m ->
                         MemberCheckRow(
                             model = m,
                             providers = providers,
                             checked = checked,
                             onToggle = { v ->
-                                val k = m.providerId to m.name
+                                val k = m.providerId to m.ref
                                 checked = if (v) checked + k else checked - k
                             },
                         )
@@ -1403,13 +1405,13 @@ private fun AddGroupMembersSheet(
                             modifier = Modifier.padding(start = 16.dp, top = 8.dp, bottom = 2.dp),
                         )
                     }
-                    items(others, key = { "a_${it.providerId}_${it.name}" }) { m ->
+                    items(others, key = { "a_${it.providerId}_${it.ref}" }) { m ->
                         MemberCheckRow(
                             model = m,
                             providers = providers,
                             checked = checked,
                             onToggle = { v ->
-                                val k = m.providerId to m.name
+                                val k = m.providerId to m.ref
                                 checked = if (v) checked + k else checked - k
                             },
                         )
@@ -1437,7 +1439,7 @@ private fun AddGroupMembersSheet(
             TextButton(onClick = onDismiss) { Text("取消") }
             Spacer(Modifier.width(8.dp))
             Button(
-                onClick = { onConfirm(candidates.filter { (it.providerId to it.name) in checked }) },
+                onClick = { onConfirm(candidates.filter { (it.providerId to it.ref) in checked }) },
                 enabled = checked.isNotEmpty(),
             ) {
                 Text(if (checked.isEmpty()) "添加所选" else "添加所选（${checked.size}）")
@@ -1459,12 +1461,12 @@ private fun MemberCheckRow(
         modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp),
     ) {
         Checkbox(
-            checked = (model.providerId to model.name) in checked,
+            checked = (model.providerId to model.ref) in checked,
             onCheckedChange = onToggle,
         )
         Column(Modifier.weight(1f).padding(vertical = 6.dp)) {
             Text(
-                "${p?.alias ?: "?"} / ${model.alias?.takeIf { it.isNotBlank() } ?: model.name}",
+                "${p?.alias ?: "?"} / ${model.alias?.takeIf { it.isNotBlank() } ?: model.ref}",
                 style = MaterialTheme.typography.bodySmall,
                 maxLines = 1,
                 modifier = Modifier.basicMarquee(),

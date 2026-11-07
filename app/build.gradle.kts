@@ -22,8 +22,8 @@ android {
         applicationId = "cn.luoluna.flux"
         minSdk = 26
         targetSdk = 35
-            versionCode = 47
-            versionName = "0.24.0"
+            versionCode = 48
+            versionName = "0.25.0"
     }
 
     signingConfigs {

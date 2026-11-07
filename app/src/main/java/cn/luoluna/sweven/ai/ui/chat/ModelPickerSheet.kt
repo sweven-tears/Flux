@@ -4,16 +4,18 @@ import cn.luoluna.sweven.ai.data.db.ref
 
 import androidx.compose.foundation.basicMarquee
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Hub
@@ -24,6 +26,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.RadioButton
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -105,8 +108,15 @@ fun ModelPickerSheet(
     selectedGroupKey: String? = null,
     onSelectGroup: (SmartRouteGroupEntity) -> Unit = {},
 ) {
+    // 当前模型所属厂商：打开选择器时直接按它筛选（芯片同时处于选中态）。
+    // 只把芯片滚到最左端不够——列表里其它厂商的模型仍然混在一起，等于没选中厂商
+    val currentAlias = remember(models, selectedProviderId, selectedModelName) {
+        models.firstOrNull {
+            it.provider.id == selectedProviderId && it.model.ref == selectedModelName
+        }?.provider?.alias
+    }
     var typeFilter by remember { mutableStateOf(TypeFilter.ALL) }
-    var providerFilter by remember { mutableStateOf<String?>(null) }
+    var providerFilter by remember { mutableStateOf(currentAlias) }
     // 厂商 chip 只列在当前类型筛选下仍有模型的厂商——筛出的结果里没有模型的厂商不出现
     val providerAliases = remember(models, typeFilter) {
         buildList {
@@ -134,8 +144,31 @@ fun ModelPickerSheet(
             }
         }
     }
+    // 打开时把「当前已选模型」顶到列表最上面；它前面还有聚合路由与路由分组条目，需要加偏移
+    val selectedRowIndex = remember(rows, selectedProviderId, selectedModelName) {
+        rows.indexOfFirst {
+            it.item.provider.id == selectedProviderId && it.item.model.ref == selectedModelName
+        }
+    }
+    val headerCount = (if (smartAiAvailable) 1 else 0) + (if (showRouteGroups) visibleGroups.size else 0)
+    val listState = rememberLazyListState()
+    // 只定位一次：之后用户切换类型/厂商筛选时不再强行跳回（避免抢滚动）
+    var located by remember { mutableStateOf(false) }
+    LaunchedEffect(selectedRowIndex, headerCount) {
+        if (!located && selectedRowIndex >= 0) {
+            listState.scrollToItem(headerCount + selectedRowIndex)
+            located = true
+        }
+    }
 
-    ModalBottomSheet(onDismissRequest = onDismiss) {
+    // 点击 tab 直接整屏展开（skipPartiallyExpanded），列表才能内部滚动、把当前模型顶到顶部
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheetState) {
+        Column(
+            Modifier
+                .fillMaxWidth()
+                .fillMaxHeight(),
+        ) {
         Column(Modifier.padding(horizontal = 16.dp)) {
             Text("选择模型", style = MaterialTheme.typography.titleMedium)
             Row(
@@ -151,20 +184,27 @@ fun ModelPickerSheet(
                 }
             }
             if (providerAliases.size > 1) {
-                // 厂商快速定位：单选过滤，点「全部」恢复完整列表
-                Row(
+                // 厂商快速定位：单选过滤，点「全部」恢复完整列表；
+                // 打开时把当前模型所属厂商的 chip 顶到最左侧，省得横向翻找
+                val selectedChipIndex = providerAliases.indexOf(currentAlias)
+                val chipState = rememberLazyListState(
+                    initialFirstVisibleItemIndex = (selectedChipIndex + 1).coerceAtLeast(0),
+                )
+                LazyRow(
+                    state = chipState,
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                     modifier = Modifier
                         .fillMaxWidth()
-                        .horizontalScroll(rememberScrollState())
                         .padding(bottom = 8.dp),
                 ) {
-                    FilterChip(
-                        selected = providerFilter == null,
-                        onClick = { providerFilter = null },
-                        label = { Text("全部厂商") },
-                    )
-                    providerAliases.forEach { alias ->
+                    item(key = "all_providers") {
+                        FilterChip(
+                            selected = providerFilter == null,
+                            onClick = { providerFilter = null },
+                            label = { Text("全部厂商") },
+                        )
+                    }
+                    itemsIndexed(providerAliases, key = { _, alias -> alias }) { _, alias ->
                         FilterChip(
                             selected = providerFilter == alias,
                             onClick = { providerFilter = if (providerFilter == alias) null else alias },
@@ -195,7 +235,13 @@ fun ModelPickerSheet(
                 TextButton(onClick = { onDismiss(); onGoProviders() }) { Text("去添加") }
             }
         } else {
-            LazyColumn(Modifier.fillMaxWidth().padding(bottom = 24.dp)) {
+            LazyColumn(
+                state = listState,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(1f)
+                    .padding(bottom = 24.dp),
+            ) {
                 // 聚合路由，固定置顶（不参与类型筛选：它的能力是全模型并集，几乎总能匹配）
                 if (smartAiAvailable) {
                     item(key = "smart_ai") {
@@ -325,6 +371,7 @@ fun ModelPickerSheet(
                     }
                 }
             }
+        }
         }
     }
 }

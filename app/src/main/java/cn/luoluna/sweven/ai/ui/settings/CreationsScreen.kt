@@ -39,6 +39,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -62,6 +63,7 @@ import cn.luoluna.sweven.ai.ui.chat.rememberGallerySaver
 import cn.luoluna.sweven.ai.ui.chat.rememberVideoFrame
 import cn.luoluna.sweven.ai.ui.common.openImageExternally
 import cn.luoluna.sweven.ai.ui.common.openVideoExternally
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -133,6 +135,21 @@ fun CreationsScreen(onBack: () -> Unit, onOpenChat: (Long) -> Unit) {
     var selected by remember { mutableStateOf(setOf<String>()) }
     var previewKey by remember { mutableStateOf<String?>(null) }
     var confirmDelete by remember { mutableStateOf(false) }
+    // 待跳转的会话：预览对话框关掉后再导航，避免部分机型在 Dialog 关闭同帧导航丢失
+    var pendingOpenConversation by remember { mutableStateOf<Long?>(null) }
+
+    LaunchedEffect(pendingOpenConversation) {
+        val target = pendingOpenConversation ?: return@LaunchedEffect
+        pendingOpenConversation = null
+        delay(120)
+        onOpenChat(target)
+    }
+
+    /** 预览里点「打开会话」：先关预览，再由上面的 effect 延后导航 */
+    fun openConversation(conversationId: Long) {
+        previewKey = null
+        pendingOpenConversation = conversationId
+    }
 
     fun exitSelection() {
         selecting = false
@@ -267,10 +284,9 @@ fun CreationsScreen(onBack: () -> Unit, onOpenChat: (Long) -> Unit) {
                 },
                 dismissButton = if (sourceTitle != null) {
                     {
-                        TextButton(onClick = {
-                            previewKey = null
-                            onOpenChat(item.conversationId)
-                        }) { Text("打开会话") }
+                        TextButton(onClick = { openConversation(item.conversationId) }) {
+                            Text("打开会话")
+                        }
                     }
                 } else {
                     null
@@ -316,10 +332,9 @@ fun CreationsScreen(onBack: () -> Unit, onOpenChat: (Long) -> Unit) {
                                         style = MaterialTheme.typography.bodySmall,
                                         color = Color.White,
                                     )
-                                    TextButton(onClick = {
-                                        previewKey = null
-                                        onOpenChat(item.conversationId)
-                                    }) { Text("打开会话") }
+                                    TextButton(onClick = { openConversation(item.conversationId) }) {
+                                        Text("打开会话")
+                                    }
                                 }
                             }
                         }

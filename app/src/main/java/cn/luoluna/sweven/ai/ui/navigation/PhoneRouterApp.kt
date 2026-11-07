@@ -110,13 +110,22 @@ fun PhoneRouterApp(
         }
     }
 
-    /** 打开指定会话的聊天页：先注入 pending id，ChatScreen 消费后选中该会话 */
+    /**
+     * 打开指定会话的聊天页：先注入 pending id，ChatScreen 消费后选中该会话。
+     *
+     * 注意不能用 saveState/restoreState：popUpTo(起点) 会把起点之上的页面（设置、我的创作）
+     * 一起存进 saved state，restoreState 又把它们整套恢复回来，结果「后台已跳转、界面还停在原页」。
+     * 这里直接清空起点之上的页面，保证界面一定回到聊天页。
+     */
     fun openChat(conversationId: Long?) {
         pendingChatConversation = conversationId
         navController.navigate(Routes.CHAT) {
-            popUpTo(navController.graph.findStartDestination().id) { saveState = true }
+            popUpTo(navController.graph.findStartDestination().id) {
+                saveState = false
+                inclusive = false
+            }
             launchSingleTop = true
-            restoreState = true
+            restoreState = false
         }
     }
 

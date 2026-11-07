@@ -410,16 +410,21 @@ fun ChatScreen(
             val text = input
             val newUris = attachments
             val dataUrls = attachmentDataUrls
-            input = ""
-            attachments = emptyList()
-            attachmentDataUrls = emptyList()
+            // 只有真正被接受才清空输入框：被拒（如另一个会话正在回复）时保留草稿，
+            // 否则用户敲的内容被吞掉，还得重打一遍
             if (editing != null) {
                 val keepImages = editAttachments + dataUrls
-                editAttachments = emptyList()
-                editingMessage = null
-                vm.editAndResend(editing, text, keepImages, newUris)
-            } else {
-                vm.send(text, newUris, dataUrls)
+                if (vm.editAndResend(editing, text, keepImages, newUris)) {
+                    input = ""
+                    attachments = emptyList()
+                    attachmentDataUrls = emptyList()
+                    editAttachments = emptyList()
+                    editingMessage = null
+                }
+            } else if (vm.send(text, newUris, dataUrls)) {
+                input = ""
+                attachments = emptyList()
+                attachmentDataUrls = emptyList()
             }
         },
         removeAttachment = { attachments = attachments - it },
@@ -490,7 +495,9 @@ fun ChatScreen(
                             })
                         },
                 ) {
-                    if (messages.isEmpty() && !streaming) {
+                    // 空会话也要保留错误/提示：错误条挂在消息列表里，若这里继续走空状态，
+                    // 「另一个会话正在回复」这类提示在新对话里会整条消失，用户只看到消息被吞
+                    if (messages.isEmpty() && !streaming && error == null && notice == null) {
                         Column(Modifier.fillMaxSize()) {
                             (plugin.emptyState ?: { ChatUiDefaults.EmptyState(env) })(env)
                         }

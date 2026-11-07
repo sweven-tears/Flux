@@ -359,24 +359,46 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
 
     private val _streaming = MutableStateFlow(false)
-    val streaming: StateFlow<Boolean> = _streaming
+
+    /**
+     * 正在生成回复的会话 id：回复跑在后台时用户可能切到别的会话，
+     * 流式相关状态只在「当前会话 == 生成会话」时对外可见，切回去就能继续看到输出。
+     */
+    private val streamingConversationId = MutableStateFlow<Long?>(null)
+
+    /** [_error] / [_notice] 的归属会话：null = 全局（不随会话切换隐藏） */
+    private val statusConvId = MutableStateFlow<Long?>(null)
+
+    /** 会话级状态：只有归属当前会话时才对外暴露，否则给出空闲值 */
+    private fun <T> scopedToConversation(
+        source: StateFlow<T>,
+        owner: StateFlow<Long?>,
+        idle: T,
+    ): StateFlow<T> = combine(source, owner, currentId) { value, oid, cid ->
+        if (oid == null || oid == cid) value else idle
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), idle)
+
+    val streaming: StateFlow<Boolean> = scopedToConversation(_streaming, streamingConversationId, false)
 
     /** 正在生图（复用流式气泡位置展示「生成中…」，输入栏同样显示停止按钮） */
     private val _generatingImage = MutableStateFlow(false)
-    val generatingImage: StateFlow<Boolean> = _generatingImage
+    val generatingImage: StateFlow<Boolean> =
+        scopedToConversation(_generatingImage, streamingConversationId, false)
 
     private val _streamingText = MutableStateFlow("")
-    val streamingText: StateFlow<String> = _streamingText
+    val streamingText: StateFlow<String> =
+        scopedToConversation(_streamingText, streamingConversationId, "")
 
     private val _streamingReasoning = MutableStateFlow("")
-    val streamingReasoning: StateFlow<String> = _streamingReasoning
+    val streamingReasoning: StateFlow<String> =
+        scopedToConversation(_streamingReasoning, streamingConversationId, "")
 
     private val _error = MutableStateFlow<ChatError?>(null)
-    val error: StateFlow<ChatError?> = _error
+    val error: StateFlow<ChatError?> = scopedToConversation(_error, statusConvId, null)
 
     /** 非阻断提示（如上下文被裁剪），用信息样式展示，用户可关闭 */
     private val _notice = MutableStateFlow<String?>(null)
-    val notice: StateFlow<String?> = _notice
+    val notice: StateFlow<String?> = scopedToConversation(_notice, statusConvId, null)
 
     /**
      * 正在执行的工具（流式期间的进度提示，如「正在调用 web_search…」）。
@@ -384,14 +406,16 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
      * 与 [notice] 分工：notice 只留「轮数上限 / 上下文裁剪」这类需要用户读的提示。
      */
     private val _toolProgress = MutableStateFlow<String?>(null)
-    val toolProgress: StateFlow<String?> = _toolProgress
+    val toolProgress: StateFlow<String?> =
+        scopedToConversation(_toolProgress, streamingConversationId, null)
 
     /**
      * 正在执行的工具名（结构化的实时进度）：聊天页把它合成执行轨迹里的 RUNNING 节点。
      * [_toolProgress] 保留为文案形态，兼容只读它的插件。
      */
     private val _liveToolCalls = MutableStateFlow<List<String>>(emptyList())
-    val liveToolCalls: StateFlow<List<String>> = _liveToolCalls
+    val liveToolCalls: StateFlow<List<String>> =
+        scopedToConversation(_liveToolCalls, streamingConversationId, emptyList())
 
     fun dismissNotice() {
         _notice.value = null
@@ -526,7 +550,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
             if (!_streaming.value || pageVisible.value) return@launch
             streamNotified = true
             Notifications.notifyChatStatus(
-                app, done = false, conversationId = currentId.value,
+                app, done = false, conversationId = streamingConversationId.value ?: currentId.value,
                 text = "正在后台生成回复，完成后提醒你",
             )
         }
@@ -541,7 +565,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
             Notifications.cancelChatStatus(app)
         } else {
             Notifications.notifyChatStatus(
-                app, done = true, conversationId = currentId.value,
+                app, done = true, conversationId = streamingConversationId.value ?: currentId.value,
                 text = "点击查看回复",
             )
         }
@@ -550,7 +574,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
     // ---- 会话 ----
 
     fun newConversation(folderId: Long? = null) = viewModelScope.launch {
-        stopStreamingInternal()
+        // 不打断正在生成的回复：它继续在后台写回自己的会话，切回去仍能看到输出
         _notice.value = null
         // 当前分组已有空会话则直接复用，保证每个分组只有一个没有内容的新窗口
         val id = conversationDao.findEmptyConversation(folderId)?.let { existing ->
@@ -580,7 +604,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
 
     fun selectConversation(id: Long) {
         if (id == currentId.value) return
-        stopStreamingInternal()
+        // 后台回复不随切换中断：流式状态按会话隔离，切回去会继续显示
         currentId.value = id
         _notice.value = null
         // 切到已有会话后以会话自身的思考深度/工具勾选为准
@@ -589,8 +613,10 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun deleteConversation(id: Long) = viewModelScope.launch {
+        // 只有删掉正在生成的那个会话才中断；其它会话的后台回复继续跑。
+        // 直接丢弃半截内容，避免异步落库落在外键已删除的会话上。
+        if (id == streamingConversationId.value) stopStreamingInternal(id, savePartial = false)
         if (id == currentId.value) {
-            stopStreamingInternal()
             currentId.value = null
         }
         conversationDao.byId(id)?.let { conversationDao.delete(it) }
@@ -635,14 +661,23 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
     /**
      * 发送消息。[imageUris] 为相册新选图片（发送时压缩转 data URL）；
      * [imageDataUrls] 为已是 data URL 的图片（助手生图「添加到对话」、编辑态保留原图等）。
+     * @return 是否被接受。false 时输入框应保留草稿，避免消息被无声吞掉。
      */
-    fun send(text: String, imageUris: List<Uri>, imageDataUrls: List<String> = emptyList()) {
+    fun send(text: String, imageUris: List<Uri>, imageDataUrls: List<String> = emptyList()): Boolean {
         val target = currentTarget.value
-        if (text.isBlank() && imageUris.isEmpty() && imageDataUrls.isEmpty()) return
+        // 本次交互的错误/提示归属当前会话（切走时不串到别的会话上）
+        statusConvId.value = currentId.value
+        if (text.isBlank() && imageUris.isEmpty() && imageDataUrls.isEmpty()) return false
         // 流式互斥：回复进行中拒绝新消息，避免两轮请求交叉写历史/并发写 _streamingText
         if (_streaming.value) {
-            _error.value = ChatError("上一条回复尚未结束，请先停止或等待完成")
-            return
+            _error.value = if (streamingConversationId.value != null &&
+                streamingConversationId.value != currentId.value
+            ) {
+                ChatError("另一个会话正在回复，请等待完成或切回该会话停止")
+            } else {
+                ChatError("上一条回复尚未结束，请先停止或等待完成")
+            }
+            return false
         }
         if (target == null) {
             // 目标解析为空时区分「从未选过」与「会话指向的厂商已被停用」
@@ -658,7 +693,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                     },
                 )
             }
-            return
+            return false
         }
         val (providerId, modelName) = target.identifiers()
         viewModelScope.launch {
@@ -699,10 +734,13 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
 
             startStreaming(convId, target)
         }
+        return true
     }
 
     /** 按目标发起请求：生图模型走文生图分支；其余单模型直连；smartAi 走回退链；分组走组内切换 */
     private suspend fun startStreaming(convId: Long, target: ChatTarget) {
+        // 本次交互的错误/提示归属这条会话（用户切走后不会串到别的对话上）
+        statusConvId.value = convId
         when (target) {
             is ChatTarget.Single -> when {
                 target.picker.model.outputVideo -> generateVideo(convId, target.picker)
@@ -845,6 +883,8 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
 
         _error.value = null
         _streaming.value = true
+        // 流式状态从这一刻起归属这条会话：切走不中断，切回来继续显示
+        streamingConversationId.value = convId
         _streamingText.value = ""
         _streamingReasoning.value = ""
         activeStreamModel = picker.provider.id to picker.model.ref
@@ -1064,6 +1104,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         _error.value = null
         _generatingImage.value = true
         _streaming.value = true
+        streamingConversationId.value = convId
         activeStreamModel = provider.id to picker.model.ref
         sendJob = viewModelScope.launch {
             var failed: ChatError? = null
@@ -1094,6 +1135,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
             }
             _streaming.value = false
             _generatingImage.value = false
+            streamingConversationId.value = null
             val url = imageDataUrl
             if (url != null) {
                 messageDao.insert(
@@ -1295,6 +1337,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
     private fun launchSmartCollect(convId: Long, candidates: List<SmartCandidate>) {
         _error.value = null
         _streaming.value = true
+        streamingConversationId.value = convId
         _streamingText.value = ""
         _streamingReasoning.value = ""
         beginStreamStats()
@@ -1365,9 +1408,11 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
     private suspend fun finishStreaming(convId: Long, publisher: StreamPublisher, failed: ChatError?) {
         publisher.publish(force = true)
         _streaming.value = false
+        // 先按「生成所在会话」更新通知，再清空归属（清空后只能回落到当前会话）
+        onStreamEndedForNotify()
+        streamingConversationId.value = null
         _liveToolCalls.value = emptyList()
         _toolProgress.value = null
-        onStreamEndedForNotify()
         val finalContent = _streamingText.value
         val finalReasoning = _streamingReasoning.value.trim().takeIf { it.isNotEmpty() }
         _streamingText.value = ""
@@ -1399,6 +1444,8 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
     private fun cancelStreamingDiscard() {
         sendJob?.cancel()
         _streaming.value = false
+        onStreamEndedForNotify()
+        streamingConversationId.value = null
         _generatingImage.value = false
         _liveToolCalls.value = emptyList()
         _toolProgress.value = null
@@ -1406,7 +1453,6 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         _streamingReasoning.value = ""
         activeStreamModel = null
         takeStreamStats()
-        onStreamEndedForNotify()
     }
 
     /**
@@ -1454,18 +1500,24 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         newText: String,
         keepDataUrls: List<String>,
         newImageUris: List<Uri>,
-    ) {
+    ): Boolean {
         val convId = message.conversationId
-        if (convId != currentId.value) return
-        if (newText.isBlank() && keepDataUrls.isEmpty() && newImageUris.isEmpty()) return
+        if (convId != currentId.value) return false
+        if (newText.isBlank() && keepDataUrls.isEmpty() && newImageUris.isEmpty()) return false
         if (_streaming.value) {
-            _error.value = ChatError("上一条回复尚未结束，请先停止或等待完成")
-            return
+            _error.value = if (streamingConversationId.value != null &&
+                streamingConversationId.value != currentId.value
+            ) {
+                ChatError("另一个会话正在回复，请等待完成或切回该会话停止")
+            } else {
+                ChatError("上一条回复尚未结束，请先停止或等待完成")
+            }
+            return false
         }
         val target = currentTarget.value
         if (target == null) {
             _error.value = ChatError("请先选择模型")
-            return
+            return false
         }
         viewModelScope.launch {
             cancelStreamingDiscard()
@@ -1482,6 +1534,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
             conversationDao.touch(convId, System.currentTimeMillis())
             startStreaming(convId, target)
         }
+        return true
     }
 
     /** 创建分支：把会话开头到该消息（含）复制进新会话并切换过去 */
@@ -1538,40 +1591,8 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         conversationDao.setSystemPrompt(convId, prompt?.takeIf { it.isNotBlank() })
     }
 
-    fun stopStreaming() {
-        val partial = _streamingText.value
-        val partialReasoning = _streamingReasoning.value.trim().takeIf { it.isNotEmpty() }
-        val model = activeStreamModel
-        activeStreamModel = null
-        val stats = takeStreamStats()
-        sendJob?.cancel()
-        _streaming.value = false
-        _generatingImage.value = false
-        _streamingText.value = ""
-        _streamingReasoning.value = ""
-        onStreamEndedForNotify()
-        if (partial.isNotEmpty() || partialReasoning != null) {
-            viewModelScope.launch {
-                val convId = currentId.value ?: return@launch
-                messageDao.insert(
-                    MessageEntity(
-                        conversationId = convId,
-                        role = Role.ASSISTANT,
-                        content = partial,
-                        reasoning = partialReasoning,
-                        providerId = model?.first,
-                        modelName = model?.second,
-                        promptTokens = stats.usage?.promptTokens,
-                        completionTokens = stats.usage?.completionTokens,
-                        cachedTokens = stats.usage?.cachedTokens,
-                        ttftMs = stats.ttftMs,
-                        totalMs = stats.totalMs,
-                    )
-                )
-                conversationDao.touch(convId, System.currentTimeMillis())
-            }
-        }
-    }
+    /** 用户主动停止：中断生成，已产出的半截内容落库到生成所在会话 */
+    fun stopStreaming() = stopStreamingInternal()
 
     /** 首次点停止后的提示开关，界面居中短暂显示后自动复位 */
     private val _stopHint = MutableStateFlow(false)
@@ -1602,7 +1623,14 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    private fun stopStreamingInternal() {
+    /**
+     * 中断当前生成。半截内容落库到「生成所在会话」而不是当前查看的会话：
+     * 后台回复期间用户可能已经切走，按 currentId 写会把内容记到别的对话里。
+     */
+    private fun stopStreamingInternal(
+        targetConvId: Long? = streamingConversationId.value ?: currentId.value,
+        savePartial: Boolean = true,
+    ) {
         val partial = _streamingText.value
         val partialReasoning = _streamingReasoning.value.trim().takeIf { it.isNotEmpty() }
         val model = activeStreamModel
@@ -1611,11 +1639,12 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         sendJob?.cancel()
         _streaming.value = false
         _generatingImage.value = false
+        onStreamEndedForNotify()
+        streamingConversationId.value = null
         _streamingText.value = ""
         _streamingReasoning.value = ""
-        onStreamEndedForNotify()
-        if (partial.isNotEmpty() || partialReasoning != null) {
-            val convId = currentId.value
+        if (savePartial && (partial.isNotEmpty() || partialReasoning != null)) {
+            val convId = targetConvId
             if (convId != null) {
                 viewModelScope.launch {
                     messageDao.insert(
@@ -1693,7 +1722,6 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
 
     /** 用预设对话新建会话：应用其系统提示词与模型；同一预设的空会话直接复用 */
     fun startFromPreset(preset: PresetEntity) = viewModelScope.launch {
-        stopStreamingInternal()
         val providerId = preset.providerId ?: lastModel.value?.first
         val modelName = preset.modelName ?: lastModel.value?.second
         val id = conversationDao.findEmptyByPreset(preset.folderId, preset.name, preset.systemPrompt)?.let { existing ->

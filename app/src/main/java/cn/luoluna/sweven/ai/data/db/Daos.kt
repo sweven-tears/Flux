@@ -48,6 +48,16 @@ interface ProviderDao {
     @Query("UPDATE providers SET activeKeyId = :keyId WHERE id = :providerId")
     suspend fun setActiveKey(providerId: Long, keyId: Long?)
 
+    // 余额配置按列写入：编辑页逐字保存时不会用整行快照覆盖其它字段
+    @Query("UPDATE providers SET balanceUrl = :url WHERE id = :providerId")
+    suspend fun setBalanceUrl(providerId: Long, url: String)
+
+    @Query("UPDATE providers SET balanceHeaders = :headers WHERE id = :providerId")
+    suspend fun setBalanceHeaders(providerId: Long, headers: String)
+
+    @Query("UPDATE providers SET balanceJsonKey = :key WHERE id = :providerId")
+    suspend fun setBalanceJsonKey(providerId: Long, key: String)
+
     @Query("UPDATE providers SET lastTestOk = :ok, lastTestLatencyMs = :latencyMs, lastTestMessage = :message, lastTestAt = :at WHERE id = :providerId")
     suspend fun updateTestResult(providerId: Long, ok: Boolean, latencyMs: Long, message: String, at: Long)
 

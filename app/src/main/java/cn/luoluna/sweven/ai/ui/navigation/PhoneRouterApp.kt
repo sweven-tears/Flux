@@ -41,6 +41,7 @@ import cn.luoluna.sweven.ai.ui.lan.LanScreen
 import cn.luoluna.sweven.ai.ui.lan.ModelAbnormalScreen
 import cn.luoluna.sweven.ai.ui.lan.RequestLogScreen
 import cn.luoluna.sweven.ai.ui.provider.AddProviderScreen
+import cn.luoluna.sweven.ai.ui.provider.BalanceScreen
 import cn.luoluna.sweven.ai.ui.provider.ProviderDetailScreen
 import cn.luoluna.sweven.ai.ui.provider.ProviderListScreen
 import cn.luoluna.sweven.ai.ui.provider.SmartRouteScreen
@@ -57,6 +58,7 @@ object Routes {
     const val PROVIDERS = "providers"
     const val ADD_PROVIDER = "add_provider"
     const val PROVIDER_DETAIL = "provider/{id}"
+    const val PROVIDER_BALANCE = "provider_balance/{id}"
     const val SMART_ROUTE = "smart_route"
     const val REQUEST_LOG = "request_log"
     const val AUTH_DEVICES = "auth_devices"
@@ -226,6 +228,17 @@ fun PhoneRouterApp(
                 ) { entry ->
                     val id = entry.arguments?.getLong("id") ?: 0L
                     ProviderDetailScreen(
+                        id = id,
+                        onBack = { navController.popBackStack() },
+                        onOpenBalance = { navController.navigate("provider_balance/$id") },
+                    )
+                }
+                composable(
+                    Routes.PROVIDER_BALANCE,
+                    arguments = listOf(navArgument("id") { type = NavType.LongType }),
+                ) { entry ->
+                    val id = entry.arguments?.getLong("id") ?: 0L
+                    BalanceScreen(
                         id = id,
                         onBack = { navController.popBackStack() },
                     )

@@ -34,7 +34,23 @@ data class ProviderEntity(
     val circuitOpenAt: Long? = null,
     /** 用户标记为可重试：false 时该厂商候选仍会试一次，但首字前失败后本轮不再换回给它 */
     val retryable: Boolean = true,
-)
+    /** 余额查询开关：关闭时厂商详情只保留入口与配置，不显示快捷刷新 */
+    val balanceEnabled: Boolean = false,
+    /** 余额是否按密钥独立查询：false = 厂商级一个值，true = 每把密钥各自查询 */
+    val balancePerKey: Boolean = false,
+    /** 余额接口 URL 模板：支持 {{baseUrl}} 与 {{apiKey}} 占位符 */
+    val balanceUrl: String = DEFAULT_BALANCE_URL,
+    /** 余额接口附加请求头（每行一个 "Name: Value"，支持占位符）；空串 = 不附加 */
+    val balanceHeaders: String = DEFAULT_BALANCE_HEADERS,
+    /** 余额结果 JSON 键路径（如 data.total_usage）；空 = 直接显示响应文本 */
+    val balanceJsonKey: String = DEFAULT_BALANCE_JSON_KEY,
+) {
+    companion object {
+        const val DEFAULT_BALANCE_URL = "{{baseUrl}}/credits"
+        const val DEFAULT_BALANCE_HEADERS = "Authorization: Bearer {{apiKey}}"
+        const val DEFAULT_BALANCE_JSON_KEY = "data.total_usage"
+    }
+}
 
 @Entity(
     tableName = "api_keys",

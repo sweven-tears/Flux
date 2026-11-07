@@ -5,6 +5,8 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.withContext
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonArray
@@ -445,6 +447,99 @@ class ProviderClient {
                 }
             }
         }
+    }
+
+    /**
+     * 账户余额查询：按用户配置的 URL 模板 / 请求头模板 / 结果键取一个可展示的字符串。
+     * 模板支持 {{baseUrl}} 与 {{apiKey}}；结果键为点分路径（可带 [n] 下标），空表示直接显示响应文本。
+     */
+    suspend fun fetchBalance(
+        baseUrl: String,
+        apiKey: String?,
+        urlTemplate: String,
+        headersTemplate: String?,
+        jsonKey: String?,
+    ): Result<String> = withContext(Dispatchers.IO) {
+        runCatching {
+            val base = baseUrl.trimEnd('/')
+            val raw = urlTemplate.trim().ifBlank { "{{baseUrl}}/credits" }
+            val resolved = substituteVars(raw, base, apiKey)
+            val url = when {
+                resolved.startsWith("http://") || resolved.startsWith("https://") -> resolved
+                else -> "$base/" + resolved.trimStart('/')
+            }
+            val request = Request.Builder()
+                .url(url)
+                .header("Accept", "application/json")
+                .apply {
+                    resolveHeaderLines(headersTemplate, base, apiKey).forEach { (k, v) -> header(k, v) }
+                }
+                .get()
+                .build()
+            http.newCall(request).execute().use { resp ->
+                val body = resp.body?.string().orEmpty()
+                if (!resp.isSuccessful) throw ApiException(parseErrorMessage(resp.code, body))
+                val path = jsonKey?.trim().orEmpty()
+                if (path.isEmpty()) {
+                    body.trim().take(200).ifEmpty { "（响应为空）" }
+                } else {
+                    val root = runCatching { ChatJson.json.parseToJsonElement(body) }.getOrNull()
+                        ?: throw ApiException("响应不是 JSON，无法按「$path」取值")
+                    val element = digJsonPath(root, path)
+                        ?: throw ApiException("结果中没有「$path」")
+                    jsonScalarText(element)
+                }
+            }
+        }
+    }
+
+    private fun substituteVars(template: String, baseUrl: String, apiKey: String?): String =
+        template.replace("{{baseUrl}}", baseUrl).replace("{{apiKey}}", apiKey.orEmpty())
+
+    /** 余额请求头模板：每行 "Name: Value"，允许 Authorization（与聊天请求的 customHeaders 规则不同） */
+    private fun resolveHeaderLines(
+        template: String?,
+        baseUrl: String,
+        apiKey: String?,
+    ): Map<String, String> {
+        if (template.isNullOrBlank()) return emptyMap()
+        val out = LinkedHashMap<String, String>()
+        template.lines().forEach { line ->
+            val idx = line.indexOf(':')
+            if (idx <= 0) return@forEach
+            val name = substituteVars(line.substring(0, idx).trim(), baseUrl, apiKey)
+            val value = substituteVars(line.substring(idx + 1).trim(), baseUrl, apiKey)
+            if (name.isNotEmpty() && value.isNotEmpty()) out[name] = value
+        }
+        return out
+    }
+
+    /** 点分路径取值，支持 a.b[0].c；任一段缺失返回 null */
+    private fun digJsonPath(root: JsonElement, path: String): JsonElement? {
+        var current: JsonElement = root
+        path.split('.').forEach { segment ->
+            var name = segment.trim()
+            if (name.isEmpty()) return@forEach
+            var index: Int? = null
+            val open = name.indexOf('[')
+            if (open >= 0 && name.endsWith("]")) {
+                index = name.substring(open + 1, name.length - 1).trim().toIntOrNull()
+                name = name.substring(0, open).trim()
+            }
+            if (name.isNotEmpty()) {
+                current = (current as? JsonObject)?.get(name) ?: return null
+            }
+            if (index != null) {
+                current = (current as? JsonArray)?.getOrNull(index) ?: return null
+            }
+        }
+        return current
+    }
+
+    /** 结果值转显示文本：字符串去引号，对象/数组保持 JSON 文本 */
+    private fun jsonScalarText(element: JsonElement): String = when (element) {
+        is JsonPrimitive -> element.content
+        else -> element.toString()
     }
 
     /** 下载厂商返回的临时图片 URL 为字节（部分厂商的 url 短时会过期） */

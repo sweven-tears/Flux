@@ -51,6 +51,7 @@ import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.unit.dp
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.animateScrollBy
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Row
 import androidx.lifecycle.Lifecycle
@@ -58,6 +59,7 @@ import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import cn.luoluna.sweven.ai.App
+import cn.luoluna.sweven.ai.ui.chat.buildChatTurns
 import cn.luoluna.sweven.ai.server.Notifications
 import cn.luoluna.sweven.ai.data.db.ConversationEntity
 import cn.luoluna.sweven.ai.data.db.FolderEntity
@@ -279,21 +281,47 @@ fun ChatScreen(
     }
 
     val listState = rememberLazyListState()
-    val extraItems = (if (streaming) 1 else 0) + (if (error != null) 1 else 0) +
-        (if (notice != null) 1 else 0)
-    // "是否贴底"只在用户自己滚动时采样：程序滚动（自动跟随）结束时 canScrollForward=false，
-    // 会自动落回"贴底"。这样"用户上翻看历史"与"系统跟随输出"互不打架。
+    // 列表项数按「渲染单元」算（工具轮次会合并成一条），不能直接用 messages.size，
+    // 否则滚动索引会越过末尾，把最后一条用户消息顶到可视区底部
+    val itemCount = remember(messages, streaming, error, notice) {
+        buildChatTurns(messages).size +
+            (if (streaming) 1 else 0) + (if (error != null) 1 else 0) + (if (notice != null) 1 else 0)
+    }
+    // "是否贴底"只在用户自己滚动时采样：程序滚动（自动跟随）期间不采样，
+    // 否则自动滚动会把"用户上翻看历史"的状态又改回贴底。
     var stickToBottom by remember { mutableStateOf(true) }
+    var autoScrolling by remember { mutableStateOf(false) }
     LaunchedEffect(listState) {
-        snapshotFlow { listState.isScrollInProgress to listState.canScrollForward }
-            .collect { (scrolling, canScrollForward) ->
-                if (scrolling) stickToBottom = !canScrollForward
+        snapshotFlow { Triple(listState.isScrollInProgress, listState.canScrollForward, autoScrolling) }
+            .collect { (scrolling, canScrollForward, auto) ->
+                if (scrolling && !auto) stickToBottom = !canScrollForward
             }
     }
-    // 新消息/错误/提示出现：只在贴底时跟随（平滑滚动，不瞬跳）；用户上翻时绝不抢滚动
-    LaunchedEffect(messages.size, streaming, error, notice) {
-        val count = messages.size + extraItems
-        if (count > 0 && stickToBottom) listState.animateScrollToItem(index = count - 1)
+    // 新消息/错误/提示或切换会话：贴底时才跟随。助手回复结束的那一刻不跟踪
+    // （此刻流式气泡消失与助手消息落库之间存在一帧错位，滚动会跳到用户消息）；
+    // 用户已上翻时不抢滚动，由用户自己定位。
+    var wasStreaming by remember { mutableStateOf(false) }
+    var lastConversationId by remember { mutableStateOf<Long?>(null) }
+    LaunchedEffect(current?.id, itemCount, streaming, error, notice) {
+        val convId = current?.id
+        val switched = convId != lastConversationId
+        lastConversationId = convId
+        val justFinished = wasStreaming && !streaming
+        wasStreaming = streaming
+        if (itemCount <= 0) return@LaunchedEffect
+        if (justFinished && !switched) return@LaunchedEffect
+        if (!switched && !stickToBottom) return@LaunchedEffect
+        if (switched) stickToBottom = true
+        autoScrolling = true
+        try {
+            if (switched) {
+                listState.scrollToItem(itemCount - 1)
+            } else {
+                listState.animateScrollToItem(itemCount - 1)
+            }
+        } finally {
+            autoScrolling = false
+        }
     }
 
     // 上下文用量指示文本与级别（0 正常 / 1 接近 / 2 超出）
@@ -359,7 +387,15 @@ fun ChatScreen(
         onJumpToLatest = {
             stickToBottom = true
             scope.launch {
-                listState.animateScrollToItem((messages.size + extraItems - 1).coerceAtLeast(0))
+                if (itemCount > 0) {
+                    autoScrolling = true
+                    try {
+                        listState.animateScrollToItem(itemCount - 1)
+                        listState.animateScrollBy(1_000_000f)
+                    } finally {
+                        autoScrolling = false
+                    }
+                }
             }
         },
         pickImages = {

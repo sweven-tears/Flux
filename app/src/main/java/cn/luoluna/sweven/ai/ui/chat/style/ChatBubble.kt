@@ -3,7 +3,6 @@ package cn.luoluna.sweven.ai.ui.chat.style
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.combinedClickable
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
@@ -185,9 +184,21 @@ fun ChatBubble(
     }
 }
 
+/** 角色对齐 → Column 的横向对齐（内外两层共用，避免附图消息的图片和气泡各偏一边） */
+private fun RoleAlign.horizontalAlignment(): Alignment.Horizontal = when (this) {
+    RoleAlign.START -> Alignment.Start
+    RoleAlign.END -> Alignment.End
+    RoleAlign.CENTER -> Alignment.CenterHorizontally
+}
+
 /**
  * 角色级布局：对齐 / 最大宽度（[RoleProfile.maxWidthFraction]）/ 外边距 / 头像行 / footer。
  * header 与 footer 由调用方给（头像文案、操作按钮、token 统计），本组件不关心内容。
+ *
+ * [bubble] 槽位是**纵向容器**：一条消息可以有多块内容（工具提示行 → 图片行 → 正文气泡，
+ * 见 `ChatUiDefaults.MessageBubble`），必须从上到下依次排列。早期这里是 Box，
+ * 多块内容会全部叠在左上角（用户附图消息的文字压在图片上），改回 Box 会复现该问题。
+ * 内容块的横向对齐跟随 [RoleProfile.align]：用户消息（END）的图片与气泡都贴右。
  */
 @Composable
 fun ChatMessageRow(
@@ -195,22 +206,22 @@ fun ChatMessageRow(
     modifier: Modifier = Modifier,
     header: (@Composable () -> Unit)? = null,
     footer: (@Composable () -> Unit)? = null,
-    bubble: @Composable () -> Unit,
+    bubble: @Composable ColumnScope.() -> Unit,
 ) {
     Column(
         modifier = modifier
             .fillMaxWidth()
             .padding(horizontal = profile.marginH, vertical = profile.marginV),
-        horizontalAlignment = when (profile.align) {
-            RoleAlign.START -> Alignment.Start
-            RoleAlign.END -> Alignment.End
-            RoleAlign.CENTER -> Alignment.CenterHorizontally
-        },
+        horizontalAlignment = profile.align.horizontalAlignment(),
     ) {
         if (profile.showHeader) header?.invoke()
         BoxWithConstraints {
             val maxW = maxWidth * profile.maxWidthFraction.coerceIn(0.2f, 1f)
-            Box(Modifier.widthIn(max = maxW)) { bubble() }
+            Column(
+                modifier = Modifier.widthIn(max = maxW),
+                horizontalAlignment = profile.align.horizontalAlignment(),
+                content = bubble,
+            )
         }
         footer?.invoke()
     }

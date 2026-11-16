@@ -17,8 +17,10 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -79,6 +81,7 @@ import cn.luoluna.sweven.ai.ui.chat.style.ChatStyleCodec
 import cn.luoluna.sweven.ai.ui.common.ConfirmDialog
 import cn.luoluna.sweven.ai.ui.common.InAppBrowserPayload
 import cn.luoluna.sweven.ai.ui.common.LocalInAppBrowser
+import cn.luoluna.sweven.ai.ui.common.MonoFont
 import cn.luoluna.sweven.ai.ui.common.TextFieldDialog
 import cn.luoluna.sweven.ai.ui.common.formatTokens
 import cn.luoluna.sweven.ai.ui.common.openImageExternally
@@ -166,6 +169,8 @@ fun ChatScreen(
     val effectiveThinkingDepth = thinkingDepth ?: ThinkingDepth.AUTO
     // 本地工具：当前会话勾选集合（半窗勾选/角标）与当前目标是否支持工具调用
     val selectedToolNames by vm.selectedToolNames.collectAsStateWithLifecycle()
+    // 待确认的工具调用（needsApproval / 脚本开发工具写操作）：非空时弹确认框
+    val pendingApproval by cn.luoluna.sweven.ai.tools.ToolApproval.pending.collectAsStateWithLifecycle()
     val showTools = currentPicker?.let {
         it.model.capabilityTools && it.provider.protocol == cn.luoluna.sweven.ai.net.ProviderProtocol.OPENAI
     } == true
@@ -193,6 +198,11 @@ fun ChatScreen(
         }
         activity?.lifecycle?.addObserver(observer)
         onDispose { activity?.lifecycle?.removeObserver(observer) }
+    }
+
+    // 离开聊天页时关掉未处理的确认框：弹窗没了就不该继续挂着等超时（按拒绝处理，模型收到错误文本）
+    DisposableEffect(Unit) {
+        onDispose { cn.luoluna.sweven.ai.tools.ToolApproval.reject() }
     }
 
     // 首次发消息时申请通知权限（回复提醒/视频完成通知依赖，每进程只问一次）
@@ -592,6 +602,38 @@ fun ChatScreen(
                 },
             )
         }
+    }
+
+    // 工具调用执行前的确认框：点「允许」才真正执行（拒绝/关闭 = 本次调用作废并以错误文本回给模型）
+    pendingApproval?.let { pending ->
+        AlertDialog(
+            onDismissRequest = { cn.luoluna.sweven.ai.tools.ToolApproval.reject() },
+            title = { Text(pending.title) },
+            text = {
+                Column {
+                    Text(
+                        "来自「${pending.displayName}」",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Spacer(Modifier.height(6.dp))
+                    Text(
+                        pending.detail,
+                        style = MaterialTheme.typography.bodySmall.copy(fontFamily = MonoFont),
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { cn.luoluna.sweven.ai.tools.ToolApproval.approve() }) {
+                    Text("允许")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { cn.luoluna.sweven.ai.tools.ToolApproval.reject() }) {
+                    Text("拒绝")
+                }
+            },
+        )
     }
 
     detailMessage?.let { msg ->

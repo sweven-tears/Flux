@@ -167,6 +167,7 @@ class BackupManager(private val app: App) {
             put("videoOpenExternal", s.videoOpenExternal.value.toString())
             put("defaultToolIds", s.defaultToolIds.value.orEmpty())
             put("toolMaxRounds", s.toolMaxRounds.value.toString())
+            put("scriptToolAutoApprove", s.scriptToolAutoApprove.value.toString())
             put("searchProvider", s.searchProvider.value.orEmpty())
             put("searchEndpoint", s.searchEndpoint.value.orEmpty())
             put("searchCount", s.searchCount.value.toString())
@@ -196,6 +197,7 @@ class BackupManager(private val app: App) {
         map["videoOpenExternal"]?.toBooleanStrictOrNull()?.let { s.setVideoOpenExternal(it) }
         if (map.containsKey("defaultToolIds")) s.setDefaultToolIds(map["defaultToolIds"])
         map["toolMaxRounds"]?.toIntOrNull()?.let { s.setToolMaxRounds(it) }
+        map["scriptToolAutoApprove"]?.toBooleanStrictOrNull()?.let { s.setScriptToolAutoApprove(it) }
         if (map.containsKey("searchProvider")) s.setSearchProvider(map["searchProvider"])
         if (map.containsKey("searchEndpoint")) s.setSearchEndpoint(map["searchEndpoint"])
         map["searchCount"]?.toIntOrNull()?.let { s.setSearchCount(it) }

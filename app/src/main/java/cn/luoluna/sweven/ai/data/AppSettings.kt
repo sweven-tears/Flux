@@ -102,6 +102,18 @@ class AppSettings(context: Context) {
         _toolMaxRounds.value = v
     }
 
+    /**
+     * 脚本开发工具（script_tool_dev）的写操作是否免确认：false（默认）= create/update/delete 弹窗确认；
+     * true = 模型可直接写库（仅建议在完全信任当前模型时开启）。
+     */
+    private val _scriptToolAutoApprove = MutableStateFlow(prefs.getBoolean(KEY_SCRIPT_TOOL_AUTO, false))
+    val scriptToolAutoApprove: StateFlow<Boolean> = _scriptToolAutoApprove
+
+    fun setScriptToolAutoApprove(value: Boolean) {
+        prefs.edit().putBoolean(KEY_SCRIPT_TOOL_AUTO, value).apply()
+        _scriptToolAutoApprove.value = value
+    }
+
     private val _videoOpenExternal = MutableStateFlow(prefs.getBoolean(KEY_VIDEO_OPEN_EXTERNAL, false))
     val videoOpenExternal: StateFlow<Boolean> = _videoOpenExternal
 
@@ -351,6 +363,7 @@ class AppSettings(context: Context) {
         const val MAX_TOOL_ROUNDS_LIMIT = 50
 
         private const val KEY_TOOL_MAX_ROUNDS = "tool_max_rounds"
+        private const val KEY_SCRIPT_TOOL_AUTO = "script_tool_auto_approve"
         private const val KEY_SEARCH_PROVIDER = "search_provider"
         private const val KEY_SEARCH_ENDPOINT = "search_endpoint"
         private const val KEY_SEARCH_API_KEY = "search_api_key"

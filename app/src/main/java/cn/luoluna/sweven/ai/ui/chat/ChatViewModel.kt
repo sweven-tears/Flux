@@ -58,7 +58,9 @@ import cn.luoluna.sweven.ai.net.buildChatBody
 import cn.luoluna.sweven.ai.net.buildMessagesJsonEx
 import cn.luoluna.sweven.ai.net.ChatJson
 import cn.luoluna.sweven.ai.net.ChatMessageInput
+import cn.luoluna.sweven.ai.tools.ApprovalRequest
 import cn.luoluna.sweven.ai.tools.FluxTool
+import cn.luoluna.sweven.ai.tools.ToolApproval
 import cn.luoluna.sweven.ai.tools.ToolRegistry
 import cn.luoluna.sweven.ai.tools.custom.CustomToolLoader
 import cn.luoluna.sweven.ai.net.buildMessagesJson
@@ -70,6 +72,8 @@ import cn.luoluna.sweven.ai.net.trimToBudget
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -1002,7 +1006,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         conversationDao.touch(convId, System.currentTimeMillis())
     }
 
-    /** 执行单个工具调用：未知工具 / 参数非法 / 超时 / 异常一律转为错误文本结果 */
+    /** 执行单个工具调用：未知工具 / 参数非法 / 用户拒绝 / 超时 / 异常一律转为错误文本结果 */
     private suspend fun runTool(call: ToolCall): String {
         val tool = ToolRegistry.byName(call.name)
             ?: return """{"error":"未找到工具 ${call.name}，请改用已启用的工具或直接回答"}"""
@@ -1010,14 +1014,57 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
             .getOrElse {
                 return """{"error":"工具参数不是合法 JSON 对象：${it.message?.take(120).orEmpty()}"}"""
             }
+        // 标记了 needsApproval 的工具：执行前挂起等用户点头（弹窗由 ChatScreen 渲染）。
+        // 像 script_tool_dev 这种「按动作分级确认」的工具在自身实现里确认，这里不拦。
+        if (tool.needsApproval) {
+            val allowed = ToolApproval.request(
+                toolName = tool.name,
+                displayName = tool.displayName,
+                request = ApprovalRequest(
+                    title = "调用工具「${tool.displayName}」",
+                    detail = "参数：\n${call.arguments.take(600)}",
+                ),
+            )
+            if (!allowed) {
+                return """{"error":"用户拒绝了这次工具调用，未执行任何操作。请说明你想做的事，或改用不需要确认的工具"}"""
+            }
+        }
         return try {
-            withTimeoutOrNull(TOOL_EXECUTION_TIMEOUT_MS) { tool.execute(args) }
-                ?: """{"error":"工具执行超时（${TOOL_EXECUTION_TIMEOUT_MS / 1000}s）"}"""
+            executeWithBudget(tool, args)
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
             """{"error":"工具执行失败：${(e.message ?: e.javaClass.simpleName).take(200)}"}"""
         }
+    }
+
+    /**
+     * 执行工具并施加 [TOOL_EXECUTION_TIMEOUT_MS] 预算，但**审批弹窗的等待不计入预算**。
+     *
+     * script_tool_dev 的写操作在工具内部才发起确认（UI 的挂起点在里面），若直接用
+     * `withTimeoutOrNull` 包住 execute，用户读代码/配置稍久就会被判超时，确认框还在、
+     * 结果却已经回给模型说「超时」。这里改为分片等待：审批进行中只让出时间片、不扣预算。
+     */
+    private suspend fun executeWithBudget(tool: FluxTool, args: JsonObject): String = coroutineScope {
+        val task = async { tool.execute(args) }
+        var remaining = TOOL_EXECUTION_TIMEOUT_MS
+        while (!task.isCompleted) {
+            if (ToolApproval.pending.value != null) {
+                delay(APPROVAL_POLL_MS)
+                continue
+            }
+            val slice = remaining.coerceAtMost(WATCHDOG_SLICE_MS)
+            // await 被超时取消不影响 async 自身，所以分片超时不会打断工具执行
+            val finished = withTimeoutOrNull(slice) { task.await() } != null ||
+                task.isCompleted
+            if (finished) break
+            remaining -= slice
+            if (remaining <= 0) {
+                task.cancel()
+                return@coroutineScope """{"error":"工具执行超时（${TOOL_EXECUTION_TIMEOUT_MS / 1000}s）"}"""
+            }
+        }
+        task.await()
     }
 
     /** 工具调用列表 → 落库用 JSON 数组文本（含 id/name/arguments，回传上游时原样发出） */
@@ -1753,6 +1800,12 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
 
         /** 单个工具执行超时（毫秒）：超时按错误结果回传，不阻塞整轮 */
         private const val TOOL_EXECUTION_TIMEOUT_MS = 30_000L
+
+        /** 工具执行预算的分片粒度：分片只用于重复检查「是否在等用户确认」，不改变总预算 */
+        private const val WATCHDOG_SLICE_MS = 250L
+
+        /** 审批弹窗期间的轮询间隔：等待用户确认时不消耗执行预算 */
+        private const val APPROVAL_POLL_MS = 200L
 
         /** 厂商按用户拖拽顺序分组，厂商内按模型拖拽顺序；onlyEnabledProviders=false 时含停用厂商（预设编辑回显用） */
         private fun buildPickerModels(

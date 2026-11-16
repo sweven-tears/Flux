@@ -389,7 +389,8 @@ fun CustomToolEditorScreen(toolId: Long, onBack: () -> Unit) {
                     Switch(checked = needsApproval, onCheckedChange = { needsApproval = it })
                 }
                 Text(
-                    "标记类工具（涉及隐私或设备状态变更）：本期仅作标记与提示，审批弹窗后续接入",
+                    "开启后模型每次调用该工具都会先弹窗让你确认（参数与代码摘要可见）；" +
+                        "涉及隐私或设备状态变更的工具建议开启",
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )

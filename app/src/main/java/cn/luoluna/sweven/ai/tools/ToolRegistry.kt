@@ -7,6 +7,7 @@ import cn.luoluna.sweven.ai.App
 import cn.luoluna.sweven.ai.tools.local.buildClipboardTool
 import cn.luoluna.sweven.ai.tools.local.buildFetchUrlTool
 import cn.luoluna.sweven.ai.tools.local.buildJavascriptTool
+import cn.luoluna.sweven.ai.tools.local.buildScriptToolDevTool
 import cn.luoluna.sweven.ai.tools.local.buildTimeInfoTool
 import cn.luoluna.sweven.ai.tools.local.buildWebSearchTool
 
@@ -36,6 +37,8 @@ object ToolRegistry {
             // 联网搜索：默认源现读设置（工具中心 → 联网搜索），改配置无需重启
             registerBuiltIn(buildWebSearchTool((context.applicationContext as App).settings))
             registerBuiltIn(buildFetchUrlTool())
+            // 脚本开发工具：用聊天造工具（写库 + 跑模型写的代码，默认关闭，需用户主动开启）
+            registerBuiltIn(buildScriptToolDevTool(context.applicationContext))
             initialized = true
         }
     }

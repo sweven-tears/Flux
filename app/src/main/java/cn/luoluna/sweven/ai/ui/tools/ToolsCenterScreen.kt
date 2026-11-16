@@ -40,6 +40,7 @@ import cn.luoluna.sweven.ai.App
 import cn.luoluna.sweven.ai.data.db.CustomToolEntity
 import cn.luoluna.sweven.ai.data.db.CustomToolKind
 import cn.luoluna.sweven.ai.net.ChatJson
+import cn.luoluna.sweven.ai.tools.ScriptToolDev
 import cn.luoluna.sweven.ai.tools.ToolRegistry
 import cn.luoluna.sweven.ai.tools.net.SearchChain
 import cn.luoluna.sweven.ai.tools.net.SearchOptions
@@ -77,6 +78,9 @@ fun ToolsCenterScreen(
     val builtIns = ToolRegistry.builtIns()
     val customTools by dao.observeAll().collectAsStateWithLifecycle(initialValue = emptyList())
     var pendingDelete by remember { mutableStateOf<CustomToolEntity?>(null) }
+    // 脚本开发工具：写操作确认策略（false = create/update/delete 弹窗确认）
+    val scriptAutoApprove by app.settings.scriptToolAutoApprove.collectAsStateWithLifecycle()
+    val scriptDevEnabled = ScriptToolDev.NAME in enabled
 
     // 联网搜索配置（工具中心 → 联网搜索）：改配置即时生效，web_search 每次执行时现读
     val searchKind by app.settings.searchProvider.collectAsStateWithLifecycle()
@@ -134,7 +138,7 @@ fun ToolsCenterScreen(
                                         append(tool.description)
                                         append("\n\n函数名：")
                                         append(tool.name)
-                                        if (tool.needsApproval) append("\n该工具涉及隐私或设备状态变更，建议仅在需要时开启")
+                                        if (tool.needsApproval) append("\n该工具每次调用前都会弹窗确认")
                                     },
                                 )
                             }
@@ -150,6 +154,66 @@ fun ToolsCenterScreen(
                         )
                     }
                 }
+            }
+
+            SectionCard(
+                title = "脚本开发工具",
+                actions = {
+                    InfoIconWithPopup(
+                        title = "脚本开发工具",
+                        text = "让模型在聊天里自己造工具：你说「帮我做个 XX 工具」，它就写脚本 → 校验 → 试运行 → 建好，" +
+                            "全程不用离开聊天页。建出来的工具与手动新建的完全一样（同一张表、同一套执行器）。\n\n" +
+                            "动作与确认策略：\n" +
+                            "• create / update / delete：默认弹窗让你确认\n" +
+                            "• list / get / validate：直接执行（只读）\n" +
+                            "• test：在 QuickJS 沙箱里试跑一次\n" +
+                            "• enable / disable：直接生效\n\n" +
+                            "注意：test 会执行模型生成的代码，但沙箱无网络/无 DOM/无文件，10 秒超时；" +
+                            "HTTP 类型的 test 会真实发出请求（可在「设置 → 网络日志」查看）。",
+                    )
+                },
+            ) {
+                Text(
+                    "在上面「内置工具」里开启「脚本开发工具」后，就能在聊天里直接说「帮我做个查天气的工具」，" +
+                        "模型会写脚本 → 校验 → 沙箱试运行 → 建好；建出来的工具会出现在下面的自定义工具列表里。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(bottom = 8.dp),
+                )
+                Text(
+                    if (scriptDevEnabled) "当前状态：已开启" else "当前状态：未开启（去上面打开开关才能用）",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = if (scriptDevEnabled) {
+                        MaterialTheme.colorScheme.primary
+                    } else {
+                        MaterialTheme.colorScheme.onSurfaceVariant
+                    },
+                    modifier = Modifier.padding(bottom = 8.dp),
+                )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text("写操作免确认", style = MaterialTheme.typography.bodyMedium)
+                        Text(
+                            "开启后 create/update/delete 不再弹窗（仅在完全信任当前模型时建议开启）",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    Switch(
+                        checked = scriptAutoApprove,
+                        onCheckedChange = { app.settings.setScriptToolAutoApprove(it) },
+                    )
+                }
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    "当前策略：" + if (scriptAutoApprove) {
+                        "写操作直接落库，无确认弹窗"
+                    } else {
+                        "新建/修改/删除工具时会弹出确认框；只读动作与开关直接执行"
+                    },
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
             }
 
             SectionCard(
@@ -304,7 +368,7 @@ fun ToolsCenterScreen(
                                         append(entity.name)
                                         append("\n执行方式：")
                                         append(if (entity.kind == CustomToolKind.HTTP) "HTTP 请求" else "JS 脚本")
-                                        if (entity.needsApproval) append("\n该工具标记了「执行前需确认」（本期仅提示）")
+                                        if (entity.needsApproval) append("\n该工具每次调用前都会弹窗确认")
                                     },
                                 )
                             }

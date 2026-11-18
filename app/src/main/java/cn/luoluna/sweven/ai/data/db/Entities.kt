@@ -1,5 +1,6 @@
 package cn.luoluna.sweven.ai.data.db
 
+import androidx.room.ColumnInfo
 import androidx.room.Entity
 import androidx.room.ForeignKey
 import androidx.room.Index
@@ -378,6 +379,8 @@ data class AuthDeviceEntity(
     val firstSeenAt: Long = System.currentTimeMillis(),
     val lastSeenAt: Long = System.currentTimeMillis(),
     val authorizedAt: Long? = null,
+    /** SHA-256 of the random 256-bit device bearer token; plaintext is shown only at approval. */
+    @ColumnInfo(defaultValue = "''") val tokenHash: String = "",
     /** 响应模式（SmartModes）：不同设备对首字延迟的需求不同，默认聊天档 */
     val responseMode: String = "chat",
 ) {
@@ -530,7 +533,7 @@ data class CustomToolEntity(
     val parametersJson: String? = null,
     val kind: String,
     val configJson: String,
-    val needsApproval: Boolean = false,
+    val needsApproval: Boolean = true,
     val enabled: Boolean = true,
     val createdAt: Long = System.currentTimeMillis(),
     val updatedAt: Long = System.currentTimeMillis(),

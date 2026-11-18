@@ -1,6 +1,8 @@
 package cn.luoluna.sweven.ai.net
 
 import okhttp3.OkHttpClient
+import okhttp3.Request
+import okhttp3.Response
 import java.util.concurrent.TimeUnit
 
 /**
@@ -11,15 +13,27 @@ import java.util.concurrent.TimeUnit
  * 「设置 → 网络日志」里（tag=other），便于排查搜索/自定义接口失败。
  */
 object SharedHttp {
-    val client: OkHttpClient by lazy {
+    private val client: OkHttpClient by lazy {
         OkHttpClient.Builder()
             .connectTimeout(15, TimeUnit.SECONDS)
             .readTimeout(30, TimeUnit.SECONDS)
             .writeTimeout(30, TimeUnit.SECONDS)
             .retryOnConnectionFailure(true)
-            .followRedirects(true)
-            .followSslRedirects(true)
+            .followRedirects(false)
+            .followSslRedirects(false)
             .addInterceptor(NetworkLog.interceptor)
             .build()
     }
+
+    /** Model-controlled fetch/custom/test requests must use this default PUBLIC_ONLY entry point. */
+    fun execute(request: Request, timeoutMillis: Long = 30_000): Response =
+        OutboundPolicy.Transport(client).execute(request, timeoutMillis = timeoutMillis)
+
+    /** Only the settings-backed SearXNG path may opt into LAN, scoped to its initial origin. */
+    internal fun executeConfiguredSearch(request: Request, timeoutMillis: Long, allowLan: Boolean): Response =
+        OutboundPolicy.Transport(client).execute(
+            request,
+            if (allowLan) OutboundPolicy.Mode.ALLOW_LAN else OutboundPolicy.Mode.PUBLIC_ONLY,
+            timeoutMillis,
+        )
 }

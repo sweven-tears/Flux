@@ -75,11 +75,11 @@ object NetworkLog {
                     at = startedAt,
                     tag = tagOf(request.url),
                     method = request.method,
-                    url = request.url.toString(),
+                    url = SensitiveDataRedactor.redactUrl(request.url.toString()),
                     ok = false,
                     requestHeaders = requestHeaders,
-                    requestBody = requestBody,
-                    error = ("连接失败: ${e.message ?: e.javaClass.simpleName}").take(MAX_ERROR),
+                    requestBody = requestBody?.let { SensitiveDataRedactor.redactText(it) },
+                    error = SensitiveDataRedactor.redactText("连接失败: ${e.message ?: e.javaClass.simpleName}", maxLength = MAX_ERROR),
                 )
             )
             throw e
@@ -101,15 +101,15 @@ object NetworkLog {
                         at = startedAt,
                         tag = tagOf(request.url),
                         method = request.method,
-                        url = request.url.toString(),
+                        url = SensitiveDataRedactor.redactUrl(request.url.toString()),
                         httpCode = response.code,
                         ok = response.isSuccessful,
                         durationMs = System.currentTimeMillis() - startedAt,
                         requestHeaders = requestHeaders,
-                        requestBody = requestBody,
+                        requestBody = requestBody?.let { SensitiveDataRedactor.redactText(it) },
                         responseHeaders = responseHeaders,
-                        responseBody = if (captureBody) capture.capturedText() else null,
-                        error = if (response.isSuccessful) null else "HTTP ${response.code}".take(MAX_ERROR),
+                        responseBody = if (captureBody) capture.capturedText()?.let { SensitiveDataRedactor.redactText(it) } else null,
+                        error = if (response.isSuccessful) null else SensitiveDataRedactor.redactText("HTTP ${response.code}", maxLength = MAX_ERROR),
                     )
                 )
             }
@@ -130,7 +130,7 @@ object NetworkLog {
 
     private fun headersJson(headers: Headers): String = buildJsonObject {
         for (name in headers.names()) {
-            put(name, headers.values(name).joinToString(", "))
+            put(name, SensitiveDataRedactor.redactHeader(name, headers.values(name).joinToString(", ")))
         }
     }.toString()
 

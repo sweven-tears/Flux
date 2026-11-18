@@ -22,8 +22,9 @@ android {
         applicationId = "cn.luoluna.flux"
         minSdk = 26
         targetSdk = 35
-            versionCode = 51
-            versionName = "0.25.3"
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+            versionCode = 52
+            versionName = "0.26.0"
     }
 
     signingConfigs {
@@ -103,6 +104,8 @@ dependencies {
 
     // 单元测试：JVM 侧跑 JS 沙箱（quickjs 桌面原生库）与消息数组组装
     testImplementation(libs.junit)
+    androidTestImplementation(libs.junit)
+    androidTestImplementation("androidx.test:runner:1.6.2")
 }
 
 // 本地 JVM 测试需要桌面原生库而不是 Android AAR（与 rikkahub 同做法）

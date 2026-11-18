@@ -1,11 +1,13 @@
 package cn.luoluna.sweven.ai.tools.net
 
+import cn.luoluna.sweven.ai.data.AppSettings
 import cn.luoluna.sweven.ai.net.SharedHttp
+import okhttp3.HttpUrl
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.Request
-import java.util.concurrent.TimeUnit
 
 /**
  * 联网搜索的公共类型与 provider 注册表。
@@ -22,7 +24,27 @@ data class SearchOptions(
     val endpoint: String? = null,
     /** 付费源 API Key（本期未使用，留位） */
     val apiKey: String? = null,
-)
+) {
+    // Not a constructor/copy field: copying endpoint/options cannot carry a LAN capability.
+    private var confirmedEndpoint: String? = null
+
+    internal fun permitsLanEndpoint(): Boolean =
+        kind == SearchProviderKind.SEARXNG && endpoint != null && endpoint == confirmedEndpoint
+
+    companion object {
+        /** Ordinary/model-created SearchOptions remain PUBLIC_ONLY; imports do not confer trust. */
+        fun fromSettings(settings: AppSettings): SearchOptions {
+            val (endpoint, confirmed) = settings.searchEndpointSnapshot()
+            return SearchOptions(
+                kind = settings.searchProvider.value ?: SearchProviderKind.BING,
+                endpoint = endpoint,
+                apiKey = settings.searchApiKey.value,
+            ).also { options ->
+                if (confirmed) options.confirmedEndpoint = endpoint
+            }
+        }
+    }
+}
 
 data class SearchItem(
     val index: Int,
@@ -92,6 +114,7 @@ internal suspend fun httpGetText(
     url: String,
     headers: Map<String, String> = emptyMap(),
     timeoutSeconds: Long = 15,
+    searchOptions: SearchOptions? = null,
 ): String = withContext(Dispatchers.IO) {
     val builder = Request.Builder()
         .url(url)
@@ -99,14 +122,16 @@ internal suspend fun httpGetText(
         .header("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8")
         .header("Accept", "text/html,application/xhtml+xml,application/json;q=0.9,*/*;q=0.8")
     headers.forEach { (name, value) -> builder.header(name, value) }
-    val client = SharedHttp.client.newBuilder()
-        .callTimeout(timeoutSeconds, TimeUnit.SECONDS)
-        .build()
+    val request = builder.get().build()
+    val endpoint = searchOptions?.endpoint?.toHttpUrlOrNull()
+    // The token is private, settings-backed and bound to the *unchanged* configured endpoint.
+    val allowLan = searchOptions?.permitsLanEndpoint() == true && endpoint != null &&
+        sameSearchOrigin(endpoint, request.url)
     try {
-        client.newCall(builder.get().build()).execute().use { response ->
+        SharedHttp.executeConfiguredSearch(request, timeoutSeconds * 1_000, allowLan).use { response ->
             val body = runCatching { response.body?.string().orEmpty() }.getOrDefault("")
             if (!response.isSuccessful) {
-                throw IllegalStateException("HTTP ${response.code}（${body.take(120)}）")
+                throw IllegalStateException("HTTP ${response.code}（${cn.luoluna.sweven.ai.net.SensitiveDataRedactor.redactUpstreamError(body).take(120)}）")
             }
             body
         }
@@ -114,6 +139,9 @@ internal suspend fun httpGetText(
         throw e
     }
 }
+
+private fun sameSearchOrigin(a: HttpUrl, b: HttpUrl): Boolean =
+    a.scheme == b.scheme && a.host == b.host && a.port == b.port
 
 /** 把 `site:xxx` 限定折进查询串（各引擎都支持该语法，比逐个适配参数更稳） */
 internal fun queryWithSite(query: String, site: String?): String {

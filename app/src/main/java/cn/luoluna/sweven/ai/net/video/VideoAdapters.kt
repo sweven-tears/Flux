@@ -37,7 +37,7 @@ internal suspend fun videoGetJson(
             .get()
             .build()
         VideoHttp.client.newCall(request).execute().use { resp ->
-            val text = resp.throwIfFailed()
+            val text = resp.throwIfFailed(apiKey)
             JSON.parseToJsonElement(text).jsonObject
         }
     }
@@ -59,7 +59,7 @@ internal suspend fun videoPostJson(
             .post(postJsonBody(body))
             .build()
         VideoHttp.client.newCall(request).execute().use { resp ->
-            val text = resp.throwIfFailed()
+            val text = resp.throwIfFailed(apiKey)
             JSON.parseToJsonElement(text).jsonObject
         }
     }

@@ -29,7 +29,7 @@ object SearXNGSearchProvider : SearchProvider {
             append("&format=json&safesearch=0&categories=general")
             timeRange(freshness)?.let { append("&time_range=").append(it) }
         }
-        val body = httpGetText(url, timeoutSeconds = 20)
+        val body = httpGetText(url, timeoutSeconds = 20, searchOptions = options)
         if (!body.trimStart().startsWith("{")) {
             throw IllegalStateException("实例未开启 JSON 格式（需在实例 search.formats 里加 json）")
         }

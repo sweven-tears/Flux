@@ -57,6 +57,7 @@ import cn.luoluna.sweven.ai.data.db.Role
 import cn.luoluna.sweven.ai.net.ChatEvent
 import cn.luoluna.sweven.ai.net.HttpApiException
 import cn.luoluna.sweven.ai.net.ProviderClient
+import cn.luoluna.sweven.ai.net.SensitiveDataRedactor
 import cn.luoluna.sweven.ai.net.buildChatBody
 import cn.luoluna.sweven.ai.net.buildMessagesJson
 import cn.luoluna.sweven.ai.net.extractMessageContent
@@ -197,7 +198,7 @@ fun ModelTestDialog(
                     } catch (e: Exception) {
                         states[kind] = TestState.Failure(
                             System.currentTimeMillis() - startedAt,
-                            e.message ?: e.javaClass.simpleName,
+                            SensitiveDataRedactor.redactText(e.message ?: e.javaClass.simpleName, knownSecrets = listOf(key.key), maxLength = 300),
                         )
                         logs[kind] = buildTestLog(kind, provider, model, e)
                     }
@@ -487,15 +488,15 @@ private fun buildTestLog(
     val ts = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date())
     appendLine("== ${kind.label} 测试失败 ==")
     appendLine("时间: $ts")
-    appendLine("厂商: ${provider.alias}  (${provider.baseUrl})")
+    appendLine("厂商: ${provider.alias}  (${SensitiveDataRedactor.redactUrl(provider.baseUrl)})")
     appendLine("模型: ${model.ref}")
     appendLine()
     appendLine("== 错误信息 ==")
-    appendLine(e.message ?: e.javaClass.simpleName)
+    appendLine(SensitiveDataRedactor.redactText(e.message ?: e.javaClass.simpleName, maxLength = 300))
     (e as? HttpApiException)?.let {
         appendLine()
         appendLine("== HTTP ${it.httpCode} 响应体 ==")
-        appendLine(it.rawBody.ifBlank { "（空）" })
+        appendLine(SensitiveDataRedactor.redactUpstreamError(it.rawBody).ifBlank { "（空）" })
     }
     appendLine()
     appendLine("== 堆栈 ==")

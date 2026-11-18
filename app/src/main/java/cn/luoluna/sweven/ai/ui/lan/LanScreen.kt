@@ -85,6 +85,7 @@ fun LanScreen(
     val lanHostnameLabel by vm.lanHostnameLabel.collectAsStateWithLifecycle()
     val mdnsHost by vm.mdnsHost.collectAsStateWithLifecycle()
     val pending by vm.pendingDevices.collectAsStateWithLifecycle()
+    val approvedPairingToken by vm.approvedPairingToken.collectAsStateWithLifecycle()
     val authorized by vm.authorizedDevices.collectAsStateWithLifecycle()
     val blocked by vm.blockedDevices.collectAsStateWithLifecycle()
     val pendingAbnormals by vm.pendingAbnormals.collectAsStateWithLifecycle()
@@ -93,6 +94,37 @@ fun LanScreen(
     var portDialog by remember { mutableStateOf(false) }
     var hostnameDialog by remember { mutableStateOf(false) }
     var renameTarget by remember { mutableStateOf<AuthDeviceEntity?>(null) }
+
+    approvedPairingToken?.let { (deviceId, token) ->
+        AlertDialog(
+            onDismissRequest = { vm.dismissApprovedPairingToken() },
+            title = { Text("设备批准成功") },
+            text = {
+                Column {
+                    Text("请立即复制并配置到客户端。完整令牌只显示这一次；关闭后若丢失，请撤销设备授权并重新配对。")
+                    Text(
+                        "设备：$deviceId",
+                        modifier = Modifier.padding(top = 10.dp),
+                        style = MaterialTheme.typography.labelMedium,
+                    )
+                    OutlinedTextField(
+                        value = token,
+                        onValueChange = {},
+                        readOnly = true,
+                        singleLine = true,
+                        textStyle = androidx.compose.ui.text.TextStyle(fontFamily = FontFamily.Monospace),
+                        modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+                    )
+                }
+            },
+            confirmButton = {
+                Row {
+                    TextButton(onClick = { copyText(context, token) }) { Text("复制令牌") }
+                    TextButton(onClick = { vm.dismissApprovedPairingToken() }) { Text("完成") }
+                }
+            },
+        )
+    }
 
     /** 配置的 mDNS 主机名：自定义前缀 → <前缀>.flux.local，默认 flux.local */
     val mdnsName = lanHostnameLabel?.let { "$it.${AppSettings.DEFAULT_LAN_HOST}.local" }
@@ -357,16 +389,17 @@ fun LanScreen(
                         append("1. 手机与客户端设备连同一个 Wi-Fi\n")
                         append("2. 客户端 Base URL 填上方地址（如 http://192.168.1.5:$lanPort/v1）\n")
                         append("   支持 mDNS 的设备（iOS/macOS/Win10+）可直接填 http://$mdnsName:$lanPort/v1\n")
-                        append("3. API Key 随意填写（如 sk-phone），真正的鉴权是设备授权\n")
+                        append("3. API Key 随意填写（如 sk-phone），真正的鉴权是设备令牌\n")
                         append(
                             "4. 模型名：单个模型写「厂商别名/模型名」（需开启上方「开放所有模型」），" +
                                 "聚合路由写 ${SmartAi.MODEL_NAME} 或 flux-组名；完整列表见 GET /v1/models\n",
                         )
-                        append("5. 新设备首次访问会产生「待授权申请」，在上方批准后即可使用\n")
-                        append("6. 客户端可携带请求头 X-Device-Id 自定义设备标识\n")
-                        append("7. 进入「设备管理」页长按设备卡片，可撤销/拉黑或单独设置响应模式，${SmartAi.MODEL_NAME} 请求按设备生效\n")
+                        append("5. 新设备首次访问会产生「待授权申请」；批准后一次性复制令牌并配置给客户端\n")
+                        append("6. 客户端使用稳定的 X-Device-Id，并发送 X-Device-Token: <令牌>；也可用 Authorization: Bearer <令牌>\n")
+                        append("7. 忘记令牌时撤销授权并重新批准；旧版已授权设备须重新配对\n")
+                        append("8. 进入「设备管理」页长按设备卡片，可撤销/拉黑或单独设置响应模式，${SmartAi.MODEL_NAME} 请求按设备生效\n")
                         append(
-                            "8. 视频生成（Sora 兼容）：POST /v1/videos {\"model\":\"厂商别名/模型名\",\"prompt\":\"...\"} " +
+                            "9. 视频生成（Sora 兼容）：POST /v1/videos {\"model\":\"厂商别名/模型名\",\"prompt\":\"...\"} " +
                                 "→ 轮询 GET /v1/videos/{id} 至 completed → GET /v1/videos/{id}/content 下载 mp4" +
                                 "（model 须为标记了视频输出的模型，且已开启「开放所有模型」）",
                         )

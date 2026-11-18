@@ -27,6 +27,7 @@ import kotlin.time.Duration.Companion.milliseconds
 internal fun buildJavascriptTool(): FluxTool = FluxTool(
     name = "eval_javascript",
     displayName = "JS 执行器",
+    needsApproval = true,
     description = "在 QuickJS 沙箱中执行 JavaScript（ES2020），返回最后一条表达式的值；" +
         "console 输出捕获到 logs；无 DOM/Node API；小数计算请用 toFixed() 控制精度",
     parameters = buildJsonObject {

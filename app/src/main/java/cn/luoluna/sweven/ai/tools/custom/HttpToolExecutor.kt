@@ -18,7 +18,6 @@ import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import java.net.URLEncoder
-import java.util.concurrent.TimeUnit
 
 /**
  * HTTP 自定义工具配置（`custom_tools.configJson` 的解析结果）。
@@ -199,11 +198,8 @@ object HttpToolExecutor {
             } else {
                 builder.method(config.method, null)
             }
-            // 单次调用的超时按配置收紧（SharedHttp 的默认超时是给聊天用的）
-            val client = SharedHttp.client.newBuilder()
-                .callTimeout(config.timeoutMs, TimeUnit.MILLISECONDS)
-                .build()
-            client.newCall(builder.build()).execute().use { response ->
+            // CustomToolLoader 与 script_tool_dev.test 共用；最终模板 URL 一律 PUBLIC_ONLY。
+            SharedHttp.execute(builder.build(), timeoutMillis = config.timeoutMs).use { response ->
                 val text = runCatching { response.body?.string().orEmpty() }.getOrDefault("")
                 if (!response.isSuccessful) {
                     toolErrorJson("HTTP ${response.code}：${text.take(300)}")

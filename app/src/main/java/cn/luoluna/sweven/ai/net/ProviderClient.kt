@@ -51,13 +51,17 @@ sealed interface ChatEvent {
     data class ToolCalls(val calls: List<ToolCall>) : ChatEvent
 
     /** 流式失败；HTTP 错误时附带状态码与原始响应体，供聊天页错误详情展示 */
-    data class Failed(
-        val message: String,
+    class Failed(
+        message: String,
         val httpCode: Int? = null,
-        val rawBody: String? = null,
+        rawBody: String? = null,
         /** 429 上游要求的等待时长（Retry-After 折算为毫秒），用于给该候选设定冷却 */
         val retryAfterMs: Long? = null,
-    ) : ChatEvent
+        knownSecrets: Iterable<String> = emptyList(),
+    ) : ChatEvent {
+        val message: String = SensitiveDataRedactor.redactText(message, knownSecrets, maxLength = 300)
+        val rawBody: String? = rawBody?.let { SensitiveDataRedactor.redactText(it, knownSecrets, maxLength = 300) }
+    }
     data object Done : ChatEvent
 }
 
@@ -150,7 +154,7 @@ class ProviderClient {
                     .build()
                 http.newCall(request).execute().use { resp ->
                     val body = resp.body?.string().orEmpty()
-                    if (!resp.isSuccessful) throw ApiException(parseErrorMessage(resp.code, body))
+                    if (!resp.isSuccessful) throw ApiException(parseErrorMessage(resp.code, body, listOfNotNull(apiKey)))
                     extractModelInfos(normalizeModelsBody(protocol, body))
                 }
             }
@@ -262,9 +266,33 @@ class ProviderClient {
             val payload = line.substring(5).trim()
             if (payload == "[DONE]") break
             if (payload.isEmpty()) continue
-            emit(payload)
+            emit(sanitizeSseErrorPayload(payload))
         }
     }.flowOn(Dispatchers.IO)
+
+    private fun sanitizeSseErrorPayload(payload: String): String {
+        val root = runCatching { ChatJson.json.parseToJsonElement(payload) }.getOrNull() as? JsonObject ?: return payload
+        if (root["error"] == null) return payload
+        return buildJsonObject {
+            put("error", buildJsonObject { put("message", "上游请求失败，请查看服务端日志") })
+        }.toString()
+    }
+
+    private fun extractRequestApiKey(request: Request): List<String> = buildList {
+        request.headers.names().forEach { name ->
+            if (Regex("(?i)(authorization|api[-_]?key|token|secret|credential)").containsMatchIn(name)) {
+                request.headers.values(name).forEach { value ->
+                    add(value.removePrefix("Bearer ").removePrefix("bearer "))
+                    add(value)
+                }
+            }
+        }
+        request.url.queryParameterNames.forEach { name ->
+            if (Regex("(?i)(api[-_]?key|token|auth|signature|secret|credential)").containsMatchIn(name)) {
+                request.url.queryParameterValues(name).filterNotNull().forEach { add(it) }
+            }
+        }
+    }.filter { it.length >= 4 }
 
     /** 聊天流式输出（App 内聊天使用） */
     fun chatDeltas(
@@ -290,10 +318,11 @@ class ProviderClient {
                 val body = readBody(r)
                 emit(
                     ChatEvent.Failed(
-                        parseErrorMessage(r.code, body),
+                        parseErrorMessage(r.code, body, extractRequestApiKey(r.request)),
                         r.code,
-                        body.takeIf { it.isNotBlank() },
+                        body.takeIf { it.isNotBlank() }?.let { SensitiveDataRedactor.redactText(it, extractRequestApiKey(r.request), maxLength = 300) },
                         parseRetryAfterMs(r.header("Retry-After")),
+                        extractRequestApiKey(r.request),
                     )
                 )
                 return@flow
@@ -369,8 +398,8 @@ class ProviderClient {
                 val respBody = resp.body?.string().orEmpty()
                 if (!resp.isSuccessful) {
                     throw HttpApiException(
-                        resp.code, respBody, parseErrorMessage(resp.code, respBody),
-                        parseRetryAfterMs(resp.header("Retry-After")),
+                        resp.code, respBody, parseErrorMessage(resp.code, respBody, listOfNotNull(apiKey)),
+                        parseRetryAfterMs(resp.header("Retry-After")), listOfNotNull(apiKey),
                     )
                 }
                 toOpenAiChatResponse(protocol, ChatJson.json.parseToJsonElement(respBody).jsonObject)
@@ -433,7 +462,7 @@ class ProviderClient {
             http.newCall(request).execute().use { resp ->
                 val respBody = resp.body?.string().orEmpty()
                 if (!resp.isSuccessful) {
-                    throw HttpApiException(resp.code, respBody, parseErrorMessage(resp.code, respBody))
+                    throw HttpApiException(resp.code, respBody, parseErrorMessage(resp.code, respBody, listOfNotNull(apiKey)), knownSecrets = listOfNotNull(apiKey))
                 }
                 val payload = parseImageResponse(protocol, respBody)
                 when {
@@ -478,7 +507,7 @@ class ProviderClient {
                 .build()
             http.newCall(request).execute().use { resp ->
                 val body = resp.body?.string().orEmpty()
-                if (!resp.isSuccessful) throw ApiException(parseErrorMessage(resp.code, body))
+                if (!resp.isSuccessful) throw ApiException(parseErrorMessage(resp.code, body, listOfNotNull(apiKey)))
                 val path = jsonKey?.trim().orEmpty()
                 if (path.isEmpty()) {
                     body.trim().take(200).ifEmpty { "（响应为空）" }

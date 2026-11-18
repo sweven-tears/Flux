@@ -106,6 +106,7 @@ fun ChatScreen(
     onOpenChatStyle: () -> Unit = {},
     pendingConversationId: Long? = null,
     onConsumePendingConversation: () -> Unit = {},
+    isChatRouteActive: Boolean = true,
     vm: ChatViewModel = viewModel(),
 ) {
     val context = LocalContext.current
@@ -169,8 +170,9 @@ fun ChatScreen(
     val effectiveThinkingDepth = thinkingDepth ?: ThinkingDepth.AUTO
     // 本地工具：当前会话勾选集合（半窗勾选/角标）与当前目标是否支持工具调用
     val selectedToolNames by vm.selectedToolNames.collectAsStateWithLifecycle()
-    // 待确认的工具调用（needsApproval / 脚本开发工具写操作）：非空时弹确认框
+    // 全局队列保持 FIFO；只由 ticket 所属的当前聊天页渲染队首。
     val pendingApproval by cn.luoluna.sweven.ai.tools.ToolApproval.pending.collectAsStateWithLifecycle()
+    val visibleApproval = pendingApproval?.takeIf { isChatRouteActive && it.ownerId == vm.toolApprovalOwner.id }
     val showTools = currentPicker?.let {
         it.model.capabilityTools && it.provider.protocol == cn.luoluna.sweven.ai.net.ProviderProtocol.OPENAI
     } == true
@@ -200,10 +202,7 @@ fun ChatScreen(
         onDispose { activity?.lifecycle?.removeObserver(observer) }
     }
 
-    // 离开聊天页时关掉未处理的确认框：弹窗没了就不该继续挂着等超时（按拒绝处理，模型收到错误文本）
-    DisposableEffect(Unit) {
-        onDispose { cn.luoluna.sweven.ai.tools.ToolApproval.reject() }
-    }
+    // 审批 owner 的路由生命周期由 PhoneRouterApp 的导航监听器同步管理。
 
     // 首次发消息时申请通知权限（回复提醒/视频完成通知依赖，每进程只问一次）
     var notifPermissionAsked by rememberSaveable { mutableStateOf(false) }
@@ -605,9 +604,11 @@ fun ChatScreen(
     }
 
     // 工具调用执行前的确认框：点「允许」才真正执行（拒绝/关闭 = 本次调用作废并以错误文本回给模型）
-    pendingApproval?.let { pending ->
+    visibleApproval?.let { pending ->
         AlertDialog(
-            onDismissRequest = { cn.luoluna.sweven.ai.tools.ToolApproval.reject() },
+            onDismissRequest = {
+                cn.luoluna.sweven.ai.tools.ToolApproval.reject(pending.id)
+            },
             title = { Text(pending.title) },
             text = {
                 Column {
@@ -624,12 +625,12 @@ fun ChatScreen(
                 }
             },
             confirmButton = {
-                TextButton(onClick = { cn.luoluna.sweven.ai.tools.ToolApproval.approve() }) {
+                TextButton(onClick = { cn.luoluna.sweven.ai.tools.ToolApproval.approve(pending.id) }) {
                     Text("允许")
                 }
             },
             dismissButton = {
-                TextButton(onClick = { cn.luoluna.sweven.ai.tools.ToolApproval.reject() }) {
+                TextButton(onClick = { cn.luoluna.sweven.ai.tools.ToolApproval.reject(pending.id) }) {
                     Text("拒绝")
                 }
             },

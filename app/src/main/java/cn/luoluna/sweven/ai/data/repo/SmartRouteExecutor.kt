@@ -5,6 +5,7 @@ import cn.luoluna.sweven.ai.data.db.AbnormalVia
 import cn.luoluna.sweven.ai.net.ChatEvent
 import cn.luoluna.sweven.ai.net.ProviderClient
 import cn.luoluna.sweven.ai.net.ProviderProtocol
+import cn.luoluna.sweven.ai.net.SensitiveDataRedactor
 import cn.luoluna.sweven.ai.net.UsageInfo
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -139,7 +140,8 @@ class SmartRouteExecutor(
                 httpCode: Int? = null,
                 retryAfterMs: Long? = null,
             ) {
-                lastErrors[candidate.label] = message
+                val safeMessage = SensitiveDataRedactor.redactText(message, listOf(candidate.apiKey) + candidate.extraHeaders.values, maxLength = 300)
+                lastErrors[candidate.label] = safeMessage
                 roundKinds += kind
                 if (!candidate.retryable) retired += candidate.key
                 recorder.record(
@@ -148,7 +150,7 @@ class SmartRouteExecutor(
                     candidate.modelName,
                     AbnormalVia.APP,
                     httpCode,
-                    message,
+                    safeMessage,
                 )
                 when {
                     kind == FailureKind.TIMEOUT && fastRound && round == 1 ->
@@ -259,9 +261,9 @@ class SmartRouteExecutor(
                                     reportFailure(candidate, FailureKind.UPSTREAM, ev.message, ev.httpCode)
                                     send(
                                         SmartEvent.Failed(
-                                            "${candidate.label}：${ev.message}",
+                                            SensitiveDataRedactor.redactText("${candidate.label}：${ev.message}", listOf(candidate.apiKey) + candidate.extraHeaders.values, maxLength = 300),
                                             ev.httpCode,
-                                            ev.rawBody,
+                                            ev.rawBody?.let { SensitiveDataRedactor.redactText(it, listOf(candidate.apiKey) + candidate.extraHeaders.values, maxLength = 300) },
                                             FailureKind.UPSTREAM,
                                         )
                                     )
@@ -272,10 +274,9 @@ class SmartRouteExecutor(
                                     // 请求本身有问题：换候选、再轮巡都不会好，立刻把错误交回用户
                                     send(
                                         SmartEvent.Failed(
-                                            "${candidate.label} 返回 HTTP ${ev.httpCode}：${ev.message}" +
-                                                "（请求本身有问题，未再尝试其他候选）",
+                                            SensitiveDataRedactor.redactText("${candidate.label} 返回 HTTP ${ev.httpCode}：${ev.message}（请求本身有问题，未再尝试其他候选）", listOf(candidate.apiKey) + candidate.extraHeaders.values, maxLength = 300),
                                             ev.httpCode,
-                                            ev.rawBody,
+                                            ev.rawBody?.let { SensitiveDataRedactor.redactText(it, listOf(candidate.apiKey) + candidate.extraHeaders.values, maxLength = 300) },
                                             kind,
                                         )
                                     )

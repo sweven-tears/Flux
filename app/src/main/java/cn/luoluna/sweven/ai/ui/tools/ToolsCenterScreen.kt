@@ -257,7 +257,7 @@ fun ToolsCenterScreen(
                         },
                         label = { Text("SearXNG 实例地址") },
                         singleLine = true,
-                        supportingText = { Text("例：https://searx.example.com（需开启 json 输出格式）") },
+                        supportingText = { Text("需开启 json 输出；手动修改后可访问 LAN，禁止本机/回环/链路本地。导入或旧配置请重新编辑确认。") },
                         modifier = Modifier.fillMaxWidth(),
                     )
                 }
@@ -288,11 +288,7 @@ fun ToolsCenterScreen(
                             testing = true
                             testResult = null
                             scope.launch {
-                                val options = SearchOptions(
-                                    kind = searchKind ?: SearchProviderKind.BING,
-                                    endpoint = searchEndpoint,
-                                    apiKey = app.settings.searchApiKey.value,
-                                )
+                                val options = SearchOptions.fromSettings(app.settings)
                                 testResult = try {
                                     val result = SearchChain.search(options, testQuery, searchCount, null, null)
                                     buildString {

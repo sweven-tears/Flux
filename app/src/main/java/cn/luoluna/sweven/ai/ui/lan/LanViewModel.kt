@@ -11,8 +11,10 @@ import cn.luoluna.sweven.ai.data.db.AuthDeviceEntity
 import cn.luoluna.sweven.ai.server.LanService
 import cn.luoluna.sweven.ai.server.NetUtil
 import cn.luoluna.sweven.ai.server.ServerState
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
@@ -55,6 +57,11 @@ class LanViewModel(app: Application) : AndroidViewModel(app) {
         authDao.observeByStatus(AuthDeviceEntity.STATUS_BLOCKED)
             .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
+    private val _approvedPairingToken = MutableStateFlow<Pair<String, String>?>(null)
+    val approvedPairingToken: StateFlow<Pair<String, String>?> = _approvedPairingToken.asStateFlow()
+
+    fun dismissApprovedPairingToken() { _approvedPairingToken.value = null }
+
     /** 待决策的模型异常记录数（「模型异常记录」入口卡片摘要） */
     val pendingAbnormals: StateFlow<Int> =
         ctx.database.modelAbnormalDao().observeCountByDecision(AbnormalDecision.PENDING)
@@ -88,14 +95,8 @@ class LanViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun approve(deviceId: String) = viewModelScope.launch {
-        authDao.byId(deviceId)?.let {
-            authDao.upsert(
-                it.copy(
-                    status = AuthDeviceEntity.STATUS_AUTHORIZED,
-                    authorizedAt = System.currentTimeMillis(),
-                )
-            )
-        }
+        val token = ctx.deviceAuth.approve(deviceId) ?: return@launch
+        _approvedPairingToken.value = deviceId to token
     }
 
     fun deny(deviceId: String) = viewModelScope.launch {

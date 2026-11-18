@@ -94,10 +94,12 @@ internal fun postJsonBody(body: JsonObject) =
     body.toString().toRequestBody("application/json; charset=utf-8".toMediaType())
 
 /** 解析上游错误：非 2xx 抛 HttpApiException（带原始体），消息经 parseErrorMessage（含 detail 键） */
-internal fun Response.throwIfFailed(): String {
-    val body = body?.string().orEmpty()
-    if (!isSuccessful) throw HttpApiException(code, body, parseErrorMessage(code, body))
-    return body
+internal fun Response.throwIfFailed(apiKey: String? = null): String {
+    val responseBody = body?.string().orEmpty()
+    if (!isSuccessful) throw HttpApiException(
+        code, responseBody, parseErrorMessage(code, responseBody, listOfNotNull(apiKey)), knownSecrets = listOfNotNull(apiKey),
+    )
+    return responseBody
 }
 
 /** 主机根：剥掉 baseUrl 尾部的版本段（/v1、/v4 等），Agnes 的 /agnesapi 挂在主机根下 */
@@ -172,7 +174,7 @@ internal suspend fun downloadVideoBytes(
         resp.use { r ->
             if (!r.isSuccessful) {
                 val errBody = r.body?.string().orEmpty()
-                throw HttpApiException(r.code, errBody, parseErrorMessage(r.code, errBody))
+                throw HttpApiException(r.code, errBody, parseErrorMessage(r.code, errBody, listOfNotNull(apiKey)), knownSecrets = listOfNotNull(apiKey))
             }
             r.body?.bytes() ?: throw ApiException("视频下载失败（空响应）")
         }

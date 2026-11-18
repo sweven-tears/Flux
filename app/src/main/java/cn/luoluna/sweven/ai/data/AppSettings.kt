@@ -104,13 +104,14 @@ class AppSettings(context: Context) {
 
     /**
      * 脚本开发工具（script_tool_dev）的写操作是否免确认：false（默认）= create/update/delete 弹窗确认；
-     * true = 模型可直接写库（仅建议在完全信任当前模型时开启）。
+     * true = 模型可直接写库（仅本次 App 进程有效，重启后自动关闭）。
      */
-    private val _scriptToolAutoApprove = MutableStateFlow(prefs.getBoolean(KEY_SCRIPT_TOOL_AUTO, false))
+    // 仅进程会话有效；忽略并清除旧版本持久化值。
+    private val _scriptToolAutoApprove = MutableStateFlow(false)
+    init { prefs.edit().remove(KEY_SCRIPT_TOOL_AUTO).apply() }
     val scriptToolAutoApprove: StateFlow<Boolean> = _scriptToolAutoApprove
 
     fun setScriptToolAutoApprove(value: Boolean) {
-        prefs.edit().putBoolean(KEY_SCRIPT_TOOL_AUTO, value).apply()
         _scriptToolAutoApprove.value = value
     }
 
@@ -219,9 +220,12 @@ class AppSettings(context: Context) {
     private val _searchEndpoint =
         MutableStateFlow(prefs.getString(KEY_SEARCH_ENDPOINT, null)?.takeIf { it.isNotBlank() })
     val searchEndpoint: StateFlow<String?> = _searchEndpoint
+    /** 只有在本机手动保存过的端点可访问 LAN，备份恢复不能获得此信任。 */
+    private val _searchEndpointUserConfirmed = MutableStateFlow(prefs.getBoolean(KEY_SEARCH_ENDPOINT_CONFIRMED, false))
+    val searchEndpointUserConfirmed: StateFlow<Boolean> = _searchEndpointUserConfirmed
 
-    /** 付费搜索源 API Key：本期 UI 未暴露，给后续 provider 留位 */
-    private val _searchApiKey = MutableStateFlow(prefs.getString(KEY_SEARCH_API_KEY, null))
+    /** 搜索密钥也使用 Keystore 字段加密；首次启动同步替换旧明文。 */
+    private val _searchApiKey = MutableStateFlow(readSearchApiKey())
     val searchApiKey: StateFlow<String?> = _searchApiKey
 
     /** 单次搜索默认条数（模型未指定 count 时使用） */
@@ -234,15 +238,34 @@ class AppSettings(context: Context) {
         _searchProvider.value = v
     }
 
-    fun setSearchEndpoint(url: String?) {
+    @Synchronized
+    fun searchEndpointSnapshot(): Pair<String?, Boolean> =
+        _searchEndpoint.value to _searchEndpointUserConfirmed.value
+
+    @Synchronized
+    fun setSearchEndpoint(url: String?, userConfirmed: Boolean = true) {
         val v = url?.trim()?.trimEnd('/')?.takeIf { it.isNotEmpty() }
-        prefs.edit().putString(KEY_SEARCH_ENDPOINT, v).apply()
+        val trusted = userConfirmed && v != null
+        prefs.edit().putString(KEY_SEARCH_ENDPOINT, v)
+            .putBoolean(KEY_SEARCH_ENDPOINT_CONFIRMED, trusted).apply()
+        _searchEndpointUserConfirmed.value = trusted
         _searchEndpoint.value = v
+    }
+
+    private fun readSearchApiKey(): String? {
+        val stored = prefs.getString(KEY_SEARCH_API_KEY, null) ?: return null
+        if (cn.luoluna.sweven.ai.data.security.SecretCipher.isEncrypted(stored)) {
+            return cn.luoluna.sweven.ai.data.security.KeyVault.decrypt(stored)
+        }
+        val encrypted = cn.luoluna.sweven.ai.data.security.KeyVault.encrypt(stored)
+        check(prefs.edit().putString(KEY_SEARCH_API_KEY, encrypted).commit()) { "搜索密钥安全迁移失败" }
+        return stored
     }
 
     fun setSearchApiKey(key: String?) {
         val v = key?.trim()?.takeIf { it.isNotEmpty() }
-        prefs.edit().putString(KEY_SEARCH_API_KEY, v).apply()
+        val encrypted = v?.let { cn.luoluna.sweven.ai.data.security.KeyVault.encrypt(it) }
+        prefs.edit().putString(KEY_SEARCH_API_KEY, encrypted).apply()
         _searchApiKey.value = v
     }
 
@@ -366,6 +389,7 @@ class AppSettings(context: Context) {
         private const val KEY_SCRIPT_TOOL_AUTO = "script_tool_auto_approve"
         private const val KEY_SEARCH_PROVIDER = "search_provider"
         private const val KEY_SEARCH_ENDPOINT = "search_endpoint"
+        private const val KEY_SEARCH_ENDPOINT_CONFIRMED = "search_endpoint_user_confirmed"
         private const val KEY_SEARCH_API_KEY = "search_api_key"
         private const val KEY_SEARCH_COUNT = "search_count"
         private const val KEY_LAN_ENABLED = "lan_enabled"

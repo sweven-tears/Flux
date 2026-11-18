@@ -75,7 +75,7 @@ fun CustomToolEditorScreen(toolId: Long, onBack: () -> Unit) {
     var noParameters by remember { mutableStateOf(true) }
     var parameters by remember { mutableStateOf("") }
     var kind by remember { mutableStateOf(CustomToolKind.HTTP) }
-    var needsApproval by remember { mutableStateOf(false) }
+    var needsApproval by remember { mutableStateOf(true) }
     var enabled by remember { mutableStateOf(true) }
 
     // HTTP 配置

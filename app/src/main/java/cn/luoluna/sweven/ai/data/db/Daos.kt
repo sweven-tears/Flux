@@ -6,6 +6,7 @@ import androidx.room.Insert
 import androidx.room.Query
 import androidx.room.Update
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.map
 
 @Dao
 interface ProviderDao {
@@ -70,33 +71,46 @@ interface ProviderDao {
 }
 
 @Dao
-interface ApiKeyDao {
+abstract class ApiKeyDao {
+    // Room 只接触密文；业务与手动备份边界仍使用明文实体，避免遗漏某个写入入口。
     @Query("SELECT * FROM api_keys WHERE providerId = :providerId ORDER BY createdAt ASC")
-    fun observeForProvider(providerId: Long): Flow<List<ApiKeyEntity>>
+    protected abstract fun observeStoredForProvider(providerId: Long): Flow<List<ApiKeyEntity>>
 
     @Query("SELECT * FROM api_keys WHERE providerId = :providerId ORDER BY createdAt ASC")
-    suspend fun forProvider(providerId: Long): List<ApiKeyEntity>
+    protected abstract suspend fun storedForProvider(providerId: Long): List<ApiKeyEntity>
 
     @Query("SELECT * FROM api_keys")
-    suspend fun all(): List<ApiKeyEntity>
+    protected abstract suspend fun allStored(): List<ApiKeyEntity>
 
     @Query("SELECT * FROM api_keys WHERE id = :id")
-    suspend fun byId(id: Long): ApiKeyEntity?
+    protected abstract suspend fun storedById(id: Long): ApiKeyEntity?
 
     @Insert
-    suspend fun insert(k: ApiKeyEntity): Long
+    protected abstract suspend fun insertStored(k: ApiKeyEntity): Long
 
     @Insert
-    suspend fun insertAll(list: List<ApiKeyEntity>)
+    protected abstract suspend fun insertAllStored(list: List<ApiKeyEntity>)
 
     @Query("DELETE FROM api_keys")
-    suspend fun clearAll()
+    abstract suspend fun clearAll()
 
     @Update
-    suspend fun update(k: ApiKeyEntity)
+    protected abstract suspend fun updateStored(k: ApiKeyEntity)
 
     @Delete
-    suspend fun delete(k: ApiKeyEntity)
+    abstract suspend fun delete(k: ApiKeyEntity)
+
+    fun observeForProvider(providerId: Long): Flow<List<ApiKeyEntity>> =
+        observeStoredForProvider(providerId).map { rows -> rows.map { it.decrypted() } }
+    suspend fun forProvider(providerId: Long): List<ApiKeyEntity> = storedForProvider(providerId).map { it.decrypted() }
+    suspend fun all(): List<ApiKeyEntity> = allStored().map { it.decrypted() }
+    suspend fun byId(id: Long): ApiKeyEntity? = storedById(id)?.decrypted()
+    suspend fun insert(k: ApiKeyEntity): Long = insertStored(k.encrypted())
+    suspend fun insertAll(list: List<ApiKeyEntity>) = insertAllStored(list.map { it.encrypted() })
+    suspend fun update(k: ApiKeyEntity) = updateStored(k.encrypted())
+
+    private fun ApiKeyEntity.encrypted() = copy(key = cn.luoluna.sweven.ai.data.security.KeyVault.encrypt(key))
+    private fun ApiKeyEntity.decrypted() = copy(key = cn.luoluna.sweven.ai.data.security.KeyVault.decrypt(key))
 }
 
 @Dao
@@ -448,6 +462,24 @@ interface AuthDeviceDao {
 
     @Insert(onConflict = androidx.room.OnConflictStrategy.REPLACE)
     suspend fun upsert(d: AuthDeviceEntity)
+
+    @Insert(onConflict = androidx.room.OnConflictStrategy.IGNORE)
+    suspend fun insertIfAbsent(d: AuthDeviceEntity): Long
+
+    /** Atomic request counters; status is checked in SQL to avoid stale read/replace races. */
+    @Query("UPDATE auth_devices SET requestCount = requestCount + 1, lastSeenAt = :now, lastIp = :ip WHERE deviceId = :deviceId AND status = :status")
+    suspend fun bumpIfStatus(deviceId: String, status: String, ip: String, now: Long): Int
+
+    @Query("UPDATE auth_devices SET requestCount = requestCount + 1, lastSeenAt = :now, lastIp = :ip WHERE deviceId = :deviceId AND status = 'authorized' AND tokenHash = :tokenHash")
+    suspend fun bumpAuthorizedWithToken(deviceId: String, tokenHash: String, ip: String, now: Long): Int
+
+    /** Only the current pending row can be approved; returns 0 if it changed concurrently. */
+    @Query("UPDATE auth_devices SET status = 'authorized', tokenHash = :tokenHash, authorizedAt = :now WHERE deviceId = :deviceId AND status = 'pending'")
+    suspend fun approvePending(deviceId: String, tokenHash: String, now: Long): Int
+
+    /** Legacy authorized rows (empty token hash) must explicitly pair again. */
+    @Query("UPDATE auth_devices SET status = 'pending', tokenHash = '', authorizedAt = NULL WHERE deviceId = :deviceId AND status = 'authorized' AND tokenHash = ''")
+    suspend fun requireLegacyRepair(deviceId: String): Int
 
     @Insert(onConflict = androidx.room.OnConflictStrategy.REPLACE)
     suspend fun upsertAll(list: List<AuthDeviceEntity>)

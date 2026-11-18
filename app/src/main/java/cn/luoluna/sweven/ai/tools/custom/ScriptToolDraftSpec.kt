@@ -99,7 +99,7 @@ object ScriptToolDraftSpec {
             parametersJson = parametersJson,
             kind = kind,
             configJson = configJson,
-            needsApproval = bool(raw, "needs_approval") ?: existing?.needsApproval ?: false,
+            needsApproval = bool(raw, "needs_approval") ?: existing?.needsApproval ?: true,
             enabled = bool(raw, "enabled") ?: existing?.enabled ?: true,
             createdAt = existing?.createdAt ?: System.currentTimeMillis(),
             updatedAt = System.currentTimeMillis(),

@@ -151,7 +151,7 @@ class LanServer(
                     ttftMs = ttftMs,
                     totalMs = System.currentTimeMillis() - startedAt,
                     ok = ok,
-                    error = error?.take(300),
+                    error = error?.let { cn.luoluna.sweven.ai.net.SensitiveDataRedactor.redactText(it, maxLength = 300) },
                     promptTokens = promptTokens,
                     completionTokens = completionTokens,
                 )
@@ -281,12 +281,28 @@ class LanServer(
     private suspend fun ApplicationCall.authorize(): AuthDeviceEntity? {
         val ip = peerIp()
         val deviceId = request.headers[DeviceAuthManager.HEADER_DEVICE_ID]
-            ?.takeIf { it.isNotBlank() }
-            ?: "ip-$ip"
-        return when (val decision = auth.check(deviceId, ip)) {
+            ?.trim()
+            ?.takeIf { it.isNotEmpty() }
+        if (deviceId == null) {
+            respondOpenAiError(HttpStatusCode.BadRequest, "请提供稳定的 X-Device-Id 设备标识")
+            return null
+        }
+        val token = DeviceAuthSecurity.tokenFromHeaders(
+            request.headers[DeviceAuthManager.HEADER_DEVICE_TOKEN],
+            request.headers["Authorization"],
+        )
+        return when (val decision = auth.check(deviceId, token, ip)) {
             is AuthDecision.Allowed -> decision.device
             AuthDecision.Blocked -> {
                 respondOpenAiError(HttpStatusCode.Forbidden, "该设备已被禁止使用聚合模型")
+                null
+            }
+            AuthDecision.InvalidToken -> {
+                respondOpenAiError(HttpStatusCode.Unauthorized, "设备令牌无效，请在 Flux App 中重新配对")
+                null
+            }
+            AuthDecision.RateLimited -> {
+                respondOpenAiError(HttpStatusCode.TooManyRequests, "鉴权失败次数过多，请稍后重试")
                 null
             }
             is AuthDecision.NeedsApproval -> {
@@ -485,24 +501,22 @@ class LanServer(
         val upstream = try {
             client.openChat(route.provider.baseUrl, apiKey.key, payload, extraHeaders, protocol)
         } catch (e: Exception) {
-            val message = "上游连接失败: ${e.message ?: e.javaClass.simpleName}"
+            val message = cn.luoluna.sweven.ai.net.SensitiveDataRedactor.redactText(
+                "上游连接失败: ${e.message ?: e.javaClass.simpleName}", maxLength = 300,
+            )
             logRequest(device, aggregateId, via, stream, startedAt, null, false, message)
             recordAbnormal(route.provider, modelName, null, message)
-            respondOpenAiError(HttpStatusCode.BadGateway, message)
+            respondOpenAiError(HttpStatusCode.BadGateway, "上游请求失败，请查看服务端日志")
             return
         }
 
         if (!upstream.isSuccessful) {
             val errBody = client.readBody(upstream)
             upstream.close()
-            val message = "上游 HTTP ${upstream.code}: ${errBody.take(200)}"
+            val message = "上游 HTTP ${upstream.code}: ${cn.luoluna.sweven.ai.net.SensitiveDataRedactor.redactUpstreamError(errBody)}"
             logRequest(device, aggregateId, via, stream, startedAt, null, false, message)
             recordAbnormal(route.provider, modelName, upstream.code, message)
-            respondText(
-                errBody.ifBlank { """{"error":{"message":"upstream HTTP ${upstream.code}"}}""" },
-                ContentType.Application.Json,
-                HttpStatusCode.fromValue(upstream.code),
-            )
+            respondOpenAiError(HttpStatusCode.BadGateway, "上游请求失败，请查看服务端日志")
             return
         }
 
@@ -917,18 +931,11 @@ class LanServer(
                     val errBody = client.readBody(upstream)
                     upstream.close()
                     val kind = classifyFailure(code)
-                    val message = buildString {
-                        append("上游 HTTP $code")
-                        val detail = errBody.take(200)
-                        if (detail.isNotBlank()) append(": $detail")
-                    }
+                    val message = "上游 HTTP $code: ${cn.luoluna.sweven.ai.net.SensitiveDataRedactor.redactUpstreamError(errBody)}"
                     reportFailure(candidate, kind, message, code, retryAfterMs)
                     if (kind.terminal) {
                         logRequest(device, aggregateId, candidate.label, stream, startedAt, null, false, message)
-                        respondOpenAiError(
-                            HttpStatusCode.BadRequest,
-                            "$aggregateId 请求参数有误（HTTP $code）：$message（未再尝试其他候选）",
-                        )
+                        respondOpenAiError(HttpStatusCode.BadGateway, "上游请求失败，请查看服务端日志")
                         return
                     }
                     continue
@@ -1059,7 +1066,7 @@ class LanServer(
             is ChatEvent.Delta -> chunk(buildJsonObject { put("content", ev.text) })
             is ChatEvent.ReasoningDelta -> chunk(buildJsonObject { put("reasoning_content", ev.text) })
             is ChatEvent.Failed -> buildJsonObject {
-                put("error", buildJsonObject { put("message", ev.message) })
+                put("error", buildJsonObject { put("message", "上游请求失败，请查看服务端日志") })
             }.toString()
             // 客户端自带 tools 时上游的 tool_calls 原样透传（网关不代执行），聚合结果按完整调用一次性下发
             is ChatEvent.ToolCalls -> chunk(

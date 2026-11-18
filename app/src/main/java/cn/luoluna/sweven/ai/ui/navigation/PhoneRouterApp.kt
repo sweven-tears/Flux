@@ -16,6 +16,10 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.DisposableEffect
+import androidx.lifecycle.viewmodel.compose.viewModel
+import cn.luoluna.sweven.ai.ui.chat.ChatViewModel
+import cn.luoluna.sweven.ai.tools.ToolApproval
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -181,7 +185,19 @@ fun PhoneRouterApp(
                     .consumeWindowInsets(padding),
             ) {
                 composable(Routes.CHAT) {
+                    val chatVm: ChatViewModel = viewModel()
+                    // 监听真实导航事件：离开时同步封闭 owner，后台延迟调用也不能再入队。
+                    // Compose 临时销毁只移除监听器；配置重建不误拒绝审批。
+                    DisposableEffect(navController, chatVm) {
+                        val listener = androidx.navigation.NavController.OnDestinationChangedListener { _, destination, _ ->
+                            if (destination.route == Routes.CHAT) ToolApproval.activateOwner(chatVm.toolApprovalOwner)
+                            else ToolApproval.deactivateOwner(chatVm.toolApprovalOwner)
+                        }
+                        navController.addOnDestinationChangedListener(listener)
+                        onDispose { navController.removeOnDestinationChangedListener(listener) }
+                    }
                     ChatScreen(
+                        vm = chatVm,
                         onGoProviders = { gotoTab(Routes.PROVIDERS) },
                         onOpenSettings = { navController.navigate(Routes.SETTINGS) },
                         onOpenFreeCopy = { id -> navController.navigate("free_copy/$id") },
@@ -190,6 +206,7 @@ fun PhoneRouterApp(
                         onOpenChatStyle = { navController.navigate(Routes.CHAT_STYLE) },
                         pendingConversationId = pendingChatConversation,
                         onConsumePendingConversation = { pendingChatConversation = null },
+                        isChatRouteActive = currentRoute == Routes.CHAT,
                     )
                 }
                 composable(Routes.CHAT_STYLE) {

@@ -129,14 +129,21 @@ data class DrawerState(
 data class ConversationHit(val conversation: ConversationEntity, val snippet: String?)
 
 /** 聊天页错误：错误条展示 [message]，半窗详情可展开状态码与原始响应体 */
-data class ChatError(
-    val message: String,
+class ChatError(
+    message: String,
     val httpCode: Int? = null,
-    val rawBody: String? = null,
+    rawBody: String? = null,
     /** 失败分类（仅智能路由路径给出）：错误条据此区分「请求有问题」与「上游都挂了」 */
     val kind: FailureKind? = null,
 ) {
-    /** 复制用的完整错误文本：状态码 + 原始响应体（缺省回退 message） */
+    private val redactedMessage = cn.luoluna.sweven.ai.net.SensitiveDataRedactor
+        .redactUpstreamError(message)
+    val message: String get() = redactedMessage
+    val rawBody: String? = rawBody?.let {
+        cn.luoluna.sweven.ai.net.SensitiveDataRedactor.redactUpstreamError(it)
+    }
+
+    /** 复制用的完整错误文本：状态码 + 脱敏后的上游响应体（缺省回退 message） */
     fun detailText(): String = buildString {
         httpCode?.let { append("HTTP $it\n\n") }
         if (rawBody.isNullOrBlank()) append(message) else append(rawBody)
@@ -171,6 +178,17 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
     private val router = ctx.modelRouter
     private val settings = ctx.settings
     private val smartExecutor = SmartRouteExecutor(client, ModelAbnormalRecorder(ctx.database))
+    private val approvalOwner = ToolApproval.newOwner()
+
+    /** This ViewModel's approvals belong only to this chat instance. */
+    val toolApprovalOwner: ToolApproval.Owner get() = approvalOwner
+
+    init {
+        // A ViewModel can outlive the composable during navigation; cancel only its tickets when cleared.
+        viewModelScope.coroutineContext[kotlinx.coroutines.Job]?.invokeOnCompletion {
+            ToolApproval.disposeOwner(approvalOwner)
+        }
+    }
 
     /** 进行中的视频生成任务数（聊天页「生成中」提示） */
     val activeVideoJobs: StateFlow<Int> = VideoJobManager.get(app).observeActiveCount()
@@ -1016,21 +1034,26 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
             }
         // 标记了 needsApproval 的工具：执行前挂起等用户点头（弹窗由 ChatScreen 渲染）。
         // 像 script_tool_dev 这种「按动作分级确认」的工具在自身实现里确认，这里不拦。
-        if (tool.needsApproval) {
-            val allowed = ToolApproval.request(
-                toolName = tool.name,
-                displayName = tool.displayName,
-                request = ApprovalRequest(
-                    title = "调用工具「${tool.displayName}」",
-                    detail = "参数：\n${call.arguments.take(600)}",
-                ),
-            )
-            if (!allowed) {
-                return """{"error":"用户拒绝了这次工具调用，未执行任何操作。请说明你想做的事，或改用不需要确认的工具"}"""
-            }
-        }
+        val execution = ToolApproval.newExecutionScope(approvalOwner)
         return try {
-            executeWithBudget(tool, args)
+            kotlinx.coroutines.withContext(ToolApproval.executionContext(execution)) {
+                if (tool.needsApproval) {
+                    val approval = ToolApproval.request(
+                        toolName = tool.name,
+                        displayName = tool.displayName,
+                        request = ApprovalRequest(
+                            title = "调用工具「${tool.displayName}」",
+                            detail = "参数：\n${call.arguments.take(600)}",
+                        ),
+                    )
+                    if (!approval.approved) {
+                        return@withContext buildJsonObject {
+                            put("error", approval.reason ?: "审批未获允许，操作未执行。")
+                        }.toString()
+                    }
+                }
+                executeWithBudget(tool, args, execution)
+            }
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
@@ -1045,11 +1068,15 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
      * `withTimeoutOrNull` 包住 execute，用户读代码/配置稍久就会被判超时，确认框还在、
      * 结果却已经回给模型说「超时」。这里改为分片等待：审批进行中只让出时间片、不扣预算。
      */
-    private suspend fun executeWithBudget(tool: FluxTool, args: JsonObject): String = coroutineScope {
+    private suspend fun executeWithBudget(
+        tool: FluxTool,
+        args: JsonObject,
+        execution: ToolApproval.ExecutionScope,
+    ): String = coroutineScope {
         val task = async { tool.execute(args) }
         var remaining = TOOL_EXECUTION_TIMEOUT_MS
         while (!task.isCompleted) {
-            if (ToolApproval.pending.value != null) {
+            if (execution.isWaitingForApproval) {
                 delay(APPROVAL_POLL_MS)
                 continue
             }

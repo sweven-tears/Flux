@@ -51,17 +51,20 @@ data class BackupSummary(
     val presets: Int,
     val authDevices: Int,
     val customTools: Int,
+    val ignoredSecuritySettings: List<String>,
 )
 
 /**
  * 配置备份/恢复：
  * - 导出为 JSON 快照（厂商、API Key、模型、智能路由链、分组、预设、设备授权、路由参数），
  *   不含会话与聊天消息。
- * - 导入在单个事务内全量替换配置表（聊天记录保留、会话先脱离文件夹），任一步失败整体回滚。
+ * - 配置表在单个事务内替换（聊天记录保留、会话先脱离文件夹），数据库失败整体回滚；成功后恢复普通设置。
  */
-class BackupManager(private val app: App) {
-
-    private val db = app.database
+class BackupManager internal constructor(
+    private val db: cn.luoluna.sweven.ai.data.db.AppDatabase,
+    private val settings: AppSettings,
+) {
+    constructor(app: App) : this(app.database, app.settings)
 
     private val json = Json {
         ignoreUnknownKeys = true
@@ -70,7 +73,7 @@ class BackupManager(private val app: App) {
     }
 
     /** 导出配置快照；includeKeys=false 时不导出 API Key 并清空 activeKeyId 引用 */
-    suspend fun export(includeKeys: Boolean): String {
+    suspend fun export(includeKeys: Boolean = false): String {
         val providers = db.providerDao().all()
         val dto = BackupDto(
             version = VERSION,
@@ -84,7 +87,7 @@ class BackupManager(private val app: App) {
             smartRouteMembers = db.smartRouteMemberDao().all(),
             folders = db.folderDao().all(),
             presets = db.presetDao().all(),
-            authDevices = db.authDeviceDao().all(),
+            authDevices = BackupSecurity.resetDevices(db.authDeviceDao().all()),
             customTools = db.customToolDao().all(),
             settings = exportSettings(),
         )
@@ -96,7 +99,8 @@ class BackupManager(private val app: App) {
         val dto = try {
             json.decodeFromString<BackupDto>(text)
         } catch (e: Exception) {
-            throw IllegalArgumentException("备份文件格式不正确：${e.message}")
+            // 序列化异常可能包含输入 JSON 的密钥片段，不向 UI 透传。
+            throw IllegalArgumentException("备份文件格式不正确，请确认选择了 Flux 配置备份")
         }
         if (dto.version != VERSION) {
             throw IllegalArgumentException("不支持的备份版本 v${dto.version}（当前支持 v$VERSION）")
@@ -116,10 +120,13 @@ class BackupManager(private val app: App) {
         presets = dto.presets.size,
         authDevices = dto.authDevices.size,
         customTools = dto.customTools.size,
+        ignoredSecuritySettings = BackupSecurity.ignoredSettingLabels(dto.settings),
     )
 
     /** 导入：单事务全量替换配置表；外键按子表→父表顺序清空、父表→子表顺序重建 */
     suspend fun import(dto: BackupDto) {
+        // 即使本次进程曾手动允许过，也不能让刚导入的外部脚本继承免审批权限。
+        settings.setScriptToolAutoApprove(false)
         db.withTransaction {
             // 会话先脱离文件夹（folders 将清空重建），聊天记录本身不动
             db.conversationDao().clearAllFolderRefs()
@@ -141,14 +148,14 @@ class BackupManager(private val app: App) {
             db.folderDao().insertAll(dto.folders)
             db.presetDao().insertAll(dto.presets)
             db.authDeviceDao().clearAll()
-            db.authDeviceDao().upsertAll(dto.authDevices)
-            db.customToolDao().insertAll(dto.customTools)
-            restoreSettings(dto.settings)
+            db.authDeviceDao().upsertAll(BackupSecurity.resetDevices(dto.authDevices))
+            db.customToolDao().insertAll(dto.customTools.map { it.copy(needsApproval = true) })
         }
+        restoreSettings(BackupSecurity.safeSettings(dto.settings))
     }
 
     private fun exportSettings(): Map<String, String> {
-        val s = app.settings
+        val s = settings
         return buildMap {
             put("lanPort", s.lanPort.value.toString())
             put("smartFirstTokenTimeoutSeconds", s.smartFirstTokenTimeoutSeconds.value.toString())
@@ -167,7 +174,6 @@ class BackupManager(private val app: App) {
             put("videoOpenExternal", s.videoOpenExternal.value.toString())
             put("defaultToolIds", s.defaultToolIds.value.orEmpty())
             put("toolMaxRounds", s.toolMaxRounds.value.toString())
-            put("scriptToolAutoApprove", s.scriptToolAutoApprove.value.toString())
             put("searchProvider", s.searchProvider.value.orEmpty())
             put("searchEndpoint", s.searchEndpoint.value.orEmpty())
             put("searchCount", s.searchCount.value.toString())
@@ -179,7 +185,7 @@ class BackupManager(private val app: App) {
     }
 
     private fun restoreSettings(map: Map<String, String>) {
-        val s = app.settings
+        val s = settings
         map["lanPort"]?.toIntOrNull()?.takeIf { it in 1024..65535 }?.let { s.setLanPort(it) }
         map["smartFirstTokenTimeoutSeconds"]?.toIntOrNull()?.let { s.setSmartFirstTokenTimeout(it) }
         map["smartRouteMaxRounds"]?.toIntOrNull()?.let { s.setSmartRouteMaxRounds(it) }
@@ -197,9 +203,8 @@ class BackupManager(private val app: App) {
         map["videoOpenExternal"]?.toBooleanStrictOrNull()?.let { s.setVideoOpenExternal(it) }
         if (map.containsKey("defaultToolIds")) s.setDefaultToolIds(map["defaultToolIds"])
         map["toolMaxRounds"]?.toIntOrNull()?.let { s.setToolMaxRounds(it) }
-        map["scriptToolAutoApprove"]?.toBooleanStrictOrNull()?.let { s.setScriptToolAutoApprove(it) }
         if (map.containsKey("searchProvider")) s.setSearchProvider(map["searchProvider"])
-        if (map.containsKey("searchEndpoint")) s.setSearchEndpoint(map["searchEndpoint"])
+        if (map.containsKey("searchEndpoint")) s.setSearchEndpoint(map["searchEndpoint"], userConfirmed = false)
         map["searchCount"]?.toIntOrNull()?.let { s.setSearchCount(it) }
         // 界面风格/聊天背景：空串代表"未设置"，setter 会把它归一化成 null（回落默认）
         if (map.containsKey("chatUiPlugin")) {

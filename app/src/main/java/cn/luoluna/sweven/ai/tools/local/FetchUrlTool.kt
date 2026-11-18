@@ -17,7 +17,7 @@ import kotlinx.serialization.json.put
  * 网页正文抓取：搜索摘要不够时读原文（配合 [buildWebSearchTool] 使用）。
  *
  * 只做「取正文文本」：去 script/style → 去标签 → 折叠空白 → 截断。
- * 不做 JS 渲染（动态页面可能取不到正文）、不跟随站内跳转；默认关闭，用户按需开启。
+ * 不做 JS 渲染（动态页面可能取不到正文）；仅访问公网，重定向逐跳校验且最多 3 跳。
  */
 internal fun buildFetchUrlTool(): FluxTool = FluxTool(
     name = "fetch_url",

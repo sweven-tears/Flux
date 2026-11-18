@@ -86,11 +86,7 @@ internal fun buildWebSearchTool(settings: AppSettings): FluxTool = FluxTool(
     val count = (args["count"]?.jsonPrimitive?.intOrNull ?: settings.searchCount.value).coerceIn(1, 10)
     val freshness = args["freshness"]?.jsonPrimitive?.contentOrNull?.takeIf { it in FRESHNESS }
     val site = args["site"]?.jsonPrimitive?.contentOrNull?.trim()?.takeIf { it.isNotEmpty() }
-    val options = SearchOptions(
-        kind = settings.searchProvider.value ?: cn.luoluna.sweven.ai.tools.net.SearchProviderKind.BING,
-        endpoint = settings.searchEndpoint.value,
-        apiKey = settings.searchApiKey.value,
-    )
+    val options = SearchOptions.fromSettings(settings)
     try {
         val result = SearchChain.search(options, query, count, freshness, site)
         SearchChain.resultJson(result, MAX_RESULT_CHARS)

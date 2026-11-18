@@ -3,6 +3,7 @@ package cn.luoluna.sweven.ai.data.repo
 import cn.luoluna.sweven.ai.data.db.AbnormalDecision
 import cn.luoluna.sweven.ai.data.db.AppDatabase
 import cn.luoluna.sweven.ai.data.db.ModelAbnormalEntity
+import cn.luoluna.sweven.ai.net.SensitiveDataRedactor
 
 /**
  * 模型异常记录的唯一写入点（App 内聊天与局域网网关共用）：
@@ -33,7 +34,7 @@ class ModelAbnormalRecorder(private val db: AppDatabase) {
         runCatching {
             val dao = db.modelAbnormalDao()
             val now = System.currentTimeMillis()
-            val message = error?.take(300)
+            val message = error?.let { SensitiveDataRedactor.redactText(it, maxLength = 300) }
             val target = dao.findMergeTarget(
                 providerId = providerId,
                 modelName = modelName,

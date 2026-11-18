@@ -80,7 +80,8 @@ fun SettingsScreen(
 
     // 导出：先弹配置弹窗（是否含 Key），再走系统保存文件
     var showExportDialog by remember { mutableStateOf(false) }
-    var exportIncludeKeys by remember { mutableStateOf(true) }
+    var exportIncludeKeys by remember { mutableStateOf(false) }
+    var showIncludeKeysWarning by remember { mutableStateOf(false) }
     // 导入：选文件解析校验后暂存文本，确认弹窗展示摘要再落库
     var pendingImportText by remember { mutableStateOf<String?>(null) }
     // 网络日志保留条数编辑
@@ -232,14 +233,14 @@ fun SettingsScreen(
             }
             SectionCard(title = "数据") {
                 Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                    TextButton(onClick = { showExportDialog = true }) { Text("导出配置") }
+                    TextButton(onClick = { exportIncludeKeys = false; showExportDialog = true }) { Text("导出配置") }
                     TextButton(onClick = {
                         importLauncher.launch(arrayOf("application/json", "application/octet-stream", "text/*"))
                     }) { Text("导入配置") }
                 }
                 Text(
                     "备份厂商、API Key、模型、智能路由、分组预设与路由参数到文件；" +
-                        "导入时全量替换当前配置。不包含聊天记录。",
+                        "导入时全量替换当前配置。不包含聊天记录。系统云备份和设备迁移已关闭，换机请先手动导出。",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -328,13 +329,15 @@ fun SettingsScreen(
                     verticalAlignment = Alignment.CenterVertically,
                     modifier = Modifier
                         .fillMaxWidth()
-                        .clickable { exportIncludeKeys = !exportIncludeKeys },
+                        .clickable { if (exportIncludeKeys) exportIncludeKeys = false else showIncludeKeysWarning = true },
                 ) {
-                    Checkbox(checked = exportIncludeKeys, onCheckedChange = { exportIncludeKeys = it })
+                    Checkbox(checked = exportIncludeKeys, onCheckedChange = {
+                        if (it) showIncludeKeysWarning = true else exportIncludeKeys = false
+                    })
                     Column(Modifier.weight(1f)) {
                         Text("包含 API Key", style = MaterialTheme.typography.bodyMedium)
                         Text(
-                            "勾选后换机恢复免重填；含 Key 的备份文件请勿分享给他人",
+                            "默认不导出 API Key 列表。自定义请求头、URL 和工具脚本仍可能含有你嵌入的凭证，备份文件请勿外传。勾选后将额外导出全部 API Key 明文。",
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
@@ -345,10 +348,24 @@ fun SettingsScreen(
                 TextButton(onClick = {
                     showExportDialog = false
                     val stamp = SimpleDateFormat("yyyyMMdd-HHmm", Locale.getDefault()).format(Date())
-                    exportLauncher.launch("Flux-backup-$stamp.json")
+                    val name = if (exportIncludeKeys) "Flux-backup-含密钥-$stamp.json" else "Flux-backup-$stamp.json"
+                    exportLauncher.launch(name)
                 }) { Text("导出") }
             },
             dismissButton = { TextButton(onClick = { showExportDialog = false }) { Text("取消") } },
+        )
+    }
+
+    if (showIncludeKeysWarning) {
+        AlertDialog(
+            onDismissRequest = { showIncludeKeysWarning = false },
+            title = { Text("确认包含明文密钥") },
+            text = { Text("导出的文件将包含全部 API Key 明文，任何拿到该文件的人都能使用你的额度。请勿发送到群聊、Issue 或不可信存储。确定要包含吗？") },
+            confirmButton = { TextButton(onClick = {
+                exportIncludeKeys = true
+                showIncludeKeysWarning = false
+            }) { Text("仍然包含") } },
+            dismissButton = { TextButton(onClick = { showIncludeKeysWarning = false }) { Text("取消") } },
         )
     }
 
@@ -418,8 +435,12 @@ fun SettingsScreen(
                                     "路由分组 ${summary.smartRouteGroups} 个、" +
                                     "分组 ${summary.folders} 个、预设 ${summary.presets} 个、" +
                                     "自定义工具 ${summary.customTools} 个、" +
-                                    "已授权设备 ${summary.authDevices} 台。\n\n"
+                                    "设备记录 ${summary.authDevices} 台（导入后需重新配对）。\n\n"
                             )
+                            if (summary.ignoredSecuritySettings.isNotEmpty()) {
+                                append("将忽略 ${summary.ignoredSecuritySettings.size} 项安全设置（${summary.ignoredSecuritySettings.joinToString("、")}），请手动确认。\n\n")
+                            }
+                            append("导入的自定义工具将要求审批，内网搜索端点需手动重新保存。\n\n")
                             append("导入将替换当前全部配置（不影响聊天记录），且无法撤销。确定导入？")
                         }
                     )
@@ -431,7 +452,9 @@ fun SettingsScreen(
                         scope.launch {
                             runCatching { backup.import(dto) }
                                 .onSuccess {
-                                    Toast.makeText(context, "配置已导入", Toast.LENGTH_LONG).show()
+                                    val notice = if (summary.ignoredSecuritySettings.isEmpty()) "配置已导入，设备需重新配对" else
+                                        "配置已导入；已忽略 ${summary.ignoredSecuritySettings.size} 项安全设置（${summary.ignoredSecuritySettings.joinToString("、")}）"
+                                    Toast.makeText(context, notice, Toast.LENGTH_LONG).show()
                                 }
                                 .onFailure {
                                     Toast.makeText(context, "导入失败: ${it.message}", Toast.LENGTH_LONG).show()

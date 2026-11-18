@@ -48,11 +48,15 @@ class ApiException(message: String) : Exception(message)
 /** 携带原始响应体的 HTTP 错误，供测试日志等场景展示完整内容 */
 class HttpApiException(
     val httpCode: Int,
-    val rawBody: String,
+    rawBody: String,
     message: String,
     /** 429 上游要求的等待时长（Retry-After 折算为毫秒），供智能路由给该候选设冷却 */
     val retryAfterMs: Long? = null,
-) : Exception(message)
+    knownSecrets: Iterable<String> = emptyList(),
+) : Exception(SensitiveDataRedactor.redactText(message, knownSecrets, maxLength = 300)) {
+    /** 上游错误体仅以脱敏且限长的形式离开网络边界。 */
+    val rawBody: String = SensitiveDataRedactor.redactText(rawBody, knownSecrets, maxLength = 300)
+}
 
 /**
  * Retry-After 头折算为毫秒：支持秒数（`120`）与 HTTP-date（`Wed, 21 Oct 2026 07:28:00 GMT`）两种形态。
@@ -167,20 +171,20 @@ fun parseDeltaContent(payload: String): String? = try {
 }
 
 /** 解析上游错误响应体，尽量提取 OpenAI 风格的 message */
-fun parseErrorMessage(httpCode: Int, body: String?): String {
-    val trimmed = body?.trim().orEmpty()
-    if (trimmed.isNotEmpty()) {
+fun parseErrorMessage(httpCode: Int, body: String?, knownSecrets: Iterable<String> = emptyList()): String {
+    val safeBody = SensitiveDataRedactor.redactText(body, knownSecrets, maxLength = 300)
+    if (safeBody.isNotBlank()) {
         try {
-            val obj = ChatJson.json.parseToJsonElement(trimmed).jsonObject
+            val obj = ChatJson.json.parseToJsonElement(safeBody).jsonObject
             val msg = obj.stringAt("error", "message")
                 ?: obj.stringAt("error")
                 ?: obj.stringAt("message")
                 ?: obj.stringAt("detail", "message")
                 ?: obj.stringAt("detail")
-            if (!msg.isNullOrBlank()) return "HTTP $httpCode: $msg"
+            if (!msg.isNullOrBlank()) return "HTTP $httpCode: ${SensitiveDataRedactor.redactUpstreamError(msg)}"
         } catch (_: Exception) {
         }
-        return "HTTP $httpCode: ${trimmed.take(300)}"
+        return "HTTP $httpCode: $safeBody"
     }
     return "HTTP $httpCode"
 }

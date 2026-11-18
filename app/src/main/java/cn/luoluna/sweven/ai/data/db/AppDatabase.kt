@@ -26,7 +26,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         ModelAbnormalEntity::class,
         CustomToolEntity::class,
     ],
-    version = 22,
+    version = 23,
     exportSchema = false,
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -334,15 +334,99 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
-        fun build(context: Context): AppDatabase =
-            Room.databaseBuilder(context, AppDatabase::class.java, "flux.db")
+        /** v22 → v23：设备配对令牌摘要、将旧明文密钥转换为 Keystore 密文。
+         * Room 在事务内执行迁移；加密失败时中止升级，保留原库，不清库降级。
+         */
+        private val MIGRATION_22_23 = object : Migration(22, 23) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE `auth_devices` ADD COLUMN `tokenHash` TEXT NOT NULL DEFAULT ''")
+                db.query("PRAGMA secure_delete=ON").use { cursor ->
+                    check(cursor.moveToFirst() && cursor.getInt(0) == 1) { "无法启用密钥安全迁移" }
+                }
+                val encryptedKeys = mutableListOf<Pair<Long, String>>()
+                val oldSecrets = mutableListOf<String>()
+                db.query("SELECT `id`, `key` FROM `api_keys`").use { cursor ->
+                    while (cursor.moveToNext()) {
+                        val plain = cursor.getString(1)
+                        oldSecrets += plain
+                        encryptedKeys += cursor.getLong(0) to
+                            cn.luoluna.sweven.ai.data.security.KeyVault.encrypt(plain)
+                    }
+                }
+                // 旧日志也可能包含有效的原始密钥；保留诊断结构，先脱敏再清理空闲页。
+                val diagnosticColumns = mapOf(
+                    "network_logs" to listOf("url", "requestHeaders", "requestBody", "responseHeaders", "responseBody", "error"),
+                    "request_logs" to listOf("error"),
+                    "model_abnormals" to listOf("error"),
+                    "video_jobs" to listOf("error"),
+                    "providers" to listOf("lastTestMessage"),
+                )
+                diagnosticColumns.forEach { (table, columns) ->
+                    var lastId: Long? = null
+                    while (true) {
+                        // 分页避免升级时复制整张大日志表。旧认证头直接置空，无法可靠识别任意自定义头。
+                        val rewritten = mutableListOf<Array<Any?>>()
+                        val where = if (lastId == null) "" else " WHERE `id` > ?"
+                        val args = lastId?.let { arrayOf<Any>(it) } ?: emptyArray<Any>()
+                        db.query("SELECT `id`, ${columns.joinToString { "`$it`" }} FROM `$table`$where ORDER BY `id` LIMIT 25", args).use { cursor ->
+                            while (cursor.moveToNext()) {
+                                val values = columns.mapIndexed { index, column ->
+                                    if (cursor.isNull(index + 1) || column == "requestHeaders" || column == "responseHeaders") null else
+                                        cn.luoluna.sweven.ai.net.SensitiveDataRedactor.redactText(
+                                            cursor.getString(index + 1), knownSecrets = oldSecrets,
+                                            maxLength = if (table == "network_logs" && column != "error") 24_000 else 300,
+                                        )
+                                }.toMutableList<Any?>()
+                                lastId = cursor.getLong(0)
+                                values += lastId
+                                rewritten += values.toTypedArray()
+                            }
+                        }
+                        if (rewritten.isEmpty()) break
+                        rewritten.forEach { values ->
+                            db.execSQL("UPDATE `$table` SET ${columns.joinToString { "`$it` = ?" }} WHERE `id` = ?", values)
+                        }
+                    }
+                }
+                encryptedKeys.forEach { (id, encrypted) ->
+                    db.execSQL("UPDATE `api_keys` SET `key` = ? WHERE `id` = ?", arrayOf(encrypted, id))
+                }
+            }
+        }
+
+        fun build(context: Context): AppDatabase = build(context, "flux.db")
+
+        internal fun build(context: Context, name: String): AppDatabase =
+            Room.databaseBuilder(context, AppDatabase::class.java, name)
                 .addMigrations(
                     MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7,
                     MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12,
                     MIGRATION_12_13, MIGRATION_13_14, MIGRATION_14_15, MIGRATION_15_16, MIGRATION_16_17,
-                    MIGRATION_17_18, MIGRATION_18_19, MIGRATION_19_20, MIGRATION_20_21, MIGRATION_21_22,
+                    MIGRATION_17_18, MIGRATION_18_19, MIGRATION_19_20, MIGRATION_20_21, MIGRATION_21_22, MIGRATION_22_23,
                 )
-                .fallbackToDestructiveMigration()
+                .addCallback(object : RoomDatabase.Callback() {
+                    override fun onOpen(db: SupportSQLiteDatabase) {
+                        // UPDATE 不能保证擦除旧空闲页/WAL。升级后只做一次重写与截断，
+                        // 成功前不落标记；异常中止打开，避免把未清理误记为完成。
+                        val preferences = context.applicationContext.getSharedPreferences("security_migration", Context.MODE_PRIVATE)
+                        val marker = "${name}_encrypted_storage_v23_sanitized"
+                        if (!preferences.getBoolean(marker, false)) {
+                            fun checkpoint() {
+                                db.query("PRAGMA wal_checkpoint(TRUNCATE)").use { cursor ->
+                                    check(cursor.moveToFirst() && cursor.getInt(0) == 0) {
+                                        "密钥存储安全迁移等待数据库解锁"
+                                    }
+                                }
+                            }
+                            checkpoint()
+                            db.execSQL("VACUUM")
+                            checkpoint()
+                            check(preferences.edit().putBoolean(marker, true).commit()) {
+                                "密钥存储安全迁移未完成"
+                            }
+                        }
+                    }
+                })
                 .build()
     }
 }

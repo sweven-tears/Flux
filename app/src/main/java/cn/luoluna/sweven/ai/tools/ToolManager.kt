@@ -30,8 +30,8 @@ import kotlinx.serialization.json.put
  * | update | 局部更新（只改提供的字段） | 是 |
  * | delete | 删除工具 | 是 |
  * | list / get / validate | 只读 | 否，直接执行 |
- * | test | 在 QuickJS 沙箱（或 HTTP 执行器）里真跑一次 | 否，沙箱内执行 |
- * | enable / disable | 注册/注销进 [ToolRegistry] | 否，默认允许 |
+ * | test | 在 QuickJS 沙箱（或 HTTP 执行器）里真跑一次 | 是，始终逐次确认 |
+ * | enable / disable | 注册/注销进 [ToolRegistry] | 是，始终逐次确认 |
  *
  * 所有动作都返回 JSON 文本：成功 `{"ok":true,...}`，失败走 [toolErrorJson] 的 `{"error":"..."}`
  * 约定（与内置工具一致，错误也作为工具结果回给模型，让它自己纠正）。
@@ -39,11 +39,14 @@ import kotlinx.serialization.json.put
  * 写操作失败一律不落库；校验规则与编辑页共用 [ScriptToolDraftSpec]，所以模型建出来的工具
  * 与手写的完全同构，[cn.luoluna.sweven.ai.tools.custom.CustomToolLoader] 会自动注册它。
  */
-class ToolManager(context: Context) {
-
-    private val dao: CustomToolDao = (context.applicationContext as App).database.customToolDao()
-
-    private val settings = (context.applicationContext as App).settings
+class ToolManager internal constructor(
+    private val dao: CustomToolDao,
+    private val autoApproveWrites: () -> Boolean,
+) {
+    constructor(context: Context) : this(
+        (context.applicationContext as App).database.customToolDao(),
+        { (context.applicationContext as App).settings.scriptToolAutoApprove.value },
+    )
 
     /** 统一入口：按 [action] 分发；未知动作返回错误（不抛异常，避免整轮中断） */
     suspend fun handle(action: String, raw: JsonObject): String = when (action.trim().lowercase()) {
@@ -81,7 +84,7 @@ class ToolManager(context: Context) {
                     append(it)
                 }
             },
-        ).let { if (!it) return denied("create") }
+        ).let { if (!it.approved) return denied("create", it.reason) }
 
         // 确认期间可能有别的写入占用了这个名字，落库前再查一次
         if (dao.countNameExcluding(draft.name, 0) > 0) {
@@ -120,7 +123,7 @@ class ToolManager(context: Context) {
                     append(it)
                 }
             },
-        ).let { if (!it) return denied("update") }
+        ).let { if (!it.approved) return denied("update", it.reason) }
 
         if (draft.name != existing.name && dao.countNameExcluding(draft.name, existing.id) > 0) {
             return toolErrorJson("函数名「${draft.name}」已被占用，请换一个")
@@ -142,7 +145,7 @@ class ToolManager(context: Context) {
         confirm(
             title = "删除工具「${existing.displayName}」",
             detail = "函数名：${existing.name}\n删除后它会从工具列表移除；历史会话里的调用记录仍保留。",
-        ).let { if (!it) return denied("delete") }
+        ).let { if (!it.approved) return denied("delete", it.reason) }
 
         dao.deleteById(existing.id)
         return buildJsonObject {
@@ -268,6 +271,7 @@ class ToolManager(context: Context) {
         val kind: String
         val name: String
         val payload: suspend () -> String
+        val approvedConfig: String
         if (inlineCode != null || (existing == null && ScriptToolDraftSpec.provided(raw, "config"))) {
             // 草稿试运行：不落库
             val draft = runCatching {
@@ -281,14 +285,21 @@ class ToolManager(context: Context) {
             if (errors.isNotEmpty()) return validationError(errors)
             kind = draft.kind
             name = draft.displayName
+            approvedConfig = previewOf(draft).orEmpty()
             payload = { execute(draft.kind, draft.configJson, args) }
         } else {
             val entity = existing ?: return notFound(raw)
             kind = entity.kind
             name = entity.displayName
+            approvedConfig = previewOf(entity).orEmpty()
             payload = { execute(entity.kind, entity.configJson, args) }
         }
 
+        confirm(
+            title = "试运行工具「$name」",
+            detail = "执行方式：${kindLabel(kind)}\n参数：${args.toString().take(2000)}\n\n$approvedConfig",
+            always = true,
+        ).let { if (!it.approved) return denied(ACTION_TEST, it.reason) }
         val started = System.currentTimeMillis()
         val text = try {
             withTimeoutOrNull(TEST_TIMEOUT_MS) { payload() }
@@ -313,7 +324,7 @@ class ToolManager(context: Context) {
         }.toString()
     }
 
-    // ---- 开关（默认允许，不弹确认） ----
+    // ---- 开关（模型发起时逐次确认） ----
 
     private suspend fun setEnabled(raw: JsonObject, enabled: Boolean): String {
         val existing = resolve(raw) ?: return notFound(raw)
@@ -327,6 +338,11 @@ class ToolManager(context: Context) {
                 put("message", JsonPrimitive("状态未变化（当前已是${if (enabled) "启用" else "禁用"}）"))
             }.toString()
         }
+        confirm(
+            title = "${if (enabled) "启用" else "禁用"}工具「${existing.displayName}」",
+            detail = "函数名：${existing.name}\n${if (enabled) "启用后可被模型调用。" else "禁用后从模型工具列表移除。"}\n\n${previewOf(existing).orEmpty()}",
+            always = true,
+        ).let { if (!it.approved) return denied(if (enabled) ACTION_ENABLE else ACTION_DISABLE, it.reason) }
         dao.setEnabled(existing.id, enabled, System.currentTimeMillis())
         return buildJsonObject {
             put("ok", true)
@@ -394,9 +410,13 @@ class ToolManager(context: Context) {
         return null
     }
 
-    /** 把需要确认的写操作交给 [ToolApproval]；用户关掉「写操作需确认」时直接放行 */
-    private suspend fun confirm(title: String, detail: String): Boolean {
-        if (settings.scriptToolAutoApprove.value) return true
+    /** 会话免确认仅适用于 create/update/delete；试运行和启停始终逐次确认。 */
+    private suspend fun confirm(
+        title: String,
+        detail: String,
+        always: Boolean = false,
+    ): ApprovalResult {
+        if (!always && autoApproveWrites()) return ApprovalResult(approved = true)
         return ToolApproval.request(
             toolName = ScriptToolDev.NAME,
             displayName = ScriptToolDev.DISPLAY_NAME,
@@ -415,8 +435,8 @@ class ToolManager(context: Context) {
         return toolErrorJson("未找到工具 $which；可先 list 查看已有工具")
     }
 
-    private fun denied(action: String): String =
-        toolErrorJson("用户拒绝了这次「$action」操作，未做任何修改。可以询问用户想怎么调整，或改用只读动作（list/get/validate）。")
+    private fun denied(action: String, reason: String? = null): String =
+        toolErrorJson(reason ?: "用户拒绝了这次「$action」操作，未做任何修改。可以询问用户想怎么调整，或改用只读动作（list/get/validate）。")
 
     private fun validationError(errors: List<String>): String = buildJsonObject {
         put("error", "参数校验未通过，未做任何修改")

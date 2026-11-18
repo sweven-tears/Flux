@@ -22,6 +22,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import cn.luoluna.sweven.ai.data.repo.label
+import cn.luoluna.sweven.ai.net.SensitiveDataRedactor
 import cn.luoluna.sweven.ai.ui.common.MonoFont
 
 /**
@@ -46,7 +47,7 @@ fun ErrorDetailSheet(error: ChatError, onDismiss: () -> Unit) {
                     modifier = Modifier.weight(1f),
                 )
                 TextButton(onClick = {
-                    copyMessageText(context, error.detailText())
+                    copyMessageText(context, SensitiveDataRedactor.redactText(error.detailText()))
                     Toast.makeText(context, "已复制", Toast.LENGTH_SHORT).show()
                 }) { Text("复制全部") }
             }
@@ -66,7 +67,7 @@ fun ErrorDetailSheet(error: ChatError, onDismiss: () -> Unit) {
                 )
             }
             Text(
-                error.message,
+                SensitiveDataRedactor.redactText(error.message),
                 style = MaterialTheme.typography.bodyMedium,
                 modifier = Modifier.padding(top = 8.dp),
             )
@@ -76,7 +77,7 @@ fun ErrorDetailSheet(error: ChatError, onDismiss: () -> Unit) {
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
-            val body = error.rawBody?.takeIf { it.isNotBlank() }
+            val body = error.rawBody?.takeIf { it.isNotBlank() }?.let { SensitiveDataRedactor.redactUpstreamError(it) }
             SelectionContainer {
                 Text(
                     body ?: "（无响应体）",
